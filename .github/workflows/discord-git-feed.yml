@@ -1,0 +1,56 @@
+name: Discord Git Feed
+
+on:
+  push:
+    branches: [ "develop", "main" ]
+
+  pull_request:
+    branches: [ "develop", "main" ]
+    types: [ opened, reopened, synchronize, ready_for_review, closed ]
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+
+    steps:
+      # PUSH (commits pushed or merge commits landing on develop/main)
+      - name: Discord - Push
+        if: github.event_name == 'push'
+        uses: rjstone/discord-webhook-notify@v2
+        with:
+          webhookUrl: ${{ secrets.DISCORD_WEBHOOK }}
+          username: Forbes Automotive • GitHub
+          text: |
+            ✅ **Push to `${{ github.ref_name }}`** by **${{ github.actor }}**
+            • Repo: **${{ github.repository }}**
+            • Compare: ${{ github.event.compare }}
+
+      # PR opened/updated (includes new commits on the PR via "synchronize")
+      - name: Discord - PR Open/Update
+        if: github.event_name == 'pull_request' && github.event.action != 'closed'
+        uses: rjstone/discord-webhook-notify@v2
+        with:
+          webhookUrl: ${{ secrets.DISCORD_WEBHOOK }}
+          username: Forbes Automotive • GitHub
+          text: |
+            🧵 **PR ${{ github.event.action }} → `${{ github.base_ref }}`**
+            **#${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}**
+            • Author: **${{ github.event.pull_request.user.login }}**
+            • Branch: `${{ github.head_ref }}` → `${{ github.base_ref }}`
+            • Link: ${{ github.event.pull_request.html_url }}
+
+      # PR merged (closed + merged=true) — this is your explicit "merge" ping
+      - name: Discord - PR Merged
+        if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true
+        uses: rjstone/discord-webhook-notify@v2
+        with:
+          webhookUrl: ${{ secrets.DISCORD_WEBHOOK }}
+          username: Forbes Automotive • GitHub
+          text: |
+            🎉 **PR merged into `${{ github.base_ref }}`**
+            **#${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}**
+            • Merged by: **${{ github.actor }}**
+            • Link: ${{ github.event.pull_request.html_url }}
