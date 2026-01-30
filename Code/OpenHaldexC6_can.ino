@@ -4,6 +4,12 @@ void broadcastOpenHaldex(void *arg) {
     stackbroadcastOpenHaldex = uxTaskGetStackHighWaterMark(NULL);  // for capturing how much memory the task is using
 #endif
 
+    // Analyzer mode keeps the CAN bridge alive but suppresses OpenHaldex broadcast frames.
+    if (analyzerMode) {
+      vTaskDelay(broadcastRefresh / portTICK_PERIOD_MS);
+      continue;
+    }
+
     // build up the 'OpenHaldex' frame for broadcasting back over CAN.  Used currently for FISCuntrol
     twai_message_t broadcast_frame;
     broadcast_frame.identifier = OPENHALDEX_BROADCAST_ID;
@@ -26,6 +32,15 @@ void broadcastOpenHaldex(void *arg) {
   }
 }
 
+// Helper for analyzer pass-through: forward a frame exactly as received.
+static void transmitFrameCopy(twai_handle_t bus, const twai_message_t &src, twai_message_t &scratch) {
+  scratch = src;
+  scratch.extd = src.extd;
+  scratch.rtr = src.rtr;
+  scratch.data_length_code = src.data_length_code;
+  twai_transmit_v2(bus, &scratch, (10 / portTICK_PERIOD_MS));
+}
+
 void parseCAN_chs(void *arg) {
   while (1) {
 #if detailedDebugStack
@@ -36,6 +51,14 @@ void parseCAN_chs(void *arg) {
       lastCANChassisTick = millis();                                     // last frame recv. in ms
 
       tx_message_hdx.identifier = rx_message_chs.identifier;  // set the id to transmit as the id recv.  Used soon...
+
+      // Analyzer mode: queue for GVRET/SLCAN and forward untouched, skipping control logic.
+      // Analyzer mode keeps the CAN bridge alive but suppresses OpenHaldex broadcast frames.
+    if (analyzerMode) {
+        analyzerQueueFrame(rx_message_chs, 0);
+        transmitFrameCopy(twai_bus_1, rx_message_chs, tx_message_hdx);
+        continue;
+      }
 
       // check to see if we're in standalone - and therefore ignore ALL CAN frames, EXCEPT diag. ones
       if (isGen1Standalone || isGen2Standalone || isGen4Standalone) {
@@ -104,6 +127,14 @@ void parseCAN_hdx(void *arg) {
 
     while (twai_receive_v2(twai_bus_1, &rx_message_hdx, 0) == ESP_OK) {  // while there are frames waiting, process them(!)
       lastCANHaldexTick = millis();                                      // last frame recv. in ms
+
+      // Analyzer mode: queue for GVRET/SLCAN and forward untouched, skipping control logic.
+      // Analyzer mode keeps the CAN bridge alive but suppresses OpenHaldex broadcast frames.
+    if (analyzerMode) {
+        analyzerQueueFrame(rx_message_hdx, 1);
+        twai_transmit_v2(twai_bus_0, &rx_message_hdx, (10 / portTICK_PERIOD_MS));
+        continue;
+      }
 
       // different generations have different ranges of 'applied lock', so scale them to suit
       if (haldexGeneration == 1) {

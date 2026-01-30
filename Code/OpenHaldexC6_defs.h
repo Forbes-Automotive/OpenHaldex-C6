@@ -1,3 +1,4 @@
+#pragma once
 // general ESP activities
 #include <stdio.h>
 #include <stdlib.h>
@@ -148,6 +149,9 @@ extern void setupUI();
 extern void generalCallback(Control *sender, int type);
 extern void extendedCallback(Control *sender, int type, void *param);
 extern void updateLabels();
+extern void setupAnalyzer();
+extern void setAnalyzerMode(bool enable);
+extern void analyzerQueueFrame(const twai_message_t &frame, uint8_t bus);
 
 // Values received from Haldex CAN
 uint8_t received_haldex_state = 0;
@@ -196,6 +200,13 @@ bool handbrakeSignalActive = false;
 bool otaUpdate = false;
 bool customSpeed = true;
 bool customThrottle = false;
+// Analyzer mode = passive bridge + external CAN analyzer interface.
+bool analyzerMode = false;
+
+// Analyzer protocol for the TCP bridge (GVRET for SavvyCAN, Lawicel/SLCAN for CANHacker).
+#define ANALYZER_PROTOCOL_GVRET 0
+#define ANALYZER_PROTOCOL_LAWICEL 1
+uint8_t analyzerProtocol = ANALYZER_PROTOCOL_GVRET;
 
 uint32_t alerts_to_enable = 0;
 
@@ -358,6 +369,6 @@ uint16_t customSet_1, customSet_2, customSet_3, customSet_4, customSet_5;
 
 uint16_t customSet_1_speed, customSet_1_throttle, customSet_1_lock;
 
-uint16_t bool_broadcastHaldex, bool_disableControl, bool_followHandbrake, bool_followBrake, bool_invertBrake, bool_invertHandbrake, bool_isStandalone;
+uint16_t bool_broadcastHaldex, bool_disableControl, bool_followHandbrake, bool_followBrake, bool_invertBrake, bool_invertHandbrake, bool_isStandalone, bool_analyzerMode;
 
 int label_hasChassisCAN, label_hasHaldexCAN, label_hasBusFailure, label_HaldexState, label_HaldexTemp, label_HaldexClutch1, label_HaldexClutch2, label_HaldexCoupling, label_HaldexSpeedLimit, label_currentSpeed, label_currentRPM, label_currentBoost, label_brakeIn, label_brakeOut, label_handbrakeIn, label_handbrakeOut, label_firmwareVersion, label_chipModel, label_freeHeap, label_otaStatus;;

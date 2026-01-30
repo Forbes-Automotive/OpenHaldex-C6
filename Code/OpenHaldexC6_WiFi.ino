@@ -142,6 +142,10 @@ void setupUI() {
   ESPUI.addControl(Separator, "Status", "", Dark, tabOTA);
   label_otaStatus = ESPUI.addControl(Label, "OTA Status", "Ready", Dark, tabOTA);
 
+  // Analyzer mode toggle lives on Setup to avoid adding a new tab.
+  ESPUI.addControl(Separator, "Analyzer", "", Dark, tabSetup);
+  bool_analyzerMode = ESPUI.addControl(Switcher, "Analyzer Mode", String(analyzerMode), Dark, tabSetup, generalCallback);
+
   //Finally, start up the UI.
   //This should only be called once we are connected to WiFi.
   ESPUI.begin(wifiHostName);
@@ -163,6 +167,12 @@ void generalCallback(Control *sender, int type) {
   Serial.print("' = ");
   Serial.println(sender->value);
 #endif
+
+  // Analyzer toggle: flips pass-through mode and keeps UI in sync.
+  if (sender->id == bool_analyzerMode) {
+    setAnalyzerMode(sender->value.toInt());
+    return;
+  }
 
   uint8_t tempID = int(sender->id);
   switch (tempID) {
@@ -194,7 +204,11 @@ void generalCallback(Control *sender, int type) {
       disableSpeed = sender->value.toInt();
       break;
     case 18:
+      // If the user re-enables the controller, ensure analyzer mode is off.
       disableController = sender->value.toInt();
+      if (!disableController && analyzerMode) {
+        setAnalyzerMode(false);
+      }
       break;
     case 21:
       if (sender->value == "Gen1") {
@@ -427,3 +441,5 @@ void updateLabels(void *arg) {
     vTaskDelay(labelRefresh / portTICK_PERIOD_MS);
   }
 }
+
+

@@ -72,6 +72,8 @@ void setupTasks() {
   xTaskCreate(updateLabels, "updateLabels", 6000, NULL, 2, NULL);
   xTaskCreate(writeEEP, "writeEEP", 2000, NULL, 3, NULL);
   xTaskCreate(updateTriggers, "updateTriggers", 2000, NULL, 4, NULL);
+  // Analyzer task stays idle unless analyzerMode is enabled.
+  setupAnalyzer();
 
   xTaskCreate(frames1000, "frames1000", 8000, NULL, 5, &handle_frames1000);
   xTaskCreate(frames200, "frames200", 8000, NULL, 6, &handle_frames200);
@@ -107,6 +109,21 @@ void updateTriggers(void *arg) {
     } else {
       brakeSignalActive = false;
     }
+    // Analyzer mode: keep buttons + CAN recovery, but skip brake/handbrake IO outputs.
+    if (analyzerMode) {
+      btnMode.processSyncEvents();      // Only required if using sync events
+      btnMode_ext.processSyncEvents();  // Only required if using sync events
+
+      if (isBusFailure) {
+        twai_initiate_recovery_v2(twai_bus_0);
+        twai_initiate_recovery_v2(twai_bus_1);
+      }
+
+      vTaskDelay(updateTriggersRefresh / portTICK_PERIOD_MS);
+      continue;
+    }
+
+
 
     if (followHandbrake) {
       if (invertHandbrake) {
@@ -267,6 +284,11 @@ void showHaldexState(void *arg) {
 
 void frames10(void *arg) {
   while (1) {
+    // Analyzer mode runs as a passive bridge; skip standalone frame generation.
+    if (analyzerMode) {
+      vTaskDelay(10 / portTICK_PERIOD_MS);
+      continue;
+    }
     if (isStandalone) {
       switch (haldexGeneration) {
         case 1:
@@ -286,6 +308,11 @@ void frames10(void *arg) {
 
 void frames20(void *arg) {
   while (1) {
+    // Analyzer mode runs as a passive bridge; skip standalone frame generation.
+    if (analyzerMode) {
+      vTaskDelay(20 / portTICK_PERIOD_MS);
+      continue;
+    }
     if (isStandalone) {
       switch (haldexGeneration) {
         case 1:
@@ -305,6 +332,11 @@ void frames20(void *arg) {
 
 void frames25(void *arg) {
   while (1) {
+    // Analyzer mode runs as a passive bridge; skip standalone frame generation.
+    if (analyzerMode) {
+      vTaskDelay(25 / portTICK_PERIOD_MS);
+      continue;
+    }
     if (isStandalone) {
       switch (haldexGeneration) {
         case 1:
@@ -324,6 +356,11 @@ void frames25(void *arg) {
 
 void frames100(void *arg) {
   while (1) {
+    // Analyzer mode runs as a passive bridge; skip standalone frame generation.
+    if (analyzerMode) {
+      vTaskDelay(100 / portTICK_PERIOD_MS);
+      continue;
+    }
     if (isStandalone) {
       lock_target = get_lock_target_adjustment();
       switch (haldexGeneration) {
@@ -344,6 +381,11 @@ void frames100(void *arg) {
 
 void frames200(void *arg) {
   while (1) {
+    // Analyzer mode runs as a passive bridge; skip standalone frame generation.
+    if (analyzerMode) {
+      vTaskDelay(200 / portTICK_PERIOD_MS);
+      continue;
+    }
     if (isStandalone) {
       switch (haldexGeneration) {
         case 1:
@@ -363,6 +405,11 @@ void frames200(void *arg) {
 
 void frames1000(void *arg) {
   while (1) {
+    // Analyzer mode runs as a passive bridge; skip standalone frame generation.
+    if (analyzerMode) {
+      vTaskDelay(1000 / portTICK_PERIOD_MS);
+      continue;
+    }
     if (isStandalone) {
       switch (haldexGeneration) {
         case 1:
