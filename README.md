@@ -1,4 +1,3 @@
-
 # OpenHaldex - ESP32 C6
 An open-source Generation 1, 2 & 4 Haldex Controller which originates/is a fork from ABangingDonk's 'OpenHaldex T4'.  It has been extended into Gen2 and Gen4 variants, with Gen3 and Gen5 currently unsupported - CAN reads of these systems would be awesome!
 
@@ -63,10 +62,26 @@ The following data is broadcast onto the CAN network.  This could be used for af
 WiFi setup and configuration is always active.  Connect to 'OpenHaldex-C6' by searching in WiFi devices and searching for 192.168.1.1 in a browser.  All settings are available for editing.  Should the WiFi page hang, a long press on the 'mode' button will reset the WiFi connection.
 
 ## Installation
-The controller uses an MX23A26NF1 connector.  The matching female connector is MX23A12SF1.  
+<div style="border: 2px solid #2e7d32; background-color: #e8f5e9; padding: 16px; border-radius: 8px;">
 
 ### Optional Plug & Play Harness
-For users choosing the optional plug & play harness, installation is quick and easy.  Remove the existing 6 pin connector at the differential and route the OEM cable back into the boot space.  Install the long end of the harness through the boot floor and connect to the differential.  The remaining small end connects back onto the OEM harness (previously fed through the boot floor) and the OpenHaldex module connected to it's connector.  Removal is opposite of installation.
+
+🟢 **RECOMMENDED — EASY 2 MINUTE INSTALL**
+
+For users choosing the optional plug & play harness, installation is quick and easy. 
+
+- Remove the existing 6 pin connector at the differential and route the OEM cable back into the boot space. 
+- Install the long end of the harness through the boot floor and connect to the differential. The remaining small end connects back onto the OEM harness (previously fed through the boot floor) and the OpenHaldex module connects to its connector. 
+
+Removal is the reverse of installation.
+
+</div>
+
+<div style="border: 2px solid #f9a825; background-color: #fffde7; padding: 16px; border-radius: 8px;">
+
+### ⚠️ No Harness - Manual Wiring Required
+
+Note that all OpenHaldex controllers ordered without harnesses come with the pins required for installation.
 
 Users without the optional plug & play harness will be required to make the following connections to Power/Ground/CAN:
 
@@ -88,6 +103,8 @@ The MX23A12NF connector pinout is:
 | 9 | Brake Switch Out | Gen1 differentials ONLY |
 | 10 | Handbrake Switch In | +12v to activate |
 | 11 | Handbrake Switch Out | Gen1 differentials ONLY |
+
+</div>
 
 ### Uploading Code
 For users wishing to customise or edit the code, it is released here for free use.  Connect the Haldex controller via. a data USB-C cable (note some are ONLY power, so this needs to be checked).
@@ -133,10 +150,16 @@ Massive thanks to Arwid Vasilev for re-designing the PCB!  Now on V1.02!
 Massive thanks to LVT Technologies for adding in OTA updates - it's been something I've wanted to do for ages and this guy cracks it without question!  This'll make updating so much easier!  Cheers dude!
 
 ## Disclaimer
+<div style="border: 2px solid #d32f2f; background-color: #ffebee; padding: 16px; border-radius: 8px;">
+
+⚠️ **WARNING / DISCLAIMER**
+
 It should be noted that this will modify Haldex operation and therefore can only be operated off-road and on a closed course.  
 
-It should always be assumed that the unit may crash/hang or cause the Haldex to operate unprediably and caution should be exercised when in use.
+It should always be assumed that the unit may crash/hang or cause the Haldex to operate unpredictably and caution should be exercised when in use.
 
-Using this unit in any way will exert more strain on drivetrain components, and while the OEM safety features are still in place, it should be understood that having the Haldex unit locked up permanently may cause acceleated wear.
+Using this unit in any way will exert more strain on drivetrain components, and while the OEM safety features are still in place, it should be understood that having the Haldex unit locked up permanently may cause accelerated wear.
 
-Forbes-Automotive takes no responsiblity for damages as a result of using this unit or code in any form.
+**Forbes Automotive takes no responsibility for damages as a result of using this unit or code in any form.**
+
+</div>
