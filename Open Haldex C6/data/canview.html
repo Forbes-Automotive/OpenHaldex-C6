@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CAN View</title>
+    <link rel="stylesheet" href="/styles.css?v=9" />
+  </head>
+  <body data-page="canview">
+    <header class="appHeader">
+      <div class="titleWrap">
+        <div class="brandMark">OH</div>
+        <div>
+          <h1>CAN View</h1>
+        </div>
+      </div>
+      <div class="toolbar">
+        <label class="toggle" title="Toggle light/dark">
+          <input id="themeSwitch" type="checkbox" />
+          <span class="label" id="themeLabel">Light</span>
+          <div aria-hidden="true" class="dot"></div>
+        </label>
+      </div>
+    </header>
+
+    <nav class="navBar">
+      <a href="/">Home</a>
+      <a href="/map">Map</a>
+      <a href="/canview">CAN View</a>
+      <a href="/diag">Diagnostics</a>
+      <a href="/ota">OTA</a>
+    </nav>
+
+    <main>
+      <div class="panel">
+        <div class="row canviewRow">
+          <label class="grow"
+            >Filter <input id="filter" type="text" placeholder="IDs/names (space separated)"
+          /></label>
+          <label
+            >Bus
+            <select id="busFilter">
+              <option value="all">All</option>
+              <option value="chassis">Chassis</option>
+              <option value="haldex">Haldex</option>
+            </select>
+          </label>
+          <label
+            >Interval ms <input id="interval" type="number" value="500" min="100" max="5000"
+          /></label>
+          <button id="btnStart">Start</button>
+          <button id="btnStop">Stop</button>
+        </div>
+        <div class="row canviewRow">
+          <button id="btnDump30">Download 30s dump</button>
+          <button id="btnCapture">Diagnostic Capture: Off</button>
+          <span class="status" id="captureStatus"></span>
+          <span class="status" id="status"></span>
+        </div>
+        <details class="canviewAdvanced">
+          <summary>Advanced</summary>
+          <div class="row canviewRow">
+            <label
+              >Decoded limit <input id="decodedLimit" type="number" value="300" min="1" max="700"
+            /></label>
+            <label
+              >Raw limit <input id="rawLimit" type="number" value="20" min="1" max="64"
+            /></label>
+            <label
+              >Diag presets
+              <select id="diagPreset">
+                <option value="">Select and add to filter</option>
+                <option value="7e0 7e8">Engine UDS (0x7E0/0x7E8)</option>
+                <option value="760 768">ABS-ESP UDS (0x760/0x768)</option>
+                <option value="764 76c">AWD UDS (0x764/0x76C)</option>
+                <option value="200 280 380 4a0 5a0">OH generated IDs</option>
+                <option value="704">Haldex status (0x704)</option>
+              </select>
+            </label>
+          </div>
+        </details>
+      </div>
+
+      <div class="split">
+        <div class="panel">
+          <h3>Decoded Frames</h3>
+          <div class="scroll">
+            <table id="decodedTable">
+              <thead>
+                <tr>
+                  <th>Bus</th>
+                  <th>Dir</th>
+                  <th>ID</th>
+                  <th>Name</th>
+                  <th>Value</th>
+                  <th>Unit</th>
+                  <th>Age</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>Raw Frames</h3>
+          <div class="scroll">
+            <table id="rawTable">
+              <thead>
+                <tr>
+                  <th>Bus</th>
+                  <th>Dir</th>
+                  <th>ID</th>
+                  <th>DLC</th>
+                  <th>Data</th>
+                  <th>Age</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <div class="legendBar">
+      <span class="legendItem rx">RX</span>
+      <span class="legendItem tx">TX</span>
+      <span class="legendItem gen">GEN</span>
+      <span class="legendHint"
+        >Row colors indicate receive/transmit direction and generated frame edits.</span
+      >
+    </div>
+    <footer class="siteFooter">OpenHaldex-S3 by SpringfieldVW.com</footer>
+
+    <script src="/scripts.js?v=9"></script>
+  </body>
+</html>

@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Diagnostics</title>
+    <link rel="stylesheet" href="/styles.css?v=9" />
+  </head>
+  <body data-page="diag">
+    <header class="appHeader">
+      <div class="titleWrap">
+        <div class="brandMark">OH</div>
+        <div>
+          <h1>Diagnostics</h1>
+        </div>
+      </div>
+      <div class="toolbar">
+        <label class="toggle" title="Toggle light/dark">
+          <input id="themeSwitch" type="checkbox" />
+          <span class="label" id="themeLabel">Light</span>
+          <div aria-hidden="true" class="dot"></div>
+        </label>
+      </div>
+    </header>
+
+    <nav class="navBar">
+      <a href="/">Home</a>
+      <a href="/map">Map</a>
+      <a href="/canview">CAN View</a>
+      <a href="/diag">Diagnostics</a>
+      <a href="/ota">OTA</a>
+    </nav>
+
+    <main>
+      <div class="grid">
+        <div class="panel">
+          <h3>Control</h3>
+          <div class="kv">
+            <div><span class="label">Mode</span><span id="mode">-</span></div>
+            <div>
+              <span class="label">Enable Controller</span><span id="controllerEnabled">-</span>
+            </div>
+            <div><span class="label">Broadcast Haldex</span><span id="broadcast">-</span></div>
+            <div><span class="label">Haldex Gen</span><span id="haldexGen">-</span></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>Spec / Act</h3>
+          <div class="kv">
+            <div><span class="label">Specified (lock)</span><span id="spec">-</span></div>
+            <div><span class="label">Measured (lock)</span><span id="act">-</span></div>
+            <div><span class="label">Haldex State</span><span id="haldexState">-</span></div>
+            <div><span class="label">Engagement</span><span id="haldexEngagement">-</span></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>Vehicle</h3>
+          <div class="kv">
+            <div><span class="label">Speed</span><span id="speed">-</span></div>
+            <div><span class="label">RPM</span><span id="rpm">-</span></div>
+            <div><span class="label">Throttle</span><span id="throttle">-</span></div>
+            <div><span class="label">Boost</span><span id="boost">-</span></div>
+            <div><span class="label">Clutch 1</span><span id="clutch1">-</span></div>
+            <div><span class="label">Clutch 2</span><span id="clutch2">-</span></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>CAN</h3>
+          <div class="kv">
+            <div><span class="label">Ready</span><span id="canReady">-</span></div>
+            <div><span class="label">Chassis</span><span id="canChassis">-</span></div>
+            <div><span class="label">Haldex</span><span id="canHaldex">-</span></div>
+            <div><span class="label">Bus Failure</span><span id="canFailure">-</span></div>
+            <div><span class="label">Last Chassis</span><span id="lastChassis">-</span></div>
+            <div><span class="label">Last Haldex</span><span id="lastHaldex">-</span></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>Limits & Flags</h3>
+          <div class="kv">
+            <div><span class="label">Temp Protection</span><span id="tempProtection">-</span></div>
+            <div><span class="label">Coupling Open</span><span id="couplingOpen">-</span></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>Haldex TX Frames</h3>
+          <div class="kv">
+            <div><span class="label">Map target</span><span id="frameTarget">-</span></div>
+            <div><span class="label">MOTOR1 (0x280)</span><span id="frameM1">-</span></div>
+            <div><span class="label">MOTOR3 (0x380)</span><span id="frameM3">-</span></div>
+            <div><span class="label">BRAKES1 (0x1A0)</span><span id="frameB1">-</span></div>
+            <div><span class="label">BRAKES2 (0x5A0)</span><span id="frameB2">-</span></div>
+            <div><span class="label">BRAKES3 (0x4A0)</span><span id="frameB3">-</span></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>System</h3>
+          <div class="kv">
+            <div><span class="label">Uptime</span><span id="uptime">-</span></div>
+            <div><span class="label">Network Mode</span><span id="netMode">-</span></div>
+            <div><span class="label">STA IP</span><span id="netStaIp">-</span></div>
+            <div><span class="label">AP IP</span><span id="netApIp">-</span></div>
+            <div><span class="label">Hostname</span><span id="netHost">-</span></div>
+            <div><span class="label">Internet</span><span id="netInternet">-</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="footer" id="status">Waiting for data...</div>
+    </main>
+
+    <footer class="siteFooter">OpenHaldex-S3 by SpringfieldVW.com</footer>
+
+    <script src="/scripts.js?v=9"></script>
+  </body>
+</html>

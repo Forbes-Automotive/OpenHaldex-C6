@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OTA Update</title>
+    <link rel="stylesheet" href="/styles.css?v=9" />
+  </head>
+  <body data-page="ota">
+    <header class="appHeader">
+      <div class="titleWrap">
+        <div class="brandMark">OH</div>
+        <div>
+          <h1>OTA Update</h1>
+        </div>
+      </div>
+      <div class="toolbar">
+        <label class="toggle" title="Toggle light/dark">
+          <input id="themeSwitch" type="checkbox" />
+          <span class="label" id="themeLabel">Light</span>
+          <div aria-hidden="true" class="dot"></div>
+        </label>
+      </div>
+    </header>
+
+    <nav class="navBar">
+      <a href="/">Home</a>
+      <a href="/map">Map</a>
+      <a href="/canview">CAN View</a>
+      <a href="/diag">Diagnostics</a>
+      <a href="/ota">OTA</a>
+    </nav>
+
+    <main>
+      <div class="panel">
+        <p class="hint">Select a firmware binary to upload. Device reboots on success.</p>
+        <form id="otaForm">
+          <div class="row">
+            <input type="file" id="bin" accept=".bin" required />
+          </div>
+          <div class="row">
+            <button type="submit">Upload</button>
+          </div>
+          <div class="row" id="status"></div>
+        </form>
+      </div>
+
+      <div class="panel">
+        <div class="row">
+          <input id="wifiSsid" class="grow" type="text" placeholder="Hotspot SSID" />
+          <input id="wifiPass" class="grow" type="password" placeholder="Hotspot password" />
+          <label class="checkLabel">
+            <input id="wifiStaEnable" type="checkbox" />
+            Enable Hotspot (STA)
+          </label>
+          <button id="btnWifiSave">Save Wi-Fi</button>
+          <button id="btnWifiClear">Clear</button>
+        </div>
+        <div class="help" id="wifiStatus">
+          Wi-Fi saves in flash. STA uses openhaldex.local when connected.
+        </div>
+      </div>
+    </main>
+
+    <footer class="siteFooter">
+      <div id="updateStatus">Update: Checking...</div>
+      <div>OpenHaldex-S3 by SpringfieldVW.com</div>
+    </footer>
+
+    <script src="/scripts.js?v=9"></script>
+  </body>
+</html>

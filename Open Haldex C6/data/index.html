@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenHaldex S3</title>
+    <link rel="stylesheet" href="/styles.css?v=9" />
+  </head>
+  <body data-page="home">
+    <header class="appHeader">
+      <div class="titleWrap">
+        <div class="brandMark">OH</div>
+        <div>
+          <h1>OpenHaldex S3</h1>
+        </div>
+      </div>
+      <div class="toolbar">
+        <label class="toggle" title="Toggle light/dark">
+          <input id="themeSwitch" type="checkbox" />
+          <span class="label" id="themeLabel">Light</span>
+          <div aria-hidden="true" class="dot"></div>
+        </label>
+      </div>
+    </header>
+
+    <nav class="navBar">
+      <a href="/">Home</a>
+      <a href="/map">Map</a>
+      <a href="/canview">CAN View</a>
+      <a href="/diag">Diagnostics</a>
+      <a href="/ota">OTA</a>
+    </nav>
+
+    <main>
+      <div class="panel">
+        <div class="gaugeGrid">
+          <div class="gaugeCard">
+            <div class="gaugeTitle">Speed</div>
+            <div class="gauge" data-max="200">
+              <div class="gaugeDial"></div>
+              <div class="gaugeNeedle" id="gaugeSpeedNeedle"></div>
+              <div class="gaugeValue" id="gaugeSpeedValue">0</div>
+              <div class="gaugeUnit">km/h</div>
+            </div>
+          </div>
+          <div class="gaugeCard">
+            <div class="gaugeTitle">Throttle</div>
+            <div class="gauge" data-max="100">
+              <div class="gaugeDial"></div>
+              <div class="gaugeNeedle" id="gaugeThrottleNeedle"></div>
+              <div class="gaugeValue" id="gaugeThrottleValue">0</div>
+              <div class="gaugeUnit">%</div>
+            </div>
+          </div>
+        </div>
+        <div class="barWrap">
+          <div class="barLabel">Engagement</div>
+          <div class="bar"><div class="barFill" id="engagementBar"></div></div>
+          <div class="barValue" id="engagementValue"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="row">
+          <select id="mapSelect" class="grow"></select>
+          <button id="btnRefresh">Refresh</button>
+          <button id="btnLoad">Load map</button>
+        </div>
+        <div class="status" id="status"></div>
+      </div>
+
+      <div class="panel">
+        <div class="row">
+          <label class="checkLabel">
+            <input id="toggleController" type="checkbox" />
+            Controller Enabled (Maps)
+          </label>
+          <label class="checkLabel">
+            <input id="toggleBroadcast" type="checkbox" />
+            Broadcast Haldex
+          </label>
+          <span class="status" id="modeStatus"></span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="row">
+          <label for="haldexGen">Haldex Generation</label>
+          <select id="haldexGen">
+            <option value="1">Gen 1</option>
+            <option value="2">Gen 2</option>
+            <option value="4">Gen 4</option>
+          </select>
+          <button id="btnHaldexGen">Save</button>
+        </div>
+        <div class="help">Set once for your vehicle. Reboot recommended after change.</div>
+      </div>
+    </main>
+
+    <footer class="siteFooter">OpenHaldex-S3 by SpringfieldVW.com</footer>
+
+    <script src="/scripts.js?v=9"></script>
+  </body>
+</html>

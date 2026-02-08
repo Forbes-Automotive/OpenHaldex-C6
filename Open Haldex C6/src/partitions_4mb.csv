@@ -1,0 +1,27 @@
+# Name,   Type, SubType, Offset,  Size, Flags
+# Note: This is a sample partition table for OTA updates
+# You must configure this in your Arduino IDE or PlatformIO project settings
+#
+# For ESP32-C6 with OTA support, you need:
+# - Bootloader partition (handled automatically)
+# - Two OTA partitions (ota_0 and ota_1) for dual-bank OTA
+# - NVS partition for non-volatile storage
+# - OTA data partition for tracking which partition to boot
+
+# Bootloader (automatically handled by ESP-IDF)
+# boot,      app,  boot,  0x0000,   0x8000,
+
+# NVS partition for Preferences/EEPROM
+nvs,        data, nvs,   0x9000,   0x4000,
+
+# OTA data partition (tracks which OTA partition to boot)
+otadata,    data, ota,   0xd000,   0x2000,
+
+# OTA partition 0 (first firmware slot)
+ota_0,      app,  ota_0, 0x10000,  0x1A0000,
+
+# OTA partition 1 (second firmware slot)
+ota_1,      app,  ota_1, , 0x1A0000,
+
+# SPIFFS or other data partition (optional)
+# spiffs,    data, spiffs, 0x420000, 0x100000,
