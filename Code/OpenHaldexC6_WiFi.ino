@@ -146,6 +146,13 @@ void setupUI() {
   ESPUI.addControl(Separator, "Analyzer", "", Dark, tabSetup);
   bool_analyzerMode = ESPUI.addControl(Switcher, "Analyzer Mode", String(analyzerMode), Dark, tabSetup, generalCallback);
 
+  // create Dashboard tab
+  auto tabDASH = ESPUI.addControl(Tab, "", "Dashboard");
+  ESPUI.addControl(Separator, "Quick Dashboard", "", Dark, tabDASH);
+  ESPUI.addControl(Label, "", "<a href='/dashboard' background:linear-gradient(135deg,#00d4ff 0%,#00ff88 100%); color:white; padding:15px; text-align:center; border-radius:10px; font-weight:bold; text-decoration:none; font-size:1.2em;'>🚀 Open Quick Dashboard</a>", Dark, tabDASH);
+
+
+
   //Finally, start up the UI.
   //This should only be called once we are connected to WiFi.
   ESPUI.begin(wifiHostName);
@@ -437,6 +444,9 @@ void updateLabels(void *arg) {
     } else {
       ESPUI.updateLabel(label_otaStatus, "Ready for Update");
     }
+
+    // Send dashboard updates
+    sendDashboardUpdate();
 
     vTaskDelay(labelRefresh / portTICK_PERIOD_MS);
   }

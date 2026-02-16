@@ -19,6 +19,9 @@
 #include <ESPUI.h>    // included for WiFi pages
 #include <WiFi.h>     // included for WiFi pages
 #include <ESPmDNS.h>  // included for WiFi pages
+#include <AsyncWebSocket.h>
+#include <ArduinoJson.h>
+#include <SPIFFS.h>
 
 #include "InterruptButton.h"  // for mode button (internal & external)
 
@@ -152,6 +155,11 @@ extern void updateLabels();
 extern void setupAnalyzer();
 extern void setAnalyzerMode(bool enable);
 extern void analyzerQueueFrame(const twai_message_t &frame, uint8_t bus);
+
+// for Dashboard function prototypes
+extern void setupDashboard();
+extern void loopDashboard();
+extern void sendDashboardUpdate();
 
 // Values received from Haldex CAN
 uint8_t received_haldex_state = 0;

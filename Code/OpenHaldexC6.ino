@@ -23,10 +23,12 @@ void setup() {
   setupTasks();    // setup tasks for each of the main functions - CAN Chassis/Haldex handling, Serial prints, Standalone, etc - in '_io.ino'
   connectWifi();   // enable / start WiFi - in '_wifi.ino'
   setupUI();       // setup wifi user interface - in '_wifi.ino'
+  setupDashboard(); // setup dashboard - in '_Dashboard.ino'
   setupOTA();      // setup OTA update server - in '_OTA.ino'
 }
 
 void loop() {
+  loopDashboard();
   delay(100);  // literally here to give more CPU time to tasks
 
   if (rebootWiFi) {
