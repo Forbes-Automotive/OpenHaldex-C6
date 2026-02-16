@@ -148,8 +148,8 @@ void setupUI() {
 
   // create Dashboard tab
   auto tabDASH = ESPUI.addControl(Tab, "", "Dashboard");
-  ESPUI.addControl(Separator, "Quick Dashboard", "", Dark, tabDASH);
-  ESPUI.addControl(Label, "", "<a href='/dashboard' background:linear-gradient(135deg,#00d4ff 0%,#00ff88 100%); color:white; padding:15px; text-align:center; border-radius:10px; font-weight:bold; text-decoration:none; font-size:1.2em;'>🚀 Open Quick Dashboard</a>", Dark, tabDASH);
+  ESPUI.addControl(Separator, "Dashboard", "", Dark, tabDASH);
+  ESPUI.addControl(Label, "", "<a href='/dashboard' background:linear-gradient(135deg,#00d4ff 0%,#00ff88 100%); color:white; padding:15px; text-align:center; border-radius:10px; font-weight:bold; text-decoration:none; font-size:1.2em;'>Open Dashboard</a>", Dark, tabDASH);
 
 
 

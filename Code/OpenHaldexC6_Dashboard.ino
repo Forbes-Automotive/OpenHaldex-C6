@@ -30,10 +30,14 @@ void onDashboardWSEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, Aw
             state.mode = MODE_STOCK;
           } else if (strcmp(mode, "FWD") == 0) {
             state.mode = MODE_FWD;
+          } else if (strcmp(mode, "7525") == 0) {
+            state.mode = MODE_7525;
           } else if (strcmp(mode, "6040") == 0) {
             state.mode = MODE_6040;
           } else if (strcmp(mode, "5050") == 0) {
             state.mode = MODE_5050;
+          } else if (strcmp(mode, "Custom") == 0) {
+            state.mode = MODE_CUSTOM;
           }
           
           sendDashboardUpdate();
@@ -109,6 +113,10 @@ void setupDashboard() {
     html += ".mode-button.mode-6040:hover,.mode-button.mode-6040.active{border-color:#ff69b4;background:linear-gradient(135deg,#ff69b4 0%,#ff1493 100%)}";
     html += ".mode-button.mode-5050{background:linear-gradient(135deg,rgba(0,212,255,0.15) 0%,rgba(0,212,255,0.05) 100%);border-color:rgba(0,212,255,0.3)}";
     html += ".mode-button.mode-5050:hover,.mode-button.mode-5050.active{border-color:#00d4ff;background:linear-gradient(135deg,#00d4ff 0%,#00a8cc 100%)}";
+    html += ".mode-button.mode-CUSTOM{background: linear-gradient(135deg,rgba(255,255,255,0.25) 0%,rgba(255,255,255,0.10) 100%);border-color:rgba(255,255,255,0.4);color: #333}";
+    html += ".mode-button.mode-CUSTOM:hover,.mode-button.mode-CUSTOM.active {border-color: #ffffff;background: linear-gradient(135deg,#ffffff 0%,#e6e6e6 100%);color: #000}";
+    html += ".mode-button.mode-7525{background: linear-gradient(135deg,rgba(100,180,255,0.20) 0%,rgba(100,180,255,0.08) 100%);border-color:rgba(100,180,255,0.35)}";
+    html += ".mode-button.mode-7525:hover,.mode-button.mode-7525.active {border-color: #64b4ff;background: linear-gradient(135deg,#64b4ff 0%,#3f8ed6 100%)}";
     html += ".connection-status{text-align:center;padding:10px;border-radius:10px;margin-bottom:20px;font-weight:600}";
     html += ".connection-status.connected{background:rgba(0,255,136,0.1);color:#00ff88;border:1px solid rgba(0,255,136,0.3)}";
     html += ".connection-status.disconnected{background:rgba(255,59,59,0.1);color:#ff3b3b;border:1px solid rgba(255,59,59,0.3)}";
@@ -129,6 +137,8 @@ void setupDashboard() {
     html += "<button class='mode-button mode-fwd' onclick=\"setMode('FWD')\">FWD</button>";
     html += "<button class='mode-button mode-6040' onclick=\"setMode('6040')\">60/40</button>";
     html += "<button class='mode-button mode-5050' onclick=\"setMode('5050')\">50/50</button>";
+    html += "<button class='mode-button mode-7525' onclick=\"setMode('7525')\">75/25</button>";
+    html += "<button class='mode-button mode-CUSTOM' onclick=\"setMode('Custom')\">Custom</button>";
     html += "</div><footer><p>Forbes Automotive • OpenHaldex-C6 v1.10</p></footer></div>";
     
     // JavaScript

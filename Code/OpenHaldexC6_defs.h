@@ -21,7 +21,6 @@
 #include <ESPmDNS.h>  // included for WiFi pages
 #include <AsyncWebSocket.h>
 #include <ArduinoJson.h>
-#include <SPIFFS.h>
 
 #include "InterruptButton.h"  // for mode button (internal & external)
 
