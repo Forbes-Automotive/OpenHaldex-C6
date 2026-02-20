@@ -124,9 +124,9 @@ async function refreshStatus() {
         document.getElementById('rpm').textContent = data.rpm || '--';
         document.getElementById('boost').textContent = data.boost || '--';
 
-        document.getElementById('lockTarget').textContent = data.lockTarget || '--';
-        document.getElementById('lockActual').textContent = data.lockActual || '--';
-        document.getElementById('engagementFill').style.width = `${data.lockActual || 0}%`;
+        //document.getElementById('lockTarget').textContent = data.lockTarget || '--';
+        //document.getElementById('lockActual').textContent = data.lockActual || '--';
+        //document.getElementById('engagementFill').style.width = `${data.lockActual || 0}%`;
 
         if (data.mode !== undefined) {
             modeButton(data.mode); // set the mode button - there may be external influences

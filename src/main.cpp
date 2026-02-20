@@ -28,6 +28,14 @@ void setup()
   setupWebServer(); // setup WebServer
   setupAPI();       // setup API handling for WebServer
   setupOTA();       // setup Over-the-Air Updates
+
+  if (needsFirmwareConfirmation())
+  {
+    DEBUG("[OTA SAFETY] New firmware detected - confirming after safety checks...");
+    // Small delay to ensure CAN buses are fully initialized
+    delay(100);
+    confirmFirmwareValidity();
+  }
 }
 
 void loop()

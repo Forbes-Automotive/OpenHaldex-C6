@@ -28,6 +28,13 @@
 
 #include <LittleFS.h>
 
+#include "esp_ota_ops.h"
+#include "esp_app_format.h"
+#include "esp_partition.h"
+#include "esp_https_ota.h"
+#include "esp_flash_partitions.h"
+#include "esp_log.h"
+
 #include "InterruptButton.h" // for mode button (internal & external)
 
 // debug options

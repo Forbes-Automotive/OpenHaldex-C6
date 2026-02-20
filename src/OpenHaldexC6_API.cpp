@@ -42,7 +42,7 @@ static void statusOutgoing(AsyncWebServerRequest *request)
     data["boost"] = received_vehicle_boost;
 
     data["lockTarget"] = lock_target;
-    data["lockActual"] = received_haldex_engagement;
+    data["lockActual"] = 100;
     data["haldexState"] = received_haldex_state;
     data["haldexEngagement"] = received_haldex_engagement;
     data["haldexEngagementRaw"] = received_haldex_engagement_raw;
