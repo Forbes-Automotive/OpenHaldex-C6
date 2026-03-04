@@ -1,3 +1,4 @@
+#include <OpenHaldexC6_Analyzer.h>
 #include <OpenHaldexC6_defs.h>
 
 // Analyzer mode: pure CAN pass-through plus a TCP interface for external tools.
@@ -49,6 +50,7 @@ static WiFiServer analyzerServer(kAnalyzerPort);
 static WiFiClient analyzerClient;
 static uint8_t analyzerActiveProtocol = ANALYZER_PROTOCOL_GVRET;
 static bool analyzerServerStarted = false;
+
 // Allow a little more time after TCP connect so control replies aren't dropped.
 static const uint32_t kGvretControlWriteTimeoutMs = 250;
 
@@ -533,7 +535,7 @@ static void analyzerTask(void *arg) {
     }
 
     if (!analyzerClient || !analyzerClient.connected()) {
-      WiFiClient pending = analyzerServer.available();
+      WiFiClient pending = analyzerServer.accept();
       if (pending) {
         analyzerClient = pending;
         analyzerClient.setNoDelay(true);
@@ -583,16 +585,10 @@ void setAnalyzerMode(bool enable) {
     // Analyzer mode should not transmit control frames; force controller off.
     if (!disableController) {
       disableController = true;
-      if (bool_disableControl) {
-        ESPUI.updateSwitcher(bool_disableControl, true);
-      }
     }
   }
-  if (bool_analyzerMode) {
-    ESPUI.updateSwitcher(bool_analyzerMode, analyzerMode);
-  }
   if (!analyzerMode && analyzerQueue) {
-    xQueueReset(analyzerQueue);
+    xQueueReset(analyzerQueue); 
   }
 }
 
