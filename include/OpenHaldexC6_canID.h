@@ -1,3 +1,5 @@
+#pragma once
+
 // all the CAN addresses in here.  Not all used, but worth keeping note of for future projects
 #define MOTOR1_ID 0x280
 #define MOTOR2_ID 0x288

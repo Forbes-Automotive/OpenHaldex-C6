@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+
+    <title>OpenHaldex-C6</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>OpenHaldex-C6</h1>
+            <div class="status-bar">
+                <!--<span class="status-badge" id="wsStatus">Connecting...</span>-->
+                <span class="status-badge" id="canStatus">CAN: --</span>
+            </div>
+        </header>
+
+        <nav class="nav-tabs">
+            <button class="nav-tab active" data-page="dashboard">Dashboard</button>
+            <button class="nav-tab" data-page="basic">Basic</button>
+            <button class="nav-tab" data-page="expert">Expert</button>
+            <button class="nav-tab" data-page="settings">Settings</button>
+            <button class="nav-tab" data-page="diagnostics">Diagnostics</button>
+        </nav>
+
+        <div class="page active" id="dashboard-page">
+            <section class="card">
+                <h2>Mode Selection</h2>
+                <div class="mode-grid">
+                    <button class="mode-btn" data-mode="0">Stock</button>
+                    <button class="mode-btn" data-mode="1">FWD</button>
+                    <button class="mode-btn" data-mode="2">50:50</button>
+                    <button class="mode-btn" data-mode="3">60:40</button>
+                    <button class="mode-btn" data-mode="4">75:25</button>
+                    <button class="mode-btn" data-mode="5">Expert</button>
+                </div>
+                <!--
+                <div class="current-mode">
+                    Current: <span id="currentMode">--</span>
+                </div>
+            -->
+            </section>
+
+            <section class="card">
+                <h2>Haldex Engagement</h2>
+                <div class="engagement-display">
+                    <div class="engagement-label">
+                        <span>Target: <span id="lockTarget">--</span>%</span>
+                        <span>Actual: <span id="lockActual">--</span>%</span>
+                    </div>
+                    <div class="engagement-bar">
+                        <div class="engagement-fill" id="engagementFill"></div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="card">
+                <h2>Live Data</h2>
+                <div class="gauge-grid">
+                    <div class="gauge">
+                        <div class="gauge-label">Speed</div>
+                        <div class="gauge-value" id="speed">--</div>
+                        <div class="gauge-unit">km/h</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Throttle</div>
+                        <div class="gauge-value" id="throttle">--</div>
+                        <div class="gauge-unit">%</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">RPM</div>
+                        <div class="gauge-value" id="rpm">--</div>
+                        <div class="gauge-unit">RPM</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Boost</div>
+                        <div class="gauge-value" id="boost">--</div>
+                        <div class="gauge-unit">mbar</div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="card">
+                <h2>Haldex Data</h2>
+                <div class="gauge-grid">
+                    <div class="gauge">
+                        <div class="gauge-label">Engagement</div>
+                        <div class="gauge-value" id="haldexEngagement">--</div>
+                        <div class="gauge-unit"> %</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Clutch 1</div>
+                        <div class="gauge-value" id="clutch1Report">--</div>
+                        <div class="gauge-unit"> bit</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Clutch 2</div>
+                        <div class="gauge-value" id="clutch2Report">--</div>
+                        <div class="gauge-unit"> bit</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Temp Protection</div>
+                        <div class="gauge-value" id="tempProtection">--</div>
+                        <div class="gauge-unit"> bit</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Coupling Open</div>
+                        <div class="gauge-value" id="couplingOpen">--</div>
+                        <div class="gauge-unit"> bit</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Speed Limit</div>
+                        <div class="gauge-value" id="speedLimit">--</div>
+                        <div class="gauge-unit"> bit</div>
+                    </div>
+                </div>
+            </section>
+
+            <section>
+                <div class="gauge">
+                    <div class="gauge-label">Haldex State</div>
+                    <div class="gauge-value" id="haldexState">--</div>
+                    <div class="gauge-unit"> bits</div>
+                </div>
+            </section>
+        </div>
+
+        <div class="page" id="settings-page">
+            <section class="card">
+                <h2>Haldex Generation</h2>
+                <select id="haldexGeneration" class="input-select">
+                    <option value="1">Generation 1</option>
+                    <option value="2">Generation 2</option>
+                    <option value="3">Generation 3 (N/A)</option>
+                    <option value="4">Generation 4</option>
+                    <option value="5">Generation 5 (N/A)</option>
+                </select>
+            </section>
+
+            <section class="card">
+                <h2>Controller Options</h2>
+                <div class="toggle-group">
+                    <label class="toggle">
+                        <input type="checkbox" id="disableController">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Controller Disabled</span>
+                    </label>
+                    <label class="toggle">
+                        <input type="checkbox" id="isStandalone">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Standalone Mode</span>
+                    </label>
+                    <label class="toggle">
+                        <input type="checkbox" id="broadcastOpenHaldexOverCAN">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Broadcast over CAN</span>
+                    </label>
+                    <label class="toggle">
+                        <input type="checkbox" id="analyzerMode">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Turn on SavvyCAN</span>
+                    </label>
+                </div>
+            </section>
+
+            <section class="card">
+                <h2>Input Options</h2>
+                <div class="toggle-group">
+                    <p class="hint">Use the Traction Control Signal (via. CAN) to force 5050</p>
+                    <label class="toggle">
+                        <input type="checkbox" id="tcForceMode">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Use TC to Force Mode</span>
+                    </label>
+                    <p class="hint">Use the External Mode Button to force 5050</p>
+                    <label class="toggle">
+                        <input type="checkbox" id="extButtonForceMode">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Use External Button to Force Mode</span>
+                    </label>
+                </div>
+
+                <h2>Force Mode</h2>
+                <select id="forceModeValue" class="input-select">
+                    <option value="0">Stock</option>
+                    <option value="1">FWD</option>
+                    <option value="2">50:50</option>
+                    <option value="3">60:40</option>
+                    <option value="4">75:25</option>
+                    <option value="5">Expert</option>
+                </select>
+            </section>
+
+            <section class="card">
+                <h2>Output Options</h2>
+                <div class="toggle-group">
+                    <label class="toggle">
+                        <input type="checkbox" id="followBrake">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Follow Brake Input</span>
+                    </label>
+
+                    <label class="toggle">
+                        <input type="checkbox" id="invertBrake">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Invert Brake Input</span>
+                    </label>
+
+                    <label class="toggle">
+                        <input type="checkbox" id="followHandbrake">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Follow Handbrake Input</span>
+                    </label>
+
+                    <label class="toggle">
+                        <input type="checkbox" id="invertHandbrake">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Invert Handbrake Input</span>
+                    </label>
+                </div>
+            </section>
+
+            <button class="btn-primary" id="saveSettings">Save Settings</button>
+        </div>
+
+        <div class="page" id="basic-page">
+            <section class="card">
+                <h2>Disengage Under Speed (km/h)</h2>
+                <p class="hint">Use this to disable ANY lock BELOW a certain speed (for car parks etc)</p>
+
+                <div class="slider-container">
+                    <input type="range" id="disengageUnderSpeedRange" min="0" max="300" value="120" class="slider">
+                    <div class="slider-value"><span id="disengageUnderSpeed">120</span> km/h</div>
+                </div>
+            </section>
+
+            <section class="card">
+                <h2>Disengage Above Speed (km/h)</h2>
+                <p class="hint">Use this to disable ANY lock ABOVE a certain speed (for highways etc)</p>
+
+                <div class="slider-container">
+                    <input type="range" id="disengageAboveSpeedRange" min="0" max="300" value="120" class="slider">
+                    <div class="slider-value"><span id="disengageAboveSpeed">120</span> km/h</div>
+                </div>
+            </section>
+
+            <section class="card">
+                <h2>Minimum Throttle Before Lock (%)</h2>
+                <p class="hint">Use this to disable ANY lock BELOW a certain throttle (for car parks etc)</p>
+
+                <div class="slider-container">
+                    <input type="range" id="disableThrottleRange" min="0" max="100" value="15" class="slider">
+                    <div class="slider-value"><span id="disableThrottle">15</span> %</div>
+                </div>
+            </section>
+
+            <button class="btn-primary" id="saveSettingsBasic">Save Settings</button>
+        </div>
+
+        <div class="page" id="expert-page">
+            <section class="card">
+                <h2>Expert Editor</h2>
+                <p class="hint">Tap cells to edit lock percentage</p>
+
+                <div class="map-container">
+                    <div class="map-axis-label-y">Throttle %</div>
+                    <div class="map-grid" id="mapGrid"></div>
+                    <div class="map-axis-label-x">Speed (km/h)</div>
+                </div>
+
+                <div class="map-controls">
+                    <button class="btn-secondary" id="saveMap">Save Tune</button>
+                    <button class="btn-secondary" id="restoreDefaults">Restore Defaults</button>
+                </div>
+            </section>
+
+            <div id="editModal" class="modal">
+                <div class="modal-content">
+                    <h3 id="editModalTitle">Edit Lock %</h3>
+                    <input type="number" id="editValue" min="0" max="100" class="input-number">
+                    <div class="modal-buttons">
+                        <button class="btn-secondary" id="cancelEdit">Cancel</button>
+                        <button class="btn-secondary" id="confirmEdit">Confirm</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="page" id="diagnostics-page">
+            <section class="card">
+                <h2>CAN Status</h2>
+                <div class="diag-grid">
+                    <div class="diag-item">
+                        <span class="diag-label">Chassis CAN:</span>
+                        <span class="diag-value" id="diagChassisCAN">--</span>
+                    </div>
+                    <div class="diag-item">
+                        <span class="diag-label">Haldex CAN:</span>
+                        <span class="diag-value" id="diagHaldexCAN">--</span>
+                    </div>
+                </div>
+            </section>
+
+            <section class="card">
+                <h2>System Info</h2>
+                <div class="diag-grid">
+                    <div class="diag-item">
+                        <span class="diag-label">Chip:</span>
+                        <span class="diag-value">ESP32-C6</span>
+                    </div>
+                    <div class="diag-item">
+                        <span class="diag-label">Free Heap:</span>
+                        <span class="diag-value"><span id="diagFreeHeap">--</span> KB</span>
+                    </div>
+                    <div class="diag-item">
+                        <span class="diag-label">Firmware:</span>
+                        <span class="diag-value" id="FW_VERSION">--</span>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <script src="./app.js?v=2.10.0" type="text/javascript"></script>
+        <!-- add version query param to force cache refresh on updates-->
+</body>
+
+</html>

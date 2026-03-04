@@ -1,56 +1,8 @@
-/*
- * ============================================================================
- * SAFETY-CRITICAL OTA (Over-The-Air) Update Module for OpenHaldex-C6
- * ============================================================================
- * 
- * PRODUCTION-SAFE IMPLEMENTATION WITH ESP-IDF OTA AND ROLLBACK SUPPORT
- * 
- * This module provides firmware update capability via WiFi using ESP-IDF's
- * native OTA API with dual partition support and automatic rollback.
- * 
- * SAFETY REQUIREMENTS:
- * - OTA updates are BLOCKED unless ALL safety conditions are met:
- *   1. Vehicle speed MUST be 0 kmh
- *   2. CAN buses MUST be initialized and operational
- *   3. Outputs MUST be disabled/safe (no active Haldex control)
- *   4. NO active faults (bus failures, temp protection, etc.)
- * 
- * FIRMWARE CONFIRMATION:
- * - New firmware is marked as valid ONLY after explicit confirmation
- * - Confirmation happens ONLY after:
- *   1. CAN buses successfully initialized
- *   2. Outputs set to safe state
- *   3. No active faults detected
- * - If confirmation fails, automatic rollback to previous firmware
- * 
- * PARTITION REQUIREMENTS:
- * - Requires partition table with dual OTA partitions (ota_0, ota_1)
- * - Add to partitions.csv:
- *   ota_0,  app,  ota_0,  0x20000,  0x200000,
- *   ota_1,  app,  ota_1,  0x220000, 0x200000,
- * 
- * ACCESS:
- * - Update URL: http://192.168.1.1:81/update
- * - Username: admin
- * - Password: haldex (CHANGE FOR PRODUCTION!)
- * 
- * Required Libraries:
- *   - AsyncTCP by me-no-dev
- *   - ESPAsyncWebServer by me-no-dev
- * 
- * Note: OTA server runs on port 81, ESPUI runs on port 80
- * ============================================================================
- */
+#include <OpenHaldexC6_OTA.h>
 
-#include <AsyncTCP.h>
-#include <ESPAsyncWebServer.h>
-//#include <OpenHaldexC6-OTA_defs.h>  // project globals and safety state
-#include "esp_ota_ops.h"
-#include "esp_app_format.h"
-#include "esp_partition.h"
-#include "esp_https_ota.h"
-#include "esp_flash_partitions.h"
-#include "esp_log.h"
+#define OTA_PASSWORD "haldex"
+
+//static AsyncWebServer *otaServer = nullptr;
 
 // ============================================================================
 // SAFETY-CRITICAL: Configuration
@@ -218,6 +170,8 @@ bool needsFirmwareConfirmation() {
 // ============================================================================
 // OTA Update Handler - SAFETY-CRITICAL: Blocks unsafe updates
 // ============================================================================
+//        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
+
 void handleOTAUpdate(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
   // SAFETY CHECK: Block update if system is not safe
   if (!isSystemSafeForOTA()) {
@@ -331,10 +285,9 @@ void setupOTA() {
   }
 
   // Create OTA server
-  otaServer = new AsyncWebServer(81);
 
   // Info endpoint
-  otaServer->on("/ota/info", HTTP_GET, [](AsyncWebServerRequest *request) {
+  webServer.on("/ota/info", HTTP_GET, [](AsyncWebServerRequest *request) {
     const esp_partition_t *running = esp_ota_get_running_partition();
     esp_app_desc_t app_info;
 
@@ -360,12 +313,12 @@ void setupOTA() {
   });
 
   // Health check endpoint
-  otaServer->on("/ota/health", HTTP_GET, [](AsyncWebServerRequest *request) {
+  webServer.on("/ota/health", HTTP_GET, [](AsyncWebServerRequest *request) {
     request->send(200, "text/plain", "OK");
   });
 
   // SAFETY-CRITICAL: Safety check endpoint
-  otaServer->on("/ota/check", HTTP_GET, [](AsyncWebServerRequest *request) {
+  webServer.on("/ota/check", HTTP_GET, [](AsyncWebServerRequest *request) {
     bool safe = isSystemSafeForOTA();
     String json = "{";
     json += "\"allowed\":" + String(safe ? "true" : "false") + ",";
@@ -392,7 +345,7 @@ void setupOTA() {
   });
 
   // SAFETY-CRITICAL: OTA update endpoint with authentication
-  otaServer->on(
+  webServer.on(
     "/ota/update", HTTP_POST,
     [](AsyncWebServerRequest *request) {
       // Check authentication
@@ -411,7 +364,7 @@ void setupOTA() {
     handleOTAUpdate);
 
   // Legacy endpoint for AsyncElegantOTA compatibility (redirects to new endpoint)
-  otaServer->on("/update", HTTP_GET, [](AsyncWebServerRequest *request) {
+  webServer.on("/update", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (!request->authenticate("admin", OTA_PASSWORD)) {
       return request->requestAuthentication();
     }
@@ -437,12 +390,12 @@ void setupOTA() {
 
     request->send(200, "text/html", html);
   });
-
-  otaServer->begin();
+  
+  //otaServer->begin();
 
 #if enableDebug || detailedDebugWiFi
   DEBUG("[OTA] OTA server started successfully!");
-  DEBUG("[OTA] Update URL: http://192.168.1.1:81/ota/update");
+  DEBUG("[OTA] Update URL: http://192.168.1.1/ota/update");
   DEBUG("[OTA] Username: admin");
   DEBUG("[OTA] Password: %s", OTA_PASSWORD);
   DEBUG("[OTA] Version: %s", FW_VERSION);
@@ -463,3 +416,6 @@ bool isOTAUpdateInProgress() {
 String getFirmwareVersion() {
   return String(FW_VERSION);
 }
+
+
+

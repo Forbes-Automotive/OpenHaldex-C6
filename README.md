@@ -1,155 +1,142 @@
-# OpenHaldex - ESP32 C6
-An open-source Generation 1, 2 & 4 Haldex Controller which originates/is a fork from ABangingDonk's 'OpenHaldex T4'.  It has been extended into Gen2 and Gen4 variants, with Gen3 and Gen5 currently unsupported - CAN reads of these systems would be awesome!
+# OpenHaldex — ESP32-C6
 
-Originally based on the Teensy 4.0; the ESP32 C6 features two TWAI (CAN) interfaces as well as WiFi and Bluetooth support; which makes it an ideal candidate for easier interfacing.
+An open-source controller for Haldex systems (Generation 1, 2 & 4). OpenHaldex reads CAN frames from your vehicle and can modify or generate messages so the Haldex differential behaves as configured.
+
+Features:
+- Two TWAI (CAN) interfaces for reading and bridging CAN traffic
+- Built-in Wi‑Fi and Bluetooth for on‑device configuration and diagnostics
+- Multiple preset modes plus customisable mode profiles
+- OTA firmware updates
 
 ![OpenHaldex-C6](/Images/BoardOverview.png)
 
-### Purchase
-If you want to purchase an assembled OpenHaldex C6 controller, you can do so here: [OpenHaldex C6 Controller - Forbes Automotive](https://forbes-automotive.com/products/openhaldex-controller)
+Purchase
+- Assembled modules are available: [OpenHaldex C6 Controller - Forbes Automotive](https://forbes-automotive.com/products/openhaldex-controller)
 
-### Concept
-The basis of the module is to act as a middle man - read the incoming CAN frames destined for the OEM Haldex controller, and, if required, adjust these messages to 'trick' the Haldex into thinking more (or less) lock is required.  
+Overview
+OpenHaldex sits between your vehicle and the OEM Haldex controller. It can operate as a passthrough (OEM behaviour), or modify messages to request different amounts of differential lock.
 
-Generation 1, 2 and 4 are all available as 'standalone' systems - which means that no other ECUs have to be present and OpenHaldex will create the necessary frames for Haldex operation.
+Supported generations: Gen1, Gen2 and Gen4 (Gen3 and Gen5 are currently unsupported).
 
-### ESP32 C6
-The ESP32 C6 features two TWAI controllers - which allows CANBUS messages to be read, processed and re-transmitted towards the Haldex.  It also supports WiFi and Bluetooth - which makes on-the-fly configuration changes possible.  
+Hardware
+The PCB is based around an ESP32‑C6 Mini (with Wi‑Fi, Bluetooth).  Two TWAI/CAN controllers are built into the PCB, along with external IO control (external mode button/onboard RGB LED and brake/handbrake signals).  There are two high-side drivers for brake/handbrake but these could be repurposed for other functions.
+- This platform was chosen to replace the earlier Teensy design for better wireless support and on‑device configuration.
 
-The original Teensy had an external HC-05 Bluetooth chip which is limited support wise - hence the decision to move to the ESP32.
+Modes
+The controller provides preset modes and a custom mode:
+- Stock (OEM behavior)
+- FWD (zero lock)
+- 7525 (25% lock)
+- 6040 (40% lock)
+- 5050 (100% lock)
+- Expert (user-defined lock profile)
 
-### The Modes
-The controller allows for 5 main modes: Stock (act as OEM), FWD (zero lock), 7525 (25% lock), 6040 (40% lock) and 5050 (100% lock) at the Haldex differential.  Generation 1, 2 and 4 have been tested on the bench to allow for a full understanding of what the stock CAN messages look like & therefore what messages need to be editted / created. 
+LED indicators (5mm onboard LED):
+- Red — Stock
+- Green — FWD
+- Cyan — 7525
+- Magenta — 6040
+- Blue — 5050
+- White — Expert
 
-These modes are displayed as colours using the 5mm PCB LED: Red (Stock), Green (FWD), Cyan (7525), Hot Pink (6040) and Blue (5050).  Custom modes are white.
+Expert Mode
+The Expert modes let you set lock targets based on speed and throttle setpoints and is available as a table. 
 
-#### Custom Modes
-Custom modes allows the user to set up 1x specific lock points at either speed, throttle or both ranges.  Future additions will include multiple set points for varying degrees of lock at specific speed/throttle points.
+Changing modes
+- Onboard: press the `Mode` button
+- Wi‑Fi: use the Web UI (at 192.168.1.1)
+- CAN: send a message with the Mode number in Byte 0 (other bytes unused)
 
-The modes can be toggled with the onboard 'Mode' button, changed via. WiFi or via. CAN.
-
-Disabling at low throttle inputs or high speed inputs are also configurable.
-
-#### Changing Modes via. CAN
-The modes can be changed via. CAN if required.  This is always enabled.  
-
-Byte 0 should be sent with the required mode number (noting numbers below).  The remaining 7 bytes are unused (for just now...).
-
-#### Mode Numbers
-Current mode (Byte 0) assumes (uint8_t type):
+Mode numbers (byte 0, uint8_t):
+```text
+Stock = 0
+FWD = 1
+5050 = 2
+6040 = 3
+7525 = 4
+Expert = 5
 ```
-  Stock = 0
-  FWD = 1,
-  5050 = 2,
-  6040 = 3,
-  7525 = 4,
-  Custom = 5,
+
+Broadcasted state (default CAN ID: `0x6B0`)
+> Note: Broadcasting can conflict with other devices — the ID can be adjusted.
+
+The module broadcasts its state on the CAN bus. The layout (data[1]..data[7]) is:
+```text
+data[1] = standalone_flags (bitmask for Gen1/Gen2/Gen4)
+data[2] = processed_haldex_engagement (mapped by firmware)
+data[3] = lock_target_percent
+data[4] = vehicle_speed
+data[5] = mode_override_flag
+data[6] = current_mode_number
+data[7] = pedal_value
 ```
-#### Receiving Modes via. CAN
-The default CAN address for broadcasting current state is on 0x6B0.  If you enable 'Broadcast OpenHaldex' you may find there are clashes on the CAN network if an existing module is also broadcasting on this access.  This ID can be adjusted to suit.  It is deliberately a 'high' value because the default Bosch IDs have non-important devices set with high value IDs.  
 
-The following data is broadcast onto the CAN network.  This could be used for aftermarket ECUs / clusters where there is a requirement to view current Haldex state:
-```
-    data[1] = isGen1Standalone + isGen2Standalone + isGen4Standalone;  // if is standalone.  Not used, but here for something to do
-    data[2] = (uint8_t)received_haldex_engagement_raw;                 // processed/mapped by FISCuntrol
-    data[3] = (uint8_t)lock_target;                                    // the lock % requested
-    data[4] = received_vehicle_speed;                                  // the vehicle speed
-    data[5] = state.mode_override;                                     // if is in 'override' mode
-    data[6] = (uint8_t)state.mode;                                     // current mode (as above)
-    data[7] = (uint8_t)received_pedal_value;                           // vehicle pedal value
-```
-### WiFi Setup
-WiFi setup and configuration is always active.  Connect to 'OpenHaldex-C6' by searching in WiFi devices and searching for 192.168.1.1 in a browser.  All settings are available for editing.  Should the WiFi page hang, a long press on the 'mode' button will reset the WiFi connection.
+Wi‑Fi Setup
+1. Connect to the access point `OpenHaldex-C6`.
+2. Open a browser at `http://192.168.1.1` to access the web UI.
+3. If the Wi‑Fi page becomes unresponsive, long‑press the `Mode` button to reset the Wi‑Fi.
 
-## Installation
-> [!TIP]
-> ### Optional Plug & Play Harness
-> 🟢 **RECOMMENDED — EASY 2 MINUTE INSTALL**
->
-> For users choosing the optional plug & play harness, installation is quick and easy.
->
-> - Remove the existing 6 pin connector at the differential and route the OEM cable back into the boot space.
-> - Install the long end of the harness through the boot floor and connect to the differential. The remaining small end connects back onto the OEM harness (previously fed through the boot floor) and the OpenHaldex module connects to its connector.
->
-> Removal is the reverse of installation.
+Installation
+Optional Plug & Play Harness (recommended)
+- Quick install — typically 2 minutes. Route cables as needed and connect harness ends as shown in the harness instructions.
 
-> [!WARNING]
-> ### ⚠️ No Harness - Manual Wiring Required
-> Note that all OpenHaldex controllers ordered without harnesses come with the pins required for installation.
->
-> Users without the optional plug & play harness will be required to make the following connections to Power/Ground/CAN:
->
-> #### Pinouts
-> The pins for installation (without the plug'n'play harness) is as follows:
-> ![InstallationPins-C6](/Images/InstallationPins.png)
->
-> The MX23A12NF connector pinout is:
->
-> | Pin/ | Signal | Notes |
-> |-----|--------|-------|
-> | 1 | Vbatt | 12 V |
-> | 2 | Ground/MALT | — |
-> | 3 | Chassis CAN Low | to Chassis/ECU side |
-> | 4 | Chassis CAN High | to Chassis/ECU side |
-> | 5 | Haldex CAN Low | to Haldex side |
-> | 6 | Haldex CAN High | to Haldex side |
-> | 7 | Switch Mode External | +12v to activate |
-> | 8 | Brake Switch In | +12v to activate |
-> | 9 | Brake Switch Out | Gen1 differentials ONLY |
-> | 10 | Handbrake Switch In | +12v to activate |
-> | 11 | Handbrake Switch Out | Gen1 differentials ONLY |
+Manual Wiring (no harness)
+- Modules sold without a harness include the connector pins for manual wiring.
+- Haldex Connector (VW 1J0-973-713)
+- Vehicle Connector (VW 1J0-973-813)
 
-### Uploading Code
-For users wishing to customise or edit the code, it is released here for free use.  Connect the Haldex controller via. a data USB-C cable (note some are ONLY power, so this needs to be checked).
+- Image: ![InstallationPins-C6](/Images/InstallationPins.png)
 
-It is recommended to check back here regularly to find updates, submit bugs or feature requests.
+MX23A12NF connector pinout:
+| Pin | Signal | Notes |
+|-----:|:-------|:------|
+| 1 | Vbatt | +12 V |
+| 2 | Ground/MALT | Ground |
+| 3 | Chassis CAN Low | To chassis/ECU side |
+| 4 | Chassis CAN High | To chassis/ECU side |
+| 5 | Haldex CAN Low | To Haldex differential |
+| 6 | Haldex CAN High | To Haldex differential |
+| 7 | Switch Mode External | +12 V to activate |
+| 8 | Brake Switch In | +12 V input |
+| 9 | Brake Switch Out | Gen1 differentials only |
+|10 | Handbrake Switch In | +12 V input |
+|11 | Handbrake Switch Out | Gen1 differentials only |
 
-### Over The Air Updates
-Over the air updates have been implemented and the process is as follows:
+Uploading Code
+- Connect the module via a data USB‑C cable (some cables are power‑only — confirm data support).
+- Source is open — check the repository for updates, bug reports and feature requests.
 
-> Download the most recent 'Release' - this will be saved locally on your phone/laptop/etc as a '.bin'.
-> Connect to OpenHaldex on WiFi
-> Go to 192.168.1.1:81/update
->> Username: admin
->> Password: haldex
-> Select file - locate the new '*.bin'
-> Wait for ESP to reboot
-> Re-connect and check the OTA tab for firmware version - this should match the downloaded Releases file
+Over‑The‑Air (OTA) Updates
+1. Download the latest release from GitHub (in 'Releases') (`.bin`).
+2. Connect to OpenHaldex Wi‑Fi.
+3. Search: `http://192.168.1.1:81/update`
+   - Username: `admin`
+   - Password: `haldex`
+4. Upload the `.bin` file and wait for the device to reboot.
+5. Reconnect and verify the firmware version in the OTA tab.
 
-### CAN Sniffing / SavvyCAN
-For a dedicated SavvyCAN interface, users can choose 'Analyzer Mode' in 'Setup'.  This will allow the Haldex Controller to act as a CAN sniffer so that CAN frames can be captured from either bus.  Once Analyzer mode is enabled, ALL Haldex control will be disabled and the system will operate in 'OEM' mode.
+CAN Sniffing (SavvyCAN / GVRET)
+- Enable `Analyzer Mode` in the Setup menu to capture frames from either CAN bus. Note: enabling analyzer mode disables all active Haldex control and returns the device to OEM mode.
 
-#### Connecting SavvyCAN (GVRET)
-> 1. Keep the OpenHaldex Wi-Fi AP connected.
-> 2. In SavvyCAN: **Add New Device Connection** -> **Network Connection (GVRET)**.
-> 3. IP address: `192.168.1.1` (port 23 is implicit in SavvyCAN's GVRET UI).
-> 4. Set CAN speed to `500000`.
+SavvyCAN (GVRET) connection steps:
+1. Keep the OpenHaldex Wi‑Fi AP connected.
+2. In SavvyCAN: Add New Device Connection → Network Connection (GVRET).
+3. IP: `192.168.1.1` (port 23 is used by GVRET by default).
+4. Set CAN speed to `500000`.
 
-### The PCB & Enclosure
-The Gerber files for the PCB, should anyone wish to build their own, is under the "PCB" folder.  This is the latest board.
-Similarly, the enclosures are also here.
-
->Pinout & functionality remains the same for ALL generations of enclosure.
+PCB & Enclosure
+- Gerber files and enclosure designs are in the `PCB` folder in the repo.
+- Pinout and functionality are consistent across supported enclosure versions.
 
 ![OpenHaldex-C6](/Images/BoardTop.png)
-
 ![OpenHaldex-C6](/Images/BoardBottom.png)
 
-### Nice to Haves
-Flashing LED if there is an issue with writing CAN messages.
+Nice to Have
+- Flashing LED if there is an issue writing CAN messages.
 
-### Shout Outs
-Massive thanks to Arwid Vasilev for re-designing the PCB!  Now on V1.02!
-Massive thanks to LVT Technologies for adding in OTA updates - it's been something I've wanted to do for ages and this guy cracks it without question!  This'll make updating so much easier!  Cheers dude!
+Acknowledgements
+- Thanks to Arwid Vasilev for the PCB redesign (now V1.02).
+- Thanks to LVT Technologies for integrating OTA updates.
 
-> [!CAUTION]
-> ## Disclaimer
-> ⚠️ **WARNING / DISCLAIMER**
->
-> It should be noted that this will modify Haldex operation and therefore can only be operated off-road and on a closed course.
->
-> It should always be assumed that the unit may crash/hang or cause the Haldex to operate unpredictably and caution should be exercised when in use.
->
-> Using this unit in any way will exert more strain on drivetrain components, and while the OEM safety features are still in place, it should be understood that having the Haldex unit locked up permanently may cause accelerated wear.
->
-> **Forbes Automotive takes no responsibility for damages as a result of using this unit or code in any form.**
+Disclaimer
+> This device modifies Haldex behavior and should only be used off‑road or on a closed course. The unit may behave unpredictably and could increase drivetrain wear. Use at your own risk. Forbes Automotive is not responsible for damages resulting from use of this device or software.
