@@ -34,7 +34,6 @@ The firmware runs on an **ESP32‑C6 microcontroller** and reads CAN bus message
 - [Expert Mode](#expert-mode)
 - [Installation](#installation)
 - [Firmware Installation](#firmware-installation-esp-web-tools)
-- [OTA Updates](#over-the-air-ota-updates)
 - [CAN Sniffing](#can-sniffing-savvycan--gvret)
 - [PCB & Enclosure](#pcb--enclosure)
 - [Acknowledgements](#acknowledgements)
@@ -53,9 +52,9 @@ The firmware runs on an **ESP32‑C6 microcontroller** and reads CAN bus message
 
 ## Purchase
 
-Assembled modules are available from Forbes Automotive:
+Assembled modules are available from Forbes Automotive if you do not wish to build one yourself:
 
-➡ **[OpenHaldex C6 Controller – Forbes Automotive](https://forbes-automotive.com/products/openhaldex-controller)**
+➡ **[OpenHaldex C6 Controller – Forbes Automotive](https://forbes-automotive.com/products/openhaldex-controller?utm_source=github&utm_medium=readme&utm_campaign=openhaldex)**
 
 ---
 
@@ -138,7 +137,7 @@ Press the `Mode` button to cycle through modes.
 Use the Web UI at:
 
 ```
-http://192.168.1.1
+192.168.1.1 or openhaldex.local
 ```
 
 **CAN**
@@ -196,6 +195,10 @@ data[7] = pedal_value
 
 3. Access the Web UI
 
+<p align="center">
+  <img src="/Images/UIDemo.png" alt="OpenHaldex C6 Web UI" width="900" style="max-width:100%;">
+</p>
+
 If the Wi‑Fi interface becomes unresponsive:
 
 - Long‑press the `Mode` button to reset Wi‑Fi.
@@ -218,7 +221,7 @@ For full step‑by‑step instructions see the **[OpenHaldex Installation Guide]
 > [!WARNING]
 > ### Manual Wiring (No Harness)
 >
-> Modules sold without a harness include connector pins for manual wiring. This is a little harder and more involved than using the optional harness, but with following the installation guide above, you'll manage.
+> Modules sold without a harness include connector pins for manual wiring. This is a little harder and more involved than using the optional harness, but with following the installation guide above it can still be completed easily. Give us a shout if you need a hand.
 
 - Haldex Connector — `VW 1J0‑973‑713`
 - Vehicle Connector — `VW 1J0‑973‑813`
@@ -249,7 +252,7 @@ Firmware can be installed directly from your browser using **ESP Web Tools**.
 This is the recommended method for most users.
 
 1. Connect the OpenHaldex controller to your computer using a **data-capable USB-C cable**.
-2. Open the firmware installer page: **[Module Software Updater](https://forbes-automotive.com/pages/module-software-updater)**
+2. Open the firmware installer page: **[Module Software Updater](https://forbes-automotive.com/pages/module-software-updater?utm_source=github&utm_medium=readme&utm_campaign=openhaldex)**
 3. Click **Connect** and select the OpenHaldex serial port.
 4. Click **Install** and follow the prompts.
 5. Wait for the firmware to flash and the device to reboot.
@@ -258,29 +261,6 @@ This is the recommended method for most users.
 > Some USB-C cables are **power-only** and will not work for flashing.  
 > If the device does not appear, try a different cable or USB port.
 
-
----
-
-## Over‑The‑Air (OTA) Updates
-
-1. Download the latest firmware release (`.bin`) from the **GitHub Releases** page.
-2. Connect to OpenHaldex Wi‑Fi.
-3. Navigate to:
-
-```
-http://192.168.1.1:81/update
-```
-
-Credentials:
-
-```
-Username: admin
-Password: haldex
-```
-
-4. Upload the `.bin` file.
-5. Wait for the device to reboot.
-6. Reconnect and confirm the firmware version in the OTA tab.
 
 ---
 
@@ -337,7 +317,7 @@ Pinout and functionality remain consistent across supported enclosure versions.
 - **Forbes Automotive** — Lead development of the OpenHaldex C6 platform, including reverse‑engineering and open‑source implementation for **Gen2 and Gen4 Haldex systems**, along with ongoing maintenance of the project
 - **A Banging Donk** — [Original OpenHaldex project](https://github.com/ABangingDonk/OpenHaldexT4) for Gen1 vehicles
 - **Arwid Vasilev** — PCB redesign (V1.02)
-- **LVT Technologies** — OTA update integration
+- **LVT Technologies** — OTA update integration (now deprecated, but still appreciated)
 
 ---
 
