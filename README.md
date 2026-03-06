@@ -213,7 +213,7 @@ Route cables as required and connect harness ends as described in the harness in
 
 For full step‑by‑step instructions see the **[OpenHaldex Installation Guide](https://openhaldex.com/docs/OpenHaldex_Installation_Guide.pdf)**.
 
-There is also a **[YouTube Short Video](https://youtube.com/shorts/iUkNh9NbyKY?si=IhgqLIi0WM8wXqe9) demonstrating how simple it is to install the controller using the optional wiring harness.
+▶ **Installation demo (YouTube Short):** https://youtube.com/shorts/iUkNh9NbyKY?si=IhgqLIi0WM8wXqe9
 
 > [!WARNING]
 > ### Manual Wiring (No Harness)
@@ -334,7 +334,8 @@ Pinout and functionality remain consistent across supported enclosure versions.
 
 ## Acknowledgements
 
-- **A Banging Donk** - [Original OpenHaldex Project](https://github.com/ABangingDonk/OpenHaldexT4) for Gen1 vehicles
+- **Forbes Automotive** — Lead development of the OpenHaldex C6 platform, including reverse‑engineering and open‑source implementation for **Gen2 and Gen4 Haldex systems**, along with ongoing maintenance of the project
+- **A Banging Donk** — [Original OpenHaldex project](https://github.com/ABangingDonk/OpenHaldexT4) for Gen1 vehicles
 - **Arwid Vasilev** — PCB redesign (V1.02)
 - **LVT Technologies** — OTA update integration
 
@@ -342,7 +343,7 @@ Pinout and functionality remain consistent across supported enclosure versions.
 
 ## Disclaimer
 
-> [!WARNING]
+> [!CAUTION]
 > This device modifies Haldex behaviour and should only be used **off‑road or on a closed course**.
 >
 > The unit may behave unpredictably and could increase drivetrain wear.
