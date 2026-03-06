@@ -1,3 +1,19 @@
+/*
+OpenHaldex C6 Firmware
+Copyright (c) 2026 Forbes Automotive
+
+This file is part of the OpenHaldex C6 project.
+
+Licensed under the Forbes Automotive Source-Available License (FASL) v1.0.
+
+Personal, educational, and non-commercial use is permitted.
+Commercial use, including selling hardware running this firmware,
+is strictly prohibited without written permission from Forbes Automotive.
+
+See the LICENSE file in the root of this repository for full license terms.
+Project repository: https://github.com/Forbes-Automotive/OpenHaldex-C6
+*/
+
 #include <OpenHaldexC6_defs.h>
 
 // TWAI handles
