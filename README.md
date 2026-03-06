@@ -42,9 +42,9 @@ The firmware runs on an **ESP32‑C6 microcontroller** and reads CAN bus message
 ## Features
 
 - Two TWAI (CAN) interfaces for reading and bridging CAN traffic
-- Built‑in Wi‑Fi and Bluetooth for on‑device configuration and diagnostics
+- Built‑in Wi‑Fi for on‑device configuration and diagnostics
 - Multiple preset modes plus customisable mode profiles
-- OTA firmware updates
+- Tune your Haldex system directly from your phone via Wi-Fi
 
 ![OpenHaldex-C6](/Images/BoardOverview.png)
 
@@ -70,7 +70,7 @@ OpenHaldex sits between your vehicle and the OEM Haldex controller. It can opera
 
 ## Hardware
 
-The PCB is based around an **ESP32‑C6 Mini** (with Wi‑Fi and Bluetooth).
+The PCB is based around an **ESP32‑C6 Mini** (with Wi‑Fi)
 
 Two TWAI/CAN controllers are built into the PCB along with external IO control:
 
@@ -116,7 +116,7 @@ The controller provides several preset modes along with a fully customisable mod
 
 ## Expert Mode
 
-Expert mode allows lock targets to be configured based on **speed and throttle setpoints** using a table inside the Web UI. This is true **full control** over your Haldex system.
+Expert mode allows lock targets to be configured based on **speed and throttle setpoints** using a table inside the Web UI. This is true **full control** over your Haldex system. No guesswork. You tune it and it'll do exactly what you want it to do, every time.
 
 ![ExpertMode](/Images/expertmode.jpg)
 
