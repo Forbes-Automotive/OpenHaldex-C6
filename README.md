@@ -1,9 +1,11 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="/Images/FA-logo-white.png">
-    <source media="(prefers-color-scheme: light)" srcset="/Images/FA-logo.png">
-    <img src="/Images/FA-logo.png" width="250" alt="Forbes Automotive">
-  </picture>
+  <a href="https://forbes-automotive.com/?utm_source=github&utm_medium=readme&utm_campaign=openhaldex" target="_blank">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="/Images/FA-logo-white.png">
+      <source media="(prefers-color-scheme: light)" srcset="/Images/FA-logo.png">
+      <img src="/Images/FA-logo.png" width="250" alt="Forbes Automotive">
+    </picture>
+  </a>
 </p>
 
 # OpenHaldex — ESP32‑C6 Haldex Controller
