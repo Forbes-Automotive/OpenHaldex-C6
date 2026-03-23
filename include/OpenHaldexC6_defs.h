@@ -247,6 +247,7 @@ extern uint32_t alerts_to_enable;
 
 extern long lastCANChassisTick;
 extern long lastCANHaldexTick;
+extern uint32_t canHealthTimeoutMs;
 
 extern uint8_t lastMode;
 extern uint8_t disableThrottle;

@@ -1,19 +1,3 @@
-/*
-OpenHaldex C6 Firmware
-Copyright (c) 2026 Forbes Automotive
-
-This file is part of the OpenHaldex C6 project.
-
-Licensed under the Forbes Automotive Source-Available License (FASL) v1.0.
-
-Personal, educational, and non-commercial use is permitted.
-Commercial use, including selling hardware running this firmware,
-is strictly prohibited without written permission from Forbes Automotive.
-
-See the LICENSE file in the root of this repository for full license terms.
-Project repository: https://github.com/Forbes-Automotive/OpenHaldex-C6
-*/
-
 #include <OpenHaldexC6_IO.h>
 #include <OpenHaldexC6_can.h>
 #include <OpenHaldexC6_WiFi.h>
@@ -207,6 +191,10 @@ void updateTriggers(void *arg)
 {
   while (1)
   {
+    const uint32_t now = millis();
+    hasCANChassis = (lastCANChassisTick > 0) && ((now - (uint32_t)lastCANChassisTick) <= canHealthTimeoutMs);
+    hasCANHaldex = (lastCANHaldexTick > 0) && ((now - (uint32_t)lastCANHaldexTick) <= canHealthTimeoutMs);
+
     if (digitalRead(gpio_hb_in))
     {
       handbrakeSignalActive = true;

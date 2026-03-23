@@ -259,7 +259,7 @@ void getLockData(twai_message_t &rx_message_chs)
       rx_message_chs.data[1] = get_lock_target_adjusted_value(0xFE, false);
       rx_message_chs.data[2] = 0x21;
       rx_message_chs.data[3] = get_lock_target_adjusted_value(0x4E, false);
-      rx_message_chs.data[6] = get_lock_target_adjusted_value(0xFE, false);
+      rx_message_chs.data[6] = get_lock_target_adjusted_value(0xFE, false); // 0x20 in standalone - same as gen1?
       break;
     case MOTOR3_ID:
       rx_message_chs.data[2] = get_lock_target_adjusted_value(0xFE, false);

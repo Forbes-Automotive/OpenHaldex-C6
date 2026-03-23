@@ -118,7 +118,7 @@ The controller provides several preset modes along with a fully customisable mod
 
 ## Expert Mode
 
-Expert mode allows lock targets to be configured based on **speed and throttle setpoints** using a table inside the Web UI. This is true **full control** over your Haldex system. No guesswork. You tune it and it'll do exactly what you want it to do, every time.
+Expert mode allows lock targets to be configured based on **speed and throttle setpoints** using a table inside the Web UI. This is true **full control** over your Haldex system. No guesswork. You tune it and it'll do exactly what you want it to do, every time.  It requires OEM CAN messages to be present for throttle/speed inputs.
 
 ![ExpertMode](/Images/expertmode.jpg)
 
@@ -225,6 +225,11 @@ For full step‑by‑step instructions see the **[OpenHaldex Installation Guide]
 >
 > Modules sold without a harness include connector pins for manual wiring. This is a little harder and more involved than using the optional harness, but with following the installation guide above it can still be completed easily. Give us a shout if you need a hand.
 
+Gen1:
+- Chassis Connector: `1J0‑973‑714`
+- Haldex Conneector: `1J0‑973‑814`
+
+Gen2>:
 - Haldex Connector — `VW 1J0‑973‑713`
 - Vehicle Connector — `VW 1J0‑973‑813`
 

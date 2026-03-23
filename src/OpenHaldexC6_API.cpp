@@ -1,20 +1,5 @@
-/*
-OpenHaldex C6 Firmware
-Copyright (c) 2026 Forbes Automotive
-
-This file is part of the OpenHaldex C6 project.
-
-Licensed under the Forbes Automotive Source-Available License (FASL) v1.0.
-
-Personal, educational, and non-commercial use is permitted.
-Commercial use, including selling hardware running this firmware,
-is strictly prohibited without written permission from Forbes Automotive.
-
-See the LICENSE file in the root of this repository for full license terms.
-Project repository: https://github.com/Forbes-Automotive/OpenHaldex-C6
-*/
-
 #include <OpenHaldexC6_API.h>
+#include <OpenHaldexC6_UDS.h>
 
 // helper function to send over JSON data to the ESP
 static void sendJSON(AsyncWebServerRequest *request, int code, const JsonDocument &data)
@@ -386,6 +371,48 @@ void setupAPI()
         {
             parseJSON(request, data, len, index, total, settingsIncoming);
         });
+
+    // UDS read-by-identifier helper (GET)
+    webServer.on("/api/uds/read", HTTP_GET, [](AsyncWebServerRequest *request)
+                 {
+                     auto reqP = request->getParam("req", false);
+                     auto resP = request->getParam("res", false);
+                     auto didP = request->getParam("did", false);
+
+                     if (!reqP || !resP || !didP)
+                     {
+                         JsonDocument response;
+                         response["error"] = "Parameters required: req, res, did";
+                         sendJSON(request, 400, response);
+                         return;
+                     }
+
+                     uint32_t requestId = strtoul(reqP->value().c_str(), nullptr, 16);
+                     uint32_t responseId = strtoul(resP->value().c_str(), nullptr, 16);
+                     uint16_t did = (uint16_t)strtoul(didP->value().c_str(), nullptr, 16);
+
+                     OpenHaldexC6::UDS uds;
+                     uint8_t buffer[256];
+                     size_t bufferLen = sizeof(buffer);
+
+                     if (!uds.readDataByIdentifier(requestId, responseId, did, buffer, bufferLen))
+                     {
+                         JsonDocument response;
+                         response["success"] = false;
+                         response["error"] = "UDS read failed";
+                         sendJSON(request, 500, response);
+                         return;
+                     }
+
+                     JsonDocument response;
+                     response["success"] = true;
+                     response["did"] = did;
+                     JsonArray dataArray = response.createNestedArray("data");
+                     for (size_t i = 0; i < bufferLen; i++)
+                         dataArray.add(buffer[i]);
+
+                     sendJSON(request, 200, response);
+                 });
 
     // on request for mode change
     webServer.on(
