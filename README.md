@@ -26,6 +26,8 @@ OpenHaldex is an open‑source **Haldex AWD controller** for Volkswagen and Audi
 
 The firmware runs on an **ESP32‑C6 microcontroller** and reads CAN bus messages from the vehicle, allowing the controller to modify or generate commands so the Haldex differential behaves exactly as configured.
 
+![OpenHaldex-C6](/Images/openHaldexUI.png)
+
 ## Contents
 
 - [Features](#features)
