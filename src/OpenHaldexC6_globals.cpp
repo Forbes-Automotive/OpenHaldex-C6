@@ -42,6 +42,7 @@ bool received_report_clutch2;
 bool received_temp_protection;
 bool received_coupling_open;
 bool received_speed_limit;
+bool received_kickdown = false;
 
 // values received from Chassis CAN
 float received_pedal_value = 0;
@@ -53,14 +54,9 @@ uint8_t forceModeValue;
 
 uint32_t lastABSResponse = 0; // for tracking ABS responses to determine if ABS is valid
 bool isABSValid = false;      // set to true if valid ABS response received within timeout, otherwise false
-uint32_t absTimeout = 500;    // timeout in ms for determining if ABS is valid - if no valid ABS response received within this time, isABSValid will be set to false
+uint32_t absTimeout = 1000;    // timeout in ms for determining if ABS is valid - if no valid ABS response received within this time, isABSValid will be set to false
 
 bool isStandalone = false;
-bool isGen1Standalone = false;
-bool isGen2Standalone = false;
-bool isGen3Standalone = false;
-bool isGen4Standalone = false;
-bool isGen5Standalone = false;
 
 bool isBusFailure = false;
 bool hasCANChassis = false;
@@ -82,6 +78,13 @@ bool handbrakeSignalActive = false;
 
 bool tcForceMode = false;
 bool tcForceModeFlag = false;
+bool asrForceModeFlag = false;
+
+bool paddleTipActive = false;
+bool paddleTipUp     = false;
+bool paddleTipDown   = false;
+bool paddleTipBoth   = false;
+
 bool extBtnForceMode = false;
 bool extButtonForceModeFlag = false;
 
@@ -172,6 +175,28 @@ uint8_t mLW_1_crc = 0;
 
 uint8_t mDiagnose_1_counter = 0;
 
+// gen5 sums
+uint8_t ESP_02_counter = 0; // starts at zero
+uint8_t ESP_02_crc = 0;     // starts at zero
+
+uint8_t GETRIEBE_11_counter = 0x00;   // starting counter for GETRIEBE_11_counter is 0x00
+uint8_t MOTOR_11_counter = 0x40;      // starting counter for Motor_11 is 0x40
+uint8_t MOTOR_12_counter = 0x70;      // starting counter for Motor_12 is 0x70
+uint8_t LWI_01_counter = 0x10;        // starting counter for LWI_01 is 0x10
+uint8_t ESP_14_counter = 0x10;        // starting counter for ESP_14 is 0x10
+uint8_t MOTOR_20_counter = 0x00;      // starting counter for Motor_20 is 0x00
+uint8_t ESP_10_counter = 0x00;        // starting counter for ESP_10 is 0x00
+uint8_t ESP_05_counter = 0x80;        // starting counter for ESP_05 is 0x80
+uint8_t EPB_01_counter = 0x30;        // starting counter for EPB_01 is 0x30
+uint8_t ESP_23_counter = 0x00;        // starting counter for ESP_23 is 0x00
+uint8_t ESP_21_counter = 0x00;        // starting counter for ESP_21 is 0x00
+uint8_t ESP_07_counter = 0x20;        // starting counter for ESP_07 is 0x20
+uint8_t MOTOR_CODE_01_counter = 0x10; // starting counter for MOTOR_CODE_01 is 0x10
+uint8_t ESP_20_counter = 0x30;        // starting counter for ESP_20 is 0x30
+uint8_t MOTOR_14_counter = 0x10;      // starting counter for MOTOR_14 is 0x10
+uint8_t ESP_19_counter = 0x20;        // starting counter for ESP_19 is 0x20
+uint8_t ESP_19_counter2 = 0x00;       // starting counter for ESP_19_counter2 is 0x00
+
 const uint8_t lws_2[16][8] = {
     {0x22, 0x00, 0x00, 0x00, 0x80, 0x00, 0xA0, 0xDD},
     {0x22, 0x00, 0x00, 0x00, 0x80, 0x10, 0x85, 0xCD},
@@ -189,3 +214,236 @@ const uint8_t lws_2[16][8] = {
     {0x22, 0x00, 0x00, 0x00, 0x80, 0xD0, 0x16, 0x0D},
     {0x22, 0x00, 0x00, 0x00, 0x80, 0xE0, 0x79, 0xFD},
     {0x22, 0x00, 0x00, 0x00, 0x80, 0xF0, 0x5C, 0xED}};
+
+    /*
+These are all for Gen5 checksum:
+Calculation see specifications 'Communication Security for FlexRay and CAN'
+From MQB and MLBevo: "Calculation see specifications 'End-to-End Communication Security'"
+Final values see accompanying document "S-PDU Identification Sequences"
+ */
+// CAN ID 0x0A8 - Motor_12
+const uint8_t ID_SEQ_0A8[16] = {
+    0x52, 0x8C, 0x50, 0xEE, 0x4F, 0xA6, 0xCC, 0xCF,
+    0x7D, 0x2F, 0x98, 0x6B, 0x27, 0x41, 0x9F, 0x93};
+
+// CAN ID 0x0AD - Getriebe_11
+const uint8_t ID_SEQ_0AD[16] = {
+    0x3F, 0x69, 0x39, 0xDC, 0x94, 0xF9, 0x14, 0x64,
+    0xD8, 0x6A, 0x34, 0xCE, 0xA2, 0x55, 0xB5, 0x2C};
+
+// CAN ID 0x0A7 - Motor_11
+const uint8_t ID_SEQ_0A7[16] = {
+    0xd2, 0x3d, 0xcd, 0x28, 0x4c, 0x14, 0x22, 0x4b,
+    0x24, 0xac, 0xfa, 0x55, 0x66, 0x80, 0x0d, 0x6c};
+
+// CAN ID 0x08A - ESP_14
+const uint8_t ID_SEQ_08A[16] = {
+    0xd4, 0xd4, 0xd4, 0xd4, 0xd4, 0xd4, 0xd4, 0xd4,
+    0xd4, 0xd4, 0xd4, 0xd4, 0xd4, 0xd4, 0xd4, 0xd4};
+
+// CAN ID 0x086 - LWI_01
+const uint8_t ID_SEQ_086[16] = {
+    0x86, 0x86, 0x86, 0x86, 0x86, 0x86, 0x86, 0x86,
+    0x86, 0x86, 0x86, 0x86, 0x86, 0x86, 0x86, 0x86};
+
+// CAN ID 0x121 - MOTOR_20
+const uint8_t ID_SEQ_121[16] = {
+    0xe9, 0x65, 0xae, 0x6b, 0x7b, 0x35, 0xe5, 0x5f,
+    0x4e, 0xc7, 0x86, 0xa2, 0xbb, 0xdd, 0xeb, 0xb4};
+
+// CAN ID 0x110 - ESP_10
+const uint8_t ID_SEQ_110[16] = {
+    0xac, 0xac, 0xac, 0xac, 0xac, 0xac, 0xac, 0xac,
+    0xac, 0xac, 0xac, 0xac, 0xac, 0xac, 0xac, 0xac};
+
+// CAN ID 0x106 - ESP_05
+const uint8_t ID_SEQ_106[16] = {
+    0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07,
+    0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07};
+
+// CAN ID 0x104 - EPB_01
+const uint8_t ID_SEQ_104[16] = {
+    0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
+    0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05};
+
+// CAN ID 0x116 - ESP_10
+const uint8_t ID_SEQ_116[16] = {
+    0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
+    0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05};
+
+// CAN ID 0x101 - ESP_02
+const uint8_t ID_SEQ_101[16] = {
+    0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+    0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa};
+
+// CAN ID 0x0fd - ESP_21
+const uint8_t ID_SEQ_0fd[16] = {
+    0xb4, 0xef, 0xf8, 0x49, 0x1e, 0xe5, 0xc2, 0xc0,
+    0x97, 0x19, 0x3c, 0xc9, 0xf1, 0x98, 0xd6, 0x61};
+
+// CAN ID 0x5be - ESP_23
+const uint8_t ID_SEQ_5be[16] = {
+    0xc9, 0x21, 0x6f, 0x63, 0xd2, 0x42, 0x6a, 0x77,
+    0x4a, 0x3d, 0xb0, 0x62, 0x9f, 0x38, 0xcd, 0x5c};
+
+// CAN ID 0x3be - MOTOR_14
+const uint8_t ID_SEQ_3be[16] = {
+    0x1f, 0x28, 0xc6, 0x85, 0xe6, 0xf8, 0xb0, 0x19,
+    0x5b, 0x64, 0x35, 0x21, 0xe4, 0xf7, 0x9c, 0x24};
+
+// CAN ID MOTOR_CODE_01 - 0x641
+const uint8_t ID_SEQ_641[16] = {
+    0x47, 0x47, 0x47, 0x47, 0x47, 0x47, 0x47, 0x47,
+    0x47, 0x47, 0x47, 0x47, 0x47, 0x47, 0x47, 0x47};
+
+// CAN ID ESP_20 - 0x645
+const uint8_t ID_SEQ_645[16] = {
+    0xac, 0xb3, 0xab, 0xeb, 0x7a, 0xe1, 0x3b, 0xf7,
+    0x73, 0xba, 0x7c, 0x9e, 0x06, 0x5f, 0x02, 0xd9};
+
+// CAN ID ESP_20 - 0x65d
+const uint8_t ID_SEQ_65d[16] = {
+    0xac, 0xb3, 0xab, 0xeb, 0x7a, 0xe1, 0x3b, 0xf7,
+    0x73, 0xba, 0x7c, 0x9e, 0x06, 0x5f, 0x02, 0xd9};
+
+// CAN ID 0x392 - ESP_07
+const uint8_t ID_SEQ_392[16] = {
+    0x91, 0x91, 0x91, 0x91, 0x91, 0x91, 0x91, 0x91,
+    0x91, 0x91, 0x91, 0x91, 0x91, 0x91, 0x91, 0x91};
+
+// ============================================================
+//  Core CRC8/AUTOSAR function
+// ============================================================
+extern uint8_t crc8_autosar(uint8_t *data, uint8_t len)
+{
+    uint8_t crc = 0xFF;
+    for (uint8_t i = 0; i < len; i++)
+    {
+        crc ^= data[i];
+        for (uint8_t bit = 0; bit < 8; bit++)
+        {
+            if (crc & 0x80)
+            {
+                crc = (crc << 1) ^ 0x2F;
+            }
+            else
+            {
+                crc = (crc << 1);
+            }
+        }
+    }
+    return crc ^ 0xFF;
+}
+
+// ============================================================
+//  Checksum calculator - pass 8-byte frame, returns new B0
+//  frame[0] = existing/placeholder checksum (will be replaced)
+//  frame[1] = counter byte (lower nibble = alive counter 0-15)
+//  frame[2..7] = frame data
+// ============================================================
+extern uint8_t calcChecksum(uint8_t *frame, const uint8_t *idSeq)
+{
+    uint8_t counter = frame[1] & 0x0F; // extract alive counter from B1
+    uint8_t crcInput[8];
+
+    crcInput[0] = idSeq[counter]; // prepend DataID byte
+    for (uint8_t i = 1; i < 8; i++)
+    {
+        crcInput[i] = frame[i]; // B1..B7
+    }
+
+    return crc8_autosar(crcInput, 8);
+}
+
+// ============================================================
+//  Convenience wrappers per message
+// ============================================================
+extern uint8_t checksum_0A8(uint8_t *frame)
+{
+    return calcChecksum(frame, ID_SEQ_0A8);
+}
+
+extern uint8_t checksum_0AD(uint8_t *frame)
+{
+    return calcChecksum(frame, ID_SEQ_0AD);
+}
+
+extern uint8_t checksum_0A7(uint8_t *frame)
+{
+    return calcChecksum(frame, ID_SEQ_0A7);
+}
+
+extern uint8_t checksum_08A(uint8_t *frame)
+{
+    return calcChecksum(frame, ID_SEQ_08A);
+}
+
+extern uint8_t checksum_086(uint8_t *frame)
+{
+    return calcChecksum(frame, ID_SEQ_086);
+}
+
+extern uint8_t checksum_121(uint8_t *frame)
+{
+    return calcChecksum(frame, ID_SEQ_121);
+}
+
+extern uint8_t checksum_110(uint8_t *frame)
+{
+    return calcChecksum(frame, ID_SEQ_110);
+}
+
+extern uint8_t checksum_106(uint8_t *frame)
+{
+    return calcChecksum(frame, ID_SEQ_106);
+}
+
+extern uint8_t checksum_104(uint8_t *frame)
+{
+    return calcChecksum(frame, ID_SEQ_104);
+}
+
+extern uint8_t checksum_116(uint8_t *frame)
+{
+    return calcChecksum(frame, ID_SEQ_116);
+}
+
+extern uint8_t checksum_101(uint8_t *frame)
+{
+    return calcChecksum(frame, ID_SEQ_101);
+}
+
+extern uint8_t checksum_0fd(uint8_t *frame)
+{
+    return calcChecksum(frame, ID_SEQ_0fd);
+}
+
+extern uint8_t checksum_5be(uint8_t *frame)
+{
+    return calcChecksum(frame, ID_SEQ_5be);
+}
+
+extern uint8_t checksum_3be(uint8_t *frame)
+{
+    return calcChecksum(frame, ID_SEQ_3be);
+}
+
+extern uint8_t checksum_641(uint8_t *frame)
+{
+    return calcChecksum(frame, ID_SEQ_641);
+}
+
+extern uint8_t checksum_645(uint8_t *frame)
+{
+    return calcChecksum(frame, ID_SEQ_645);
+}
+
+extern uint8_t checksum_65d(uint8_t *frame)
+{
+    return calcChecksum(frame, ID_SEQ_65d);
+}
+
+extern uint8_t checksum_392(uint8_t *frame)
+{
+    return calcChecksum(frame, ID_SEQ_392);
+}

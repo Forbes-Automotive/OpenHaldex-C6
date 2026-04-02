@@ -131,15 +131,25 @@ async function refreshStatus() {
   try {
     const data = await fetchJson("/api/dashboard"); // send request for basic data
 
-    document.getElementById("speed").textContent = data.speed || "--";
-    document.getElementById("throttle").textContent = data.throttle || "--";
-    document.getElementById("rpm").textContent = data.rpm || "--";
-    document.getElementById("boost").textContent = data.boost || "--";
+    const displayValue = (value) => (value ?? "--");
+    const displayOnOff = (value) =>
+      value === undefined || value === null ? "--" : value ? "On" : "Off";
 
-    document.getElementById("lockTarget").textContent = data.lockTarget || "0";
-    document.getElementById("lockActual").textContent = data.lockActual || "0";
+    document.getElementById("speed").textContent = displayValue(data.speed);
+    document.getElementById("throttle").textContent = displayValue(
+      data.throttle,
+    );
+    document.getElementById("rpm").textContent = displayValue(data.rpm);
+    document.getElementById("boost").textContent = displayValue(data.boost);
+
+    document.getElementById("lockTarget").textContent = displayValue(
+      data.lockTarget,
+    );
+    document.getElementById("lockActual").textContent = displayValue(
+      data.lockActual,
+    );
     document.getElementById("engagementFill").style.width =
-      `${data.lockActual || 0}%`;
+      `${data.lockActual ?? 0}%`;
 
     if (data.mode !== undefined) {
       modeButton(data.mode); // set the mode button - there may be external influences
@@ -156,13 +166,37 @@ async function refreshStatus() {
     document.getElementById("diagHaldexCAN").textContent = haldexOk
       ? "✓ Healthy"
       : "X Unhealthy";
+    document.getElementById("diagThrottle").textContent = displayValue(
+      data.throttle,
+    );
+    document.getElementById("diagSpeed").textContent = displayValue(data.speed);
+    document.getElementById("diagAsrStatus").textContent = displayOnOff(
+      data.asrOn,
+    );
+    document.getElementById("diagTcStatus").textContent = displayOnOff(
+      data.tcOn,
+    );
+    document.getElementById("diagBrakeIn").textContent = displayOnOff(
+      data.brakeIn,
+    );
+    document.getElementById("diagBrakeOut").textContent = displayOnOff(
+      data.brakeOut,
+    );
+    document.getElementById("diagHandbrakeIn").textContent =
+      displayOnOff(data.handbrakeIn);
+    document.getElementById("diagHandbrakeOut").textContent =
+      displayOnOff(data.handbrakeOut);
+    document.getElementById("diagCpuUsage").textContent = displayValue(
+      data.cpuUsage,
+    );
     document.getElementById("diagFreeHeap").textContent = Math.round(
       data.freeHeap / 1024,
     );
 
-    document.getElementById("haldexState").textContent = hex2bin(
-      data.haldexState,
-    );
+    document.getElementById("haldexState").textContent =
+      data.haldexState === undefined || data.haldexState === null
+        ? "--"
+        : hex2bin(data.haldexState);
 
     refreshTrace(data); // update the live trace
   } catch (error) {
@@ -433,16 +467,30 @@ function arrayIndex(value, array) {
 
 // refresh live trace
 function refreshTrace(data) {
-  const speed = Number(data.speed); // get the current speed from the data
-  const throttle = Number(data.throttle); // get the current throttle from the data
-  const throttlePos = arrayIndex(throttle, throttleHeader); // find the position in the grid for the current throttle
-  const speedPos = arrayIndex(speed, speedHeader); // find the position in the grid for the current speed
-
   const cell = [...document.querySelectorAll(".map-cell")]; // find all the cells in the grid (as an array)
 
   for (i in cell) {
     cell[i].classList.remove("activeTrace"); // remove the active trace from all cells (so only the current one is highlighted)
   }
+
+  if (
+    data.speed === undefined ||
+    data.speed === null ||
+    data.throttle === undefined ||
+    data.throttle === null
+  ) {
+    return;
+  }
+
+  const speed = Number(data.speed); // get the current speed from the data
+  const throttle = Number(data.throttle); // get the current throttle from the data
+
+  if (Number.isNaN(speed) || Number.isNaN(throttle)) {
+    return;
+  }
+
+  const throttlePos = arrayIndex(throttle, throttleHeader); // find the position in the grid for the current throttle
+  const speedPos = arrayIndex(speed, speedHeader); // find the position in the grid for the current speed
 
   cell[speedPos + throttlePos * throttleHeader.length].classList.add(
     "activeTrace",

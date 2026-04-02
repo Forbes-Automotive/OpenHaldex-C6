@@ -30,9 +30,9 @@ void readEEP() // function to read stored preferences into runtime variables
   pref.begin("lockArray", false);     // stored lock curve bytes
 
   // first run comes with EEP value of 255, so write actual values
-  if (pref.getUInt("haldexGeneration") == 255) // detect first run sentinel
+  if (pref.getUInt("haldexGeneration") == 255) // detect first run
   {                                            // if first run
-#if detailedDebugEEP
+#if detailedDebugEEPF
     DEBUG("First run..."); // debug: first run detected
 #endif
     pref.putBool("broadcastOpen", broadcastOpenHaldexOverCAN); // save broadcast setting
@@ -56,11 +56,11 @@ void readEEP() // function to read stored preferences into runtime variables
     pref.putBytes("throttleArray", (byte *)(&throttleArray), sizeof(throttleArray)); // save throttle array bytes
     pref.putBytes("lockArray", (byte *)(&lockArray), sizeof(lockArray));             // save lock array bytes
   } // end if first run
-  else
-  {                                                                    // normal run: load stored values
+  else // normal run: load stored values
+  {
     broadcastOpenHaldexOverCAN = pref.getBool("broadcastOpen", false); // load broadcast setting
     isStandalone = pref.getBool("isStandalone", false);                // load standalone setting
-    disableController = pref.getBool("disableControl", false);         // load controller disable
+    disableController = pref.getBool("disableControl", false);        // load controller disable
     followBrake = pref.getBool("followBrake", false);                  // load follow brake
     followHandbrake = pref.getBool("followHandbrake", false);          // load follow handbrake
     invertBrake = pref.getBool("invertBrake", false);                  // load invert brake
@@ -82,27 +82,27 @@ void readEEP() // function to read stored preferences into runtime variables
 
     switch (lastMode) // map stored lastMode to runtime enum
     {
-    case 0:                     // stored 0
-      state.mode = MODE_STOCK;  // set MODE_STOCK
-      break;                    // exit case
-    case 1:                     // stored 1
-      state.mode = MODE_FWD;    // set MODE_FWD
-      break;                    // exit case
-    case 2:                     // stored 2
-      state.mode = MODE_5050;   // set MODE_5050
-      break;                    // exit case
-    case 3:                     // stored 3
-      state.mode = MODE_6040;   // set MODE_6040
-      break;                    // exit case
-    case 4:                     // stored 4
-      state.mode = MODE_7525;   // set MODE_7525
-      break;                    // exit case
-    case 5:                     // stored 5
+    case 0:
+      state.mode = MODE_STOCK; // set MODE_STOCK
+      break;
+    case 1:
+      state.mode = MODE_FWD;
+      break;
+    case 2:
+      state.mode = MODE_5050; // set MODE_5050
+      break;
+    case 3:
+      state.mode = MODE_6040; // set MODE_6040
+      break;
+    case 4:
+      state.mode = MODE_7525; // set MODE_7525
+      break;
+    case 5:
       state.mode = MODE_EXPERT; // set MODE_EXPERT
-      break;                    // exit case
-    default:                    // unrecognized value
-      state.mode = MODE_FWD;    // default to MODE_FWD
-      break;                    // exit default
+      break;
+    default:                 // unrecognized value
+      state.mode = MODE_FWD; // default to MODE_FWD
+      break;
     } // end switch
   } // end normal run
 

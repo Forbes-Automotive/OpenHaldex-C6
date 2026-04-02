@@ -1,6 +1,6 @@
 /*
 OpenHaldex-C6 - Forbes Automotive
-Haldex Controller for Gen1, Gen2 and Gen4 Haldex Controllers. Supports WiFi. Version: 2.10 - now ported to PlatformIO.
+Haldex Controller for Gen1, Gen2, Gen4 and Gen5 Haldex Controllers. Supports WiFi. Version: 3.10 - now ported to PlatformIO.
 */
 
 #include <OpenHaldexC6_defs.h>

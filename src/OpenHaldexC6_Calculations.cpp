@@ -88,7 +88,7 @@ static float get_expert_lock_target()
 
   float v0 = v00 + ((v01 - v00) * s_ratio);
   float v1 = v10 + ((v11 - v10) * s_ratio);
-  float v = v0 + ((v1 - v0) * t_ratio); 
+  float v = v0 + ((v1 - v0) * t_ratio);
 
   v = constrain(v, 0, 100); // ensure lock target is between 0 and 100
   return int(v);            // return lock target as an integer percentage (0-100)
@@ -169,13 +169,13 @@ uint8_t get_lock_target_adjusted_value(uint8_t value, bool invert)
     {
       return (invert ? (0xFE - value) : value); // if lock enabled, return full value (or inverted), otherwise return 0 (or inverted)
     }
-    return (invert ? 0xFE : 0x00); 
+    return (invert ? 0xFE : 0x00);
   }
 
   // handle FWD mode
   if (lock_target == 0)
   {
-    return (invert ? 0xFE : 0x00); 
+    return (invert ? 0xFE : 0x00);
   }
 
   float correction_factor = ((float)lock_target / 2) + 20; // simple correction factor to make the lock more linear and less aggressive at lower values - this is based on testing and can be tweaked as needed (formula is just a guess based on testing, could be improved with more data points)
@@ -358,6 +358,446 @@ void getLockData(twai_message_t &rx_message_chs)
         BRAKES4_counter = 0x00;
       }
       break;
+    }
+  }
+
+  if (haldexGeneration == 5)
+  {
+    switch (rx_message_chs.identifier)
+    {
+      rx_message_chs.data[0] = get_lock_target_adjusted_value(ESP_19_counter2, false);        // HL - wheel speed
+      rx_message_chs.data[1] = get_lock_target_adjusted_value(ESP_19_counter, false);         // HL - wheel speed
+      rx_message_chs.data[2] = get_lock_target_adjusted_value(ESP_19_counter2, false);        // HR - wheel speed
+      rx_message_chs.data[3] = get_lock_target_adjusted_value(ESP_19_counter, false);         // HR - wheel speed
+      rx_message_chs.data[4] = get_lock_target_adjusted_value(ESP_19_counter2 + 0xCA, false); // VL - wheel speed 0xDB
+      rx_message_chs.data[5] = get_lock_target_adjusted_value(ESP_19_counter, false);         // VL - wheel speed -- affects if =0x0B
+      rx_message_chs.data[6] = get_lock_target_adjusted_value(ESP_19_counter2 + 0xCA, false); // VR - wheel speed 0xDB
+      rx_message_chs.data[7] = get_lock_target_adjusted_value(ESP_19_counter, false);         // VR - wheel speed -- affects if =0x0B
+      ESP_19_counter++;
+      ESP_19_counter2++;
+      if (ESP_19_counter > 0x1A) // 0x1e
+      {
+        ESP_19_counter = 0x01; // 0x10
+      }
+      if (ESP_19_counter2 > 0x0E) // 0x0a
+      {
+        ESP_19_counter2 = 0x00; // 0x00
+      }
+      break;
+
+      /*case GETRIEBE_11:
+        rx_message_chs.data[0] = 0x00;                // checksum placeholder none affect
+        rx_message_chs.data[1] = GETRIEBE_11_counter; // rolling - 0x00>0x0F
+        rx_message_chs.data[2] = 0x00;                // Was 0xFE Torque intervention at the engine. Requests a short-term reduction or increase in torque from the ECU. This signal is only valid in combination with GE_MMom_Status (for MQB) or GE_MMom_Status_02 (for MLBevo).
+        rx_message_chs.data[3] = 0xFE;                // Pre-control torque (anticipatory torque request) (GE_MMom_Vorhalt_02)
+        rx_message_chs.data[4] = 0x00;                // Actual gear/range selected (5=P, 6=R, 7=N, 8=D, 9=S, 10=E, 13/14=T)
+        rx_message_chs.data[5] = 0x00;                // Shift sequence state (0=idle, 1=shift in progress, etc.) - does not affect (>0x00)
+        rx_message_chs.data[6] = 0x00;                // Power transmission status / clutch lock-up state - does not affect (>0x00)
+        rx_message_chs.data[7] = 0x00;                // Target gear of current shift
+
+        rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_0AD); // for 0x0AD
+
+        GETRIEBE_11_counter++;
+        if (GETRIEBE_11_counter > 0x0F)
+        {
+          GETRIEBE_11_counter = 0;
+        }
+        break;
+        */
+
+    case MOTOR_12:
+      rx_message_chs.data[0] = 0x00;                                                    // checksum placeholder
+      rx_message_chs.data[1] = MOTOR_12_counter;                                        // rolling - 0x70>0x7F
+      rx_message_chs.data[2] = 0x00;                                                    // doesn't affect Negative available torque (maximum engine braking) (MO_Mom_neg_verfuegbar) - does not affect
+      rx_message_chs.data[3] = 0x00;                                                    // doesn't affect sometimes 0xC0, sometimes 0x00 Static torque limit
+      rx_message_chs.data[4] = 0x00;                                                    // doesn't affect sometimes 0x3A, somtimes 0x39 Dynamic torque limit
+      rx_message_chs.data[5] = 0x64;                                                    // doesn't affect Vehicle speed signal quality bit (0x64=good, 0x00=bad).  True?
+      rx_message_chs.data[6] = 0x0F;                                                    // Engine speed signal quality bit. Was 0xD4 - does affect.  Bool
+      rx_message_chs.data[7] = get_lock_target_adjusted_value(MOTOR_12_counter, false); // Engine speed / RPM was 0xAE affects.  >30 slows down.  Only adds 5%. Was 0x10 - does affect
+
+      rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_0A8); // for 0x0A8
+
+      MOTOR_12_counter++;
+      if (MOTOR_12_counter > 0x7F)
+      {
+        MOTOR_12_counter = 0x70;
+      }
+      break;
+
+    case MOTOR_11:
+      rx_message_chs.data[0] = 0x00;                                        // checksum placeholder
+      rx_message_chs.data[1] = MOTOR_11_counter;                            // rolling - 0x40>0x4F
+      rx_message_chs.data[2] = 0xFA;                                        // Raw target torque (unfiltered driver demand) (MO_Mom_Soll_Roh)
+      rx_message_chs.data[3] = 0xFA;                                        // Actual total torque output (Actual total torque output)
+      rx_message_chs.data[4] = 0x00;                                        // doesn't affect Total inertia torque component (MO_Mom_Traegheit_Summe)
+      rx_message_chs.data[5] = 0xFA;                                        // Filtered target torque (MO_Mom_Soll_gefiltert)
+      rx_message_chs.data[6] = get_lock_target_adjusted_value(0xFA, false); // (MO_Mom_Soll_01?).  Massive effect.  Was 0x78
+      rx_message_chs.data[7] = get_lock_target_adjusted_value(0xFA, false); // massive effect.  Was 0x3E
+
+      rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_0A7); // for 0x0A7
+
+      MOTOR_11_counter++;
+      if (MOTOR_11_counter > 0x4F)
+      {
+        MOTOR_11_counter = 0x40;
+      }
+      break;
+
+    case ESP_14:                                                            // ESP_14 0x08A
+      rx_message_chs.data[0] = 0x00;                                        // checksum placeholder
+      rx_message_chs.data[1] = ESP_14_counter;                              // rolling - 0x10>0x1F
+      rx_message_chs.data[2] = 0x00;                                        // doesn't affect
+      rx_message_chs.data[3] = 0x00;                                        // doesn't affect sometimes 0xC0, sometimes 0x00
+      rx_message_chs.data[4] = 0x00;                                        // doesn't affect BR_Vorg_Quer_Min Minimum specified limit value of the clutch's operating range by the ESP MQB Haldex: 100% torque corresponds to 2000 Nm.
+      rx_message_chs.data[5] = 0x00;                                        // BR_Vorg_Quer_Max Maximum predefined limit of the clutch's operating range by the ESP MQB Haldex: 100% torque corresponds to 2000 Nm.
+      rx_message_chs.data[6] = 0x00;                                        // doesn't affect BR_Vorg_Allrad_Min Minimum specified limit value of the clutch's operating range by the ESP MQB Haldex: 100% torque corresponds to 2000 Nm
+      rx_message_chs.data[7] = get_lock_target_adjusted_value(0xFE, false); // BR_Vorg_Allrad_Max Maximum specified limit of the clutch's operating range by the ESP MQB Haldex: 100% torque corresponds to 2000 Nm.
+      // massive effects (4>7)
+
+      rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_08A); // for 0x08A
+
+      ESP_14_counter++;
+      if (ESP_14_counter > 0x1F)
+      {
+        ESP_14_counter = 0x10;
+      }
+      break;
+
+      /*case LWI_01:
+        rx_message_chs.data[0] = 0x00;           // checksum placeholder
+        rx_message_chs.data[1] = LWI_01_counter; // rolling - 0x10>0x1F
+        rx_message_chs.data[2] = 0x01;           // LWI_SensorStatus
+        rx_message_chs.data[3] = 0x00;           // LWI_Qbit_sub_daten
+        rx_message_chs.data[4] = 0x00;           // LWI_Qbit_Lendradwiken
+        rx_message_chs.data[5] = 0x00;           // LWI_lendradwinken
+        rx_message_chs.data[6] = 0x00;           // LWI_lendradw_geschw
+        rx_message_chs.data[7] = 0x00;           // LWI_lendradw_geschw Unit Degress of Arc per Second
+
+        rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_086); // for 0x086
+
+        LWI_01_counter++;
+        if (LWI_01_counter > 0x1F)
+        {
+          LWI_01_counter = 0x10;
+        }
+        break;
+
+
+    case MOTOR_20:
+      rx_message_chs.data[0] = 0x00;             // checksum
+      rx_message_chs.data[1] = MOTOR_20_counter; // rolling - 0x00>0x0F && MO_Accelerator_Raw_Value_01!
+      rx_message_chs.data[2] = 0x40;             // no affect MO_Accelerator_Raw_Value_01 sss
+      rx_message_chs.data[3] = 0x40;             // no affect sometimes 0xC0, sometimes 0x00
+      rx_message_chs.data[4] = 0x19;             // no affect sometimes 0x3A, somtimes 0x39
+      rx_message_chs.data[5] = 0x59;             // no affect
+      rx_message_chs.data[6] = 0x7E;             // no affect
+      rx_message_chs.data[7] = 0xFE;             // no affect
+
+      rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_121); // for 0x121
+
+      MOTOR_20_counter++;
+      if (MOTOR_20_counter > 0x0F)
+      {
+        MOTOR_20_counter = 0x00;
+      }
+      break;
+      */
+
+    case ESP_10:
+      rx_message_chs.data_length_code = 8;                                            // DLC 8
+      rx_message_chs.data[0] = 0x00;                                                  // checksum placeholder
+      rx_message_chs.data[1] = ESP_10_counter;                                        // rolling - 0x00>0x0F
+      rx_message_chs.data[2] = 0x01;                                                  // no affect all these affect, find which one
+      rx_message_chs.data[3] = 0x04;                                                  // no effect sometimes 0xC0, sometimes 0x00
+      rx_message_chs.data[4] = 0x00;                                                  // no effect sometimes 0x3A, somtimes 0x39
+      rx_message_chs.data[5] = 0x40;                                                  // no effect
+      rx_message_chs.data[6] = 0x00;                                                  // no effect
+      rx_message_chs.data[7] = get_lock_target_adjusted_value(ESP_10_counter, false); // this affects(!) - a good 40%.  Was 0xFF
+      rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_116);         // for 0x116
+
+      ESP_10_counter++;
+      if (ESP_10_counter > 0x0F)
+      {
+        ESP_10_counter = 0x00;
+      }
+      break;
+
+    case ESP_05:                                                              // ESP_05 0x106
+      rx_message_chs.data_length_code = 8;                                    // DLC 8
+      rx_message_chs.data[0] = 0x00;                                          // checksum
+      rx_message_chs.data[1] = ESP_05_counter;                                // rolling - 0x80>0x8F
+      rx_message_chs.data[2] = 0x64;                                          // no effect
+      rx_message_chs.data[3] = 0xC0;                                          // this affects(!) sometimes 0xC0, sometimes 0x00
+      rx_message_chs.data[4] = 0x00;                                          // no effect sometimes 0x3A, somtimes 0x39
+      rx_message_chs.data[5] = 0x00;                                          // no effect
+      rx_message_chs.data[6] = 0xFD;                                          // no effect
+      rx_message_chs.data[7] = 0x00;                                          // this affects(!) - on/off.  Was 0x10.  0x00 doesn't hurt
+      rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_106); // for 0x106
+
+      ESP_05_counter++;
+      if (ESP_05_counter > 0x8F)
+      {
+        ESP_05_counter = 0x80;
+      }
+      break;
+
+      /*case EPB_01:                               // EPB_01 0x104
+        rx_message_chs.data_length_code = 8;     // DLC 8
+        rx_message_chs.data[0] = 0x00;           // checksum
+        rx_message_chs.data[1] = EPB_01_counter; // rolling - 0x30>0x3F - none affect
+        rx_message_chs.data[2] = 0xA6;
+        rx_message_chs.data[3] = 0x00; // sometimes 0xC0, sometimes 0x00
+        rx_message_chs.data[4] = 0xE6; // sometimes 0x3A, somtimes 0x39
+        rx_message_chs.data[5] = 0x00;
+        rx_message_chs.data[6] = 0x00;
+        rx_message_chs.data[7] = 0x31;
+        rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_104); // for 0x104
+
+        EPB_01_counter++;
+        if (EPB_01_counter > 0x3F)
+        {
+          EPB_01_counter = 0x30;
+        }
+        break;
+
+
+      case ESP_02:                                                              // ESP_02 0x10B
+        rx_message_chs.data[0] = 0x00;                                          // checksum
+        rx_message_chs.data[1] = ESP_02_counter;                                // rolling - 0x00>0x1F
+        rx_message_chs.data[2] = 0x7E;                                          // doesn't effect one of these affects, find which one - doesn't affect
+        rx_message_chs.data[3] = 0x0F;                                          // doesn't effect sometimes 0xC0, sometimes 0x00
+        rx_message_chs.data[4] = 0x82;                                          // doesn't effect sometimes 0x3A, somtimes 0x39
+        rx_message_chs.data[5] = 0x0C;                                          // doesn't effect rolling?
+        rx_message_chs.data[6] = 0x40;                                          // doesn't efffect
+        rx_message_chs.data[7] = 0x00;                                          // doesn't effect
+        rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_101); // for 0x101
+
+        ESP_02_counter++;
+        if (ESP_02_counter > 0x1F)
+        {
+          ESP_02_counter = 0x00;
+        }
+        break;
+
+      case ESP_21:
+        rx_message_chs.data[0] = 0x00;           // checksum
+        rx_message_chs.data[1] = ESP_21_counter; // rolling - 0x00>0x1F
+        rx_message_chs.data[2] = 0x1F;           // in diagnosis? none affect
+        rx_message_chs.data[3] = 0x80;           // sometimes 0xC0, sometimes 0x00
+        rx_message_chs.data[4] = 0x00;           // sometimes 0x3A, somtimes 0x39
+        rx_message_chs.data[5] = 0x00;
+        rx_message_chs.data[6] = 0x00;
+        rx_message_chs.data[7] = 0x00;
+        rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_0fd); // for 0x0fd
+
+        ESP_21_counter++;
+        if (ESP_21_counter > 0x1F)
+        {
+          ESP_21_counter = 0x00;
+        }
+        break;
+
+      case KOMBI_01:
+        rx_message_chs.data[0] = 0x10; // angle of turn (block 011) low byte
+        rx_message_chs.data[1] = 0x20; // checksum (0x20>0x2F)
+        rx_message_chs.data[2] = 0x02; //
+        rx_message_chs.data[3] = 0x00; //
+        rx_message_chs.data[4] = 0x0C; //
+        rx_message_chs.data[5] = 0x00; //
+        rx_message_chs.data[6] = 0x00; //
+        rx_message_chs.data[7] = 0x24; //
+        break;
+
+      case ESP_23:
+        rx_message_chs.data[0] = 0x00;                                          // checksum placeholder no effect
+        rx_message_chs.data[1] = ESP_23_counter;                                // ESP_23_counter;           // no effect B high byte
+        rx_message_chs.data[2] = 0xBF;                                          // no effect C
+        rx_message_chs.data[3] = 0x7F;                                          // no effect D
+        rx_message_chs.data[4] = 0x00;                                          // rate of change (block 010)
+        rx_message_chs.data[5] = 0x00;                                          // rate of change (block 010)
+        rx_message_chs.data[6] = 0x7C;                                          // rate of change (block 010)
+        rx_message_chs.data[7] = 0x78;                                          // rate of change (block 010)
+        rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_5be); // for 0x5be
+
+        ESP_23_counter++;
+        if (ESP_23_counter > 0x1F)
+        {
+          ESP_23_counter = 0x00;
+        }
+        break;
+
+      case Parkhilfe_04:
+        rx_message_chs.data[0] = 0x00; // angle of turn (block 011) low byte
+        rx_message_chs.data[1] = 0x00; // no effect B high byte
+        rx_message_chs.data[2] = 0x00; // no effect C
+        rx_message_chs.data[3] = 0x00; // no effect D
+        rx_message_chs.data[4] = 0x00; // rate of change (block 010)
+        rx_message_chs.data[5] = 0x00; // rate of change (block 010)
+        rx_message_chs.data[6] = 0x00; // rate of change (block 010)
+        rx_message_chs.data[7] = 0x24; // rate of change (block 010)
+        break;
+
+      case GATEWAY_72:
+        rx_message_chs.data[0] = 0x50; //
+        rx_message_chs.data[1] = 0x80; //
+        rx_message_chs.data[2] = 0x00; //
+        rx_message_chs.data[3] = 0x00; //
+        rx_message_chs.data[4] = 0x05; //
+        rx_message_chs.data[5] = 0x10; //
+        rx_message_chs.data[6] = 0x01; //
+        rx_message_chs.data[7] = 0x78; //
+        break;
+
+      case GETRIEBE_14:
+        rx_message_chs.data[0] = 0x00; // Maximum possible acceleration (limited by gear/clutch)
+        rx_message_chs.data[1] = 0x00; // Charisma drive programme selected (affects shift mapping)
+        rx_message_chs.data[2] = 0x54; // Charisma system status
+        rx_message_chs.data[3] = 0x24; // Drag/friction loss torque in transmission
+        rx_message_chs.data[4] = 0x00; // Launch control active
+        rx_message_chs.data[5] = 0x60; //
+        rx_message_chs.data[6] = 0x01; //
+        rx_message_chs.data[7] = 0x51; //
+        break;
+
+      case MOTOR_14:
+        rx_message_chs.data[0] = 0x00;                                          // checksum
+        rx_message_chs.data[1] = MOTOR_14_counter;                              // 0x10 to 0x1F
+        rx_message_chs.data[2] = 0xE6;                                          // doesn't effect Start/stop system state (0=inactive, 1=stopping, 2=stopped, 3=restarting)
+        rx_message_chs.data[3] = 0x01;                                          // this affects(!) on/off Restart event flag
+        rx_message_chs.data[4] = 0xC8;                                          // doesn't effect Engine stop event flag
+        rx_message_chs.data[5] = 0x80;                                          // doesn't effect
+        rx_message_chs.data[6] = 0x00;                                          // doesn't effect
+        rx_message_chs.data[7] = 0x80;                                          // doesn't effect
+        rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_3be); // for 0x3be
+
+        MOTOR_14_counter++;
+        if (MOTOR_14_counter > 0x1F)
+        {
+          MOTOR_14_counter = 0x10;
+        }
+        break;
+
+      case ESP_07:
+        rx_message_chs.data[0] = 0x00;                                          // checksum
+        rx_message_chs.data[1] = ESP_07_counter;                                // 0x20>0x2F
+        rx_message_chs.data[2] = 0x00;                                          // one of these affects, find which one
+        rx_message_chs.data[3] = 0x00;                                          // no effect
+        rx_message_chs.data[4] = 0x00;                                          // no effect
+        rx_message_chs.data[5] = 0x00;                                          // no efefct
+        rx_message_chs.data[6] = 0x00;                                          // no effect
+        rx_message_chs.data[7] = 0x00;                                          // no effect
+        rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_392); // for 0x392
+
+        ESP_07_counter++;
+        if (ESP_07_counter > 0x1F)
+        {
+          ESP_07_counter = 0x00;
+        }
+        break;
+
+      case ESP_29:
+        rx_message_chs.data[0] = 0x00; //
+        rx_message_chs.data[1] = 0x20; // checksum (0x20>0x2F)?  Not in Savvy
+        rx_message_chs.data[2] = 0x59; //
+        rx_message_chs.data[3] = 0x00; //
+        rx_message_chs.data[4] = 0x00; //
+        rx_message_chs.data[5] = 0x00; //
+        rx_message_chs.data[6] = 0x00; //
+        rx_message_chs.data[7] = 0x00; //
+        break;
+
+      case MOTOR_07:
+        rx_message_chs.data[0] = 0xA0; // no effect from any
+        rx_message_chs.data[1] = 0x5A; //
+        rx_message_chs.data[2] = 0x56; //
+        rx_message_chs.data[3] = 0xA3; //
+        rx_message_chs.data[4] = 0x80; //
+        rx_message_chs.data[5] = 0xA0; //
+        rx_message_chs.data[6] = 0x59; //
+        rx_message_chs.data[7] = 0x01; //
+        break;
+
+      case CHARISMA_01:
+        rx_message_chs.data[0] = 0x00; // CHA_Target_Driving_Program_AGA & CHA_Target_Driving_Prior_ESP
+        rx_message_chs.data[1] = 0x00; // CHA_Target_Driving_Pri_Freewheel & void
+        rx_message_chs.data[2] = 0x22; // CHA_Target_Driving_Program_MO & CHA_Target_Driving_Program_GE
+        rx_message_chs.data[3] = 0x02; // CHA_Target_Driving_PR_ALR (inc. AWD) & CHA_Target_Driving_Program_MO_BZS
+        rx_message_chs.data[4] = 0x02; // CHA_Target_Driving_Project_DR & CHA_Target_Driving_Prior_VAQ
+        rx_message_chs.data[5] = 0x20; // CHA_Target_Driving_PR_AFS & CHA_Target_Driving_Program_RGS
+        rx_message_chs.data[6] = 0x02; // CHA_Target_Driving_Price_EPS & CHA_Target_Driving_Principal_ACC
+        rx_message_chs.data[7] = 0x02; // CHA_Target_Driving_Prior_SAK & CHA_Target_Driving_Program_MO_StSt
+        break;
+
+      case SYSTEMINFO_01:
+        rx_message_chs.data[0] = 0x84; //
+        rx_message_chs.data[1] = 0x3C; //
+        rx_message_chs.data[2] = 0x00; //
+        rx_message_chs.data[3] = 0x7F; //
+        rx_message_chs.data[4] = 0x14; //
+        rx_message_chs.data[5] = 0x00; //
+        rx_message_chs.data[6] = 0x00; //
+        rx_message_chs.data[7] = 0x00; //
+        break;
+
+      case MOTOR_CODE_01:
+        rx_message_chs.data[0] = 0x00;                                          // checksum
+        rx_message_chs.data[1] = MOTOR_CODE_01_counter;                         // rolling (10>1F)
+        rx_message_chs.data[2] = 0x2B;                                          //
+        rx_message_chs.data[3] = 0x53;                                          //
+        rx_message_chs.data[4] = 0x14;                                          //
+        rx_message_chs.data[5] = 0x14;                                          //
+        rx_message_chs.data[6] = 0xD7;                                          //
+        rx_message_chs.data[7] = 0x24;                                          //
+        rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_641); // for 0x641
+
+        MOTOR_CODE_01_counter++;
+        if (MOTOR_CODE_01_counter > 0x1F)
+        {
+          MOTOR_CODE_01_counter = 0x10;
+        }
+        break;
+
+      case ESP_20:
+        rx_message_chs.data[0] = 0x00;                                          // checksum
+        rx_message_chs.data[1] = ESP_20_counter;                                // rolling (30>3F)
+        rx_message_chs.data[2] = 0x2B;                                          // no effect C
+        rx_message_chs.data[3] = 0x10;                                          // no effect D
+        rx_message_chs.data[4] = 0x00;                                          //
+        rx_message_chs.data[5] = 0x00;                                          //
+        rx_message_chs.data[6] = 0xE2;                                          //
+        rx_message_chs.data[7] = 0x79;                                          // BR_Tire circumference
+        rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_65d); // for 0x65d
+
+        ESP_20_counter++;
+        if (ESP_20_counter > 0x3F)
+        {
+          ESP_20_counter = 0x30;
+        }
+        break;
+
+      case DIAGNOSE_01:
+        rx_message_chs.data[0] = 0x30; //
+        rx_message_chs.data[1] = 0x4D; //
+        rx_message_chs.data[2] = 0x58; //
+        rx_message_chs.data[3] = 0xA2; //
+        rx_message_chs.data[4] = 0x89; //
+        rx_message_chs.data[5] = 0x85; //
+        rx_message_chs.data[6] = 0x3F; // 0x3F OR 0xBF? (3F, then BF, then 3F, then BF...)
+        rx_message_chs.data[7] = 0x30; // 2D, then 2D, then 2E, then 2E, then 2F, then 2F... roll over? When?
+        break;
+
+      case KOMBI_02:
+        rx_message_chs.data[0] = 0x4D; // no effect from any
+        rx_message_chs.data[1] = 0x58; //
+        rx_message_chs.data[2] = 0xF2; //
+        rx_message_chs.data[3] = 0xEE; //
+        rx_message_chs.data[4] = 0x04; //
+        rx_message_chs.data[5] = 0x2B; //
+        rx_message_chs.data[6] = 0x00; //
+        rx_message_chs.data[7] = 0x78; //
+        break;
+        //...
+        */
     }
   }
 }

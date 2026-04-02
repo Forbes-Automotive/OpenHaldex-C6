@@ -503,6 +503,7 @@ static void analyzerTask(void *arg) {
   // Handles TCP IO and dequeues CAN frames when analyzerMode is active.
   (void)arg;
 
+  uint32_t framesDequeued = 0;
   while (1) {
     if (!analyzerMode) {
       analyzerCloseClient();
@@ -532,6 +533,7 @@ static void analyzerTask(void *arg) {
       analyzerServer.begin();
       analyzerServer.setNoDelay(true);
       analyzerServerStarted = true;
+      DEBUG("[Analyzer] Server started on port %d", kAnalyzerPort);
     }
 
     if (!analyzerClient || !analyzerClient.connected()) {
@@ -542,6 +544,7 @@ static void analyzerTask(void *arg) {
         // Give TCP a moment to finish setup so control replies can flush.
         vTaskDelay(10 / portTICK_PERIOD_MS);
         resetAnalyzerClientState();
+        DEBUG("[Analyzer] Client connected");
       } else {
         vTaskDelay(kAnalyzerPollDelayMs / portTICK_PERIOD_MS);
         continue;
@@ -559,6 +562,10 @@ static void analyzerTask(void *arg) {
 
     AnalyzerFrame entry;
     while (xQueueReceive(analyzerQueue, &entry, 0) == pdTRUE) {
+      framesDequeued++;
+      if ((framesDequeued % 1000) == 0) {
+        DEBUG("[Analyzer] Frames dequeued: %lu", framesDequeued);
+      }
       if (analyzerProtocol == ANALYZER_PROTOCOL_LAWICEL) {
         slcanSendFrame(entry);
       } else {
@@ -576,7 +583,7 @@ void setupAnalyzer() {
   if (!analyzerQueue) {
     analyzerQueue = xQueueCreate(kAnalyzerQueueDepth, sizeof(AnalyzerFrame));
   }
-  xTaskCreate(analyzerTask, "analyzer", 4096, NULL, 3, NULL);
+  xTaskCreate(analyzerTask, "analyzer", 4096, NULL, 13, NULL);
 }
 
 void setAnalyzerMode(bool enable) {
@@ -593,6 +600,8 @@ void setAnalyzerMode(bool enable) {
 }
 
 void analyzerQueueFrame(const twai_message_t &frame, uint8_t bus) {
+  static uint32_t framesEnqueued = 0;
+  static uint32_t framesDropped = 0;
   if (!analyzerMode || !analyzerQueue) {
     return;
   }
@@ -607,6 +616,16 @@ void analyzerQueueFrame(const twai_message_t &frame, uint8_t bus) {
   entry.bus = bus;
   entry.timestamp = micros();
 
-  // Best-effort enqueue; drop when busy to avoid blocking CAN tasks.
-  xQueueSend(analyzerQueue, &entry, 0);
+  BaseType_t ok = xQueueSend(analyzerQueue, &entry, 0);
+  if (ok == pdTRUE) {
+    framesEnqueued++;
+    if ((framesEnqueued % 1000) == 0) {
+      DEBUG("[Analyzer] Frames enqueued: %lu", framesEnqueued);
+    }
+  } else {
+    framesDropped++;
+    if ((framesDropped % 100) == 0) {
+      DEBUG("[Analyzer] Frames dropped: %lu", framesDropped);
+    }
+  }
 }

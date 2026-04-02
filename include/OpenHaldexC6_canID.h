@@ -61,3 +61,46 @@
 #define diagnostics_3_ID 0x710
 #define diagnostics_4_ID 0x71D
 #define diagnostics_5_ID 0x70F
+
+#define LWI_01 0x086
+#define ESP_14 0x08A
+#define MOTOR_11 0x0A7
+#define MOTOR_12 0x0A8
+#define GETRIEBE_11 0x0AD
+#define GETRIEBE_17 0x0b1
+#define MOTOR_04 0x107
+
+#define ESP_19 0x0b2
+#define ESP_21 0x0fd
+
+#define ESP_02 0x101
+#define EPB_01 0x104 
+#define ESP_05 0x106
+
+#define ESP_10 0x116
+#define MOTOR_20 0x121
+#define ESP_18 0x135
+
+#define ESP_29 0x18c
+#define KOMBI_01 0x30b
+
+#define CHARISMA_01 0x385
+#define ESP_07 0x392
+
+#define MOTOR_14 0x3be
+#define GETRIEBE_14 0x3c8
+#define GATEWAY_72 0x3db
+
+#define Parkhilfe_04 0x54b
+#define SYSTEMINFO_01 0x585
+#define ESP_23 0x5be
+
+#define MOTOR_07 0x640
+#define MOTOR_CODE_01 0x641
+#define unknown2 0x64a
+
+#define ESP_20 0x65d
+#define DIAGNOSE_01 0x6b2
+#define KOMBI_02 0x6b7
+
+#define HALDEX_ID_GEN5 0x118

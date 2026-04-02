@@ -138,9 +138,10 @@
                 <select id="haldexGeneration" class="input-select">
                     <option value="1">Generation 1</option>
                     <option value="2">Generation 2</option>
-                    <option value="3">Generation 3 (N/A)</option>
+                    <option value="3">Generation 3 - Volvo</option>
                     <option value="4">Generation 4</option>
-                    <option value="5">Generation 5 (N/A)</option>
+                    <option value="5">Generation 5</option>
+                    <option value="41">Generation 4 - GM/SAAB</option>
                 </select>
             </section>
 
@@ -173,18 +174,20 @@
             <section class="card">
                 <h2>Input Options</h2>
                 <div class="toggle-group">
-                    <p class="hint">Use the Traction Control Signal (via. CAN) to force 5050</p>
                     <label class="toggle">
                         <input type="checkbox" id="tcForceMode">
                         <span class="toggle-slider"></span>
                         <span class="toggle-label">Use TC to Force Mode</span>
                     </label>
-                    <p class="hint">Use the External Mode Button to force 5050</p>
+                    <p class="hint">Use the Traction Control Signal (via. CAN) to force 5050</p>
+
                     <label class="toggle">
                         <input type="checkbox" id="extButtonForceMode">
                         <span class="toggle-slider"></span>
-                        <span class="toggle-label">Use External Button to Force Mode</span>
+                        <span class="toggle-label">Use Ext. Button to Force Mode</span>
                     </label>
+                    <p class="hint">Use the External Mode Button to force 5050</p>
+
                 </div>
 
                 <h2>Force Mode</h2>
@@ -309,11 +312,59 @@
             </section>
 
             <section class="card">
+                <h2>CAN Information</h2>
+                <div class="diag-grid">
+                    <div class="diag-item">
+                        <span class="diag-label">Throttle:</span>
+                        <span class="diag-value"><span id="diagThrottle">--</span> %</span>
+                    </div>
+                    <div class="diag-item">
+                        <span class="diag-label">Speed:</span>
+                        <span class="diag-value"><span id="diagSpeed">--</span> km/h</span>
+                    </div>
+                    <div class="diag-item">
+                        <span class="diag-label">ASR:</span>
+                        <span class="diag-value" id="diagAsrStatus">--</span>
+                    </div>
+                    <div class="diag-item">
+                        <span class="diag-label">TC:</span>
+                        <span class="diag-value" id="diagTcStatus">--</span>
+                    </div>
+                </div>
+            </section>
+
+            <section class="card">
+                <h2>Brake / Handbrake Signals</h2>
+                <div class="diag-grid">
+                    <div class="diag-item">
+                        <span class="diag-label">Brake In:</span>
+                        <span class="diag-value" id="diagBrakeIn">--</span>
+                    </div>
+                    <div class="diag-item">
+                        <span class="diag-label">Brake Out:</span>
+                        <span class="diag-value" id="diagBrakeOut">--</span>
+                    </div>
+                    <div class="diag-item">
+                        <span class="diag-label">Handbrake In:</span>
+                        <span class="diag-value" id="diagHandbrakeIn">--</span>
+                    </div>
+                    <div class="diag-item">
+                        <span class="diag-label">Handbrake Out:</span>
+                        <span class="diag-value" id="diagHandbrakeOut">--</span>
+                    </div>
+                </div>
+            </section>
+
+            <section class="card">
                 <h2>System Info</h2>
                 <div class="diag-grid">
                     <div class="diag-item">
                         <span class="diag-label">Chip:</span>
                         <span class="diag-value">ESP32-C6</span>
+                    </div>
+                    <div class="diag-item">
+                        <span class="diag-label">CPU Usage:</span>
+                        <span class="diag-value"><span id="diagCpuUsage">--</span> %</span>
                     </div>
                     <div class="diag-item">
                         <span class="diag-label">Free Heap:</span>
@@ -327,7 +378,7 @@
             </section>
         </div>
 
-        <script src="./app.js?v=2.10.0" type="text/javascript"></script>
+        <script src="./app.js?v=3.00.0" type="text/javascript"></script>
         <!-- add version query param to force cache refresh on updates-->
 </body>
 

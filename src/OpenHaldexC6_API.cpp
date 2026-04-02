@@ -1,6 +1,70 @@
 #include <OpenHaldexC6_API.h>
 #include <OpenHaldexC6_UDS.h>
 
+#include <cstring>
+
+static int getCPUUsagePercent()
+{
+    static configRUN_TIME_COUNTER_TYPE previousTotalRuntime = 0;
+    static configRUN_TIME_COUNTER_TYPE previousIdleRuntime = 0;
+
+    const UBaseType_t taskCount = uxTaskGetNumberOfTasks();
+    if (taskCount == 0)
+    {
+        return -1;
+    }
+
+    TaskStatus_t *taskStats = static_cast<TaskStatus_t *>(malloc(taskCount * sizeof(TaskStatus_t)));
+    if (taskStats == nullptr)
+    {
+        return -1;
+    }
+
+    configRUN_TIME_COUNTER_TYPE totalRuntime = 0;
+    const UBaseType_t collectedTasks = uxTaskGetSystemState(taskStats, taskCount, &totalRuntime);
+
+    if ((collectedTasks == 0) || (totalRuntime == 0))
+    {
+        free(taskStats);
+        return -1;
+    }
+
+    configRUN_TIME_COUNTER_TYPE idleRuntime = 0;
+    for (UBaseType_t i = 0; i < collectedTasks; i++)
+    {
+        if ((taskStats[i].pcTaskName != nullptr) && (strncmp(taskStats[i].pcTaskName, "IDLE", 4) == 0))
+        {
+            idleRuntime += taskStats[i].ulRunTimeCounter;
+        }
+    }
+
+    free(taskStats);
+
+    if ((previousTotalRuntime == 0) || (totalRuntime <= previousTotalRuntime) || (idleRuntime < previousIdleRuntime))
+    {
+        previousTotalRuntime = totalRuntime;
+        previousIdleRuntime = idleRuntime;
+        return -1;
+    }
+
+    const configRUN_TIME_COUNTER_TYPE totalRuntimeDelta = totalRuntime - previousTotalRuntime;
+    const configRUN_TIME_COUNTER_TYPE idleRuntimeDelta = idleRuntime - previousIdleRuntime;
+
+    previousTotalRuntime = totalRuntime;
+    previousIdleRuntime = idleRuntime;
+
+    if (totalRuntimeDelta == 0)
+    {
+        return -1;
+    }
+
+    float idlePercent = (static_cast<float>(idleRuntimeDelta) * 100.0f) / static_cast<float>(totalRuntimeDelta);
+    idlePercent = constrain(idlePercent, 0.0f, 100.0f);
+
+    const int cpuPercent = int(100.0f - idlePercent + 0.5f);
+    return constrain(cpuPercent, 0, 100);
+}
+
 // helper function to send over JSON data to the ESP
 static void sendJSON(AsyncWebServerRequest *request, int code, const JsonDocument &data)
 {
@@ -35,32 +99,80 @@ static void parseJSON(AsyncWebServerRequest *request, uint8_t *data, size_t len,
 static void statusOutgoing(AsyncWebServerRequest *request)
 {
     JsonDocument data;
+    const bool chassisOk = hasCANChassis;
+    const bool haldexOk = hasCANHaldex;
+
     data["mode"] = state.mode;
 
-    data["speed"] = received_vehicle_speed;
-    data["throttle"] = int(received_pedal_value);
-    data["rpm"] = received_vehicle_rpm;
-    data["boost"] = received_vehicle_boost;
+    if (chassisOk)
+    {
+        data["speed"] = received_vehicle_speed;
+        data["throttle"] = int(received_pedal_value);
+        data["asrOn"] = !asrForceModeFlag;
+        data["tcOn"] = !tcForceModeFlag;
+        data["rpm"] = received_vehicle_rpm;
+        data["boost"] = received_vehicle_boost;
+    }
+    else
+    {
+        data["speed"] = nullptr;
+        data["throttle"] = nullptr;
+        data["asrOn"] = nullptr;
+        data["tcOn"] = nullptr;
+        data["rpm"] = nullptr;
+        data["boost"] = nullptr;
+    }
+
+    data["brakeIn"] = brakeSignalActive;
+    data["brakeOut"] = brakeActive;
+    data["handbrakeIn"] = handbrakeSignalActive;
+    data["handbrakeOut"] = handbrakeActive;
 
     data["lockTarget"] = int(lock_target);
-    data["lockActual"] = received_haldex_engagement;
-    data["haldexState"] = received_haldex_state;
-    data["haldexEngagement"] = received_haldex_engagement;
-    data["haldexEngagementRaw"] = received_haldex_engagement_raw;
-    data["clutch1Report"] = received_report_clutch1;
-    data["clutch2Report"] = received_report_clutch2;
-    data["tempProtection"] = received_temp_protection;
-    data["couplingOpen"] = received_coupling_open;
-    data["speedLimit"] = received_speed_limit;
 
-    data["chassisCAN"] = hasCANChassis;
-    data["haldexCAN"] = hasCANHaldex;
+    if (haldexOk)
+    {
+        data["lockActual"] = received_haldex_engagement;
+        data["haldexState"] = received_haldex_state;
+        data["haldexEngagement"] = received_haldex_engagement;
+        data["haldexEngagementRaw"] = received_haldex_engagement_raw;
+        data["clutch1Report"] = received_report_clutch1;
+        data["clutch2Report"] = received_report_clutch2;
+        data["tempProtection"] = received_temp_protection;
+        data["couplingOpen"] = received_coupling_open;
+        data["speedLimit"] = received_speed_limit;
+    }
+    else
+    {
+        data["lockActual"] = nullptr;
+        data["haldexState"] = nullptr;
+        data["haldexEngagement"] = nullptr;
+        data["haldexEngagementRaw"] = nullptr;
+        data["clutch1Report"] = nullptr;
+        data["clutch2Report"] = nullptr;
+        data["tempProtection"] = nullptr;
+        data["couplingOpen"] = nullptr;
+        data["speedLimit"] = nullptr;
+    }
+
+    data["chassisCAN"] = chassisOk;
+    data["haldexCAN"] = haldexOk;
     data["busFailure"] = isBusFailure;
     data["lastChassisMs"] = lastCANChassisTick > 0 ? (millis() - lastCANChassisTick) : 0;
     data["lastHaldexMs"] = lastCANHaldexTick > 0 ? (millis() - lastCANHaldexTick) : 0;
 
     data["uptimeMs"] = millis();
     data["freeHeap"] = ESP.getFreeHeap();
+
+    const int cpuUsage = getCPUUsagePercent();
+    if (cpuUsage >= 0)
+    {
+        data["cpuUsage"] = cpuUsage;
+    }
+    else
+    {
+        data["cpuUsage"] = nullptr;
+    }
 
     sendJSON(request, 200, data);
 }
@@ -134,7 +246,7 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
     if (data["haldexGeneration"].is<uint8_t>())
     {
         int generation = data["haldexGeneration"];
-        if (generation == 1 || generation == 2 || generation == 4)
+        if (generation == 1 || generation == 2 || generation == 4 || generation == 5 || generation == 41)
         {
             haldexGeneration = (uint8_t)generation;
             lastMode = generation;
@@ -249,7 +361,7 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
     sendJSON(request, 200, resp);
 }
 
-// manage mode (saved from Web, handled here): ESP sends, this handles
+//manage mode (saved from Web, handled here): ESP sends, this handles
 static void modeIncoming(AsyncWebServerRequest *request, const String &body)
 {
     JsonDocument data;
@@ -261,15 +373,18 @@ static void modeIncoming(AsyncWebServerRequest *request, const String &body)
 
     if (data["mode"].is<uint8_t>())
     {
-        if (isStandalone && (openhaldex_mode_t)data["mode"] == 0)
+        if (!disableController)
         {
-            state.mode = (openhaldex_mode_t)lastMode;
+            if (isStandalone && (openhaldex_mode_t)data["mode"] == 0)
+            {
+                state.mode = (openhaldex_mode_t)lastMode;
+            }
+            else
+            {
+                state.mode = (openhaldex_mode_t)data["mode"];
+            }
+            lastMode = state.mode;
         }
-        else
-        {
-            state.mode = (openhaldex_mode_t)data["mode"];
-        }
-        lastMode = state.mode;
     }
 }
 
@@ -407,12 +522,11 @@ void setupAPI()
                      JsonDocument response;
                      response["success"] = true;
                      response["did"] = did;
-                     JsonArray dataArray = response.createNestedArray("data");
+                     JsonArray dataArray = response["data"].to<JsonArray>();
                      for (size_t i = 0; i < bufferLen; i++)
                          dataArray.add(buffer[i]);
 
-                     sendJSON(request, 200, response);
-                 });
+                     sendJSON(request, 200, response); });
 
     // on request for mode change
     webServer.on(

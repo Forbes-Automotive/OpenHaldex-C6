@@ -2,7 +2,7 @@
 #include <OpenHaldexC6_defs.h>
 
 // Current firmware version
-#define FW_VERSION "2.10.1" // update this with every firmware release AND change .html version query param to force cache refresh of web UI
+#define FW_VERSION "3.00.0" // update this with every firmware release AND change .html version query param to force cache refresh of web UI
 
 /*
 Version Control:
@@ -33,7 +33,9 @@ V2.05.0 - added Lock Target to Stock - this ensures that a % is achieved when TC
 V2.06.0 - added Haldex State in binary to better understand the state of the Haldex 
 V2.07.0 - copied actual lock to requested lock in stock mode so it looks 'cleaner'
 V2.10.0 - release
-V2.10.1 - fixed the CAN health - always showed Unhealthy because it updading the flag.
+V2.10.1 - fixed the CAN health - always showed Unhealthy because it wasn't updating the flag
+
+V3.00.0 - added support for Gen5 and Gen4 GM/SAAB Gen4 (but logged under 41 as in 4.1 since it's a variant of Gen4)
 
 ** to do **:
         > add throttle/speed axis refresh
