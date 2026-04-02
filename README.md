@@ -22,7 +22,7 @@
 </p>
 
 
-OpenHaldex is an open‑source **Haldex AWD controller** for Volkswagen and Audi Group vehicles using Haldex Generation 1, 2 and 4 differentials.
+OpenHaldex is an open‑source **Haldex AWD controller** for Volkswagen and Audi Group vehicles using Haldex Generation 1, 2, 4 and 5 differentials.
 
 The firmware runs on an **ESP32‑C6 microcontroller** and reads CAN bus messages from the vehicle, allowing the controller to modify or generate commands so the Haldex differential behaves exactly as configured.
 
@@ -68,7 +68,7 @@ OpenHaldex sits between your vehicle and the OEM Haldex controller. It can opera
 
 **Supported generations:** Gen1, Gen2 and Gen4
 
-> Gen3 and Gen5 are currently unsupported.
+> Gen3 is currently unsupported.
 
 ---
 
@@ -172,7 +172,7 @@ Default CAN ID:
 ```
 
 > [!NOTE]
-> Broadcasting can conflict with other devices. The CAN ID can be adjusted if required.
+> Broadcasting can conflict with other devices. The CAN ID can be adjusted in code if required.
 
 The module broadcasts its current state on the CAN bus.
 
