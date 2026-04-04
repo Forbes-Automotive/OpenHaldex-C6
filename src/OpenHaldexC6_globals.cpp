@@ -88,6 +88,9 @@ bool paddleTipBoth   = false;
 bool extBtnForceMode = false;
 bool extButtonForceModeFlag = false;
 
+bool disableOnboardButton = false;
+bool disableExternalButton = false;
+
 bool otaUpdate = false;
 
 // Analyzer mode = passive bridge + external CAN analyzer interface.
@@ -145,6 +148,14 @@ uint8_t lockArray[throttleArrayCount][speedArrayCount] = {
 
 // for running through vars to see effects
 uint8_t tempCounter;
+
+// Haldex learn table: index = correction factor (0-100%), value = observed engagement (0-100%)
+uint8_t haldexLearnTable[101];
+bool haldexLearnTableValid = false;
+volatile bool haldexLearnActive = false;
+volatile bool haldexLearnCancel = false;
+volatile uint8_t haldexLearnStep = 0;   // 0-100 = current step, 101 = complete
+volatile uint8_t haldexLearnCF = 0;     // current correction factor override during learn
 uint8_t tempCounter1;
 uint16_t tempCounter2;
 

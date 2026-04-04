@@ -24,6 +24,8 @@ void modeChange(void)
 #if enableDebug
   DEBUG("Internal mode button pressed!");
 #endif
+  if (disableOnboardButton) return; // onboard button disabled, ignore press
+
   uint8_t next_mode = (uint8_t)state.mode + 1; // Determine the next mode in the sequence.
 
   if (isStandalone)
@@ -59,6 +61,7 @@ void modeChangeExt(void)
 #if enableDebug
   DEBUG("External mode button pressed!");
 #endif
+  if (disableExternalButton) return; // external button disabled, ignore press
 
   uint8_t next_mode = (uint8_t)state.mode + 1; // Determine the next mode in the sequence.
 

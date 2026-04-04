@@ -36,6 +36,7 @@ V2.10.0 - release
 V2.10.1 - fixed the CAN health - always showed Unhealthy because it wasn't updating the flag
 
 V3.00.0 - added support for Gen5 and Gen4 GM/SAAB Gen4 (but logged under 41 as in 4.1 since it's a variant of Gen4)
+V3.00.1 - added 'Disable Onboard Button' and 'Disable External Button' options to allow disabling of the onboard button
 
 ** to do **:
         > add throttle/speed axis refresh

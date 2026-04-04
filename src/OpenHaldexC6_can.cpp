@@ -151,10 +151,22 @@ void parseCAN_chs(void *arg)
 
         case MOTOR_04:
         {
-          // MQB Motor_04 / MO_Ladedruck: start bit 39, length 9, little-endian, factor 0.01 bar (absolute).
+          // MQB Motor_04 (0x107) / MO_Ladedruck: start bit 39, length 9, little-endian, factor 0.01 bar (absolute).
+          // vw_mqb.dbc: SG_ MO_Ladedruck : 39|9@1+ (0.01,0) [0|5.1] "Unit_Bar"
+          // LSB at bit 39 = data[4] bit 7; bits 1-8 = data[5] bits 0-7.
           const uint16_t mo_ladedruck_raw = (uint16_t)(((uint16_t)rx_message_chs.data[5] << 1) | (rx_message_chs.data[4] >> 7)) & 0x01FF;
           const int32_t boost_mbar = (int32_t)(mo_ladedruck_raw * 10.0f + 0.5f) - 1000;
           received_vehicle_boost = (boost_mbar > 0) ? (uint16_t)boost_mbar : 0;
+          break;
+        }
+
+        case MOTOR_12:
+        {
+          // MQB Motor_12 (0x0A8) / MO_Drehzahl_01: start bit 48, length 16, little-endian, factor 0.25 RPM/bit.
+          // vw_mqb.dbc: SG_ MO_Drehzahl_01 : 48|16@1+ (0.25,0) [0|16383] "Unit_MinutInver"
+          // Sent directly to SAK_MQB (Haldex). bytes 6+7 little-endian.
+          const uint16_t mo_drehzahl_raw = ((uint16_t)rx_message_chs.data[7] << 8) | rx_message_chs.data[6];
+          received_vehicle_rpm = (uint16_t)(mo_drehzahl_raw * 0.25f + 0.5f);
           break;
         }
         

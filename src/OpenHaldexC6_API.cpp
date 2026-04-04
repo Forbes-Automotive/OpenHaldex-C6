@@ -1,9 +1,10 @@
 #include <OpenHaldexC6_API.h>
 #include <OpenHaldexC6_UDS.h>
+#include <OpenHaldexC6_Calculations.h>
 
 #include <cstring>
 
-static int getCPUUsagePercent()
+static int getCPUUsagePercent() // helper function to calculate CPU usage percentage based on FreeRTOS task run time stats
 {
     static configRUN_TIME_COUNTER_TYPE previousTotalRuntime = 0;
     static configRUN_TIME_COUNTER_TYPE previousIdleRuntime = 0;
@@ -74,8 +75,7 @@ static void sendJSON(AsyncWebServerRequest *request, int code, const JsonDocumen
 }
 
 // helper function to reserve space (and delete) for incoming data
-static void parseJSON(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total,
-                      void (*done)(AsyncWebServerRequest *, const String &))
+static void parseJSON(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total, void (*done)(AsyncWebServerRequest *, const String &))
 {
     if (index == 0)
     {
@@ -104,7 +104,7 @@ static void statusOutgoing(AsyncWebServerRequest *request)
 
     data["mode"] = state.mode;
 
-    if (chassisOk)
+    if (chassisOk) // if chassis CAN ok, set related values
     {
         data["speed"] = received_vehicle_speed;
         data["throttle"] = int(received_pedal_value);
@@ -113,7 +113,7 @@ static void statusOutgoing(AsyncWebServerRequest *request)
         data["rpm"] = received_vehicle_rpm;
         data["boost"] = received_vehicle_boost;
     }
-    else
+    else // if chassis CAN not ok, set related values to
     {
         data["speed"] = nullptr;
         data["throttle"] = nullptr;
@@ -130,7 +130,7 @@ static void statusOutgoing(AsyncWebServerRequest *request)
 
     data["lockTarget"] = int(lock_target);
 
-    if (haldexOk)
+    if (haldexOk) // if haldex CAN ok set related values
     {
         data["lockActual"] = received_haldex_engagement;
         data["haldexState"] = received_haldex_state;
@@ -142,7 +142,7 @@ static void statusOutgoing(AsyncWebServerRequest *request)
         data["couplingOpen"] = received_coupling_open;
         data["speedLimit"] = received_speed_limit;
     }
-    else
+    else // if haldex CAN not ok, set related values to "--"
     {
         data["lockActual"] = nullptr;
         data["haldexState"] = nullptr;
@@ -164,12 +164,12 @@ static void statusOutgoing(AsyncWebServerRequest *request)
     data["uptimeMs"] = millis();
     data["freeHeap"] = ESP.getFreeHeap();
 
-    const int cpuUsage = getCPUUsagePercent();
+    const int cpuUsage = getCPUUsagePercent(); // calculate CPU usage percentage using FreeRTOS task run time stats
     if (cpuUsage >= 0)
     {
         data["cpuUsage"] = cpuUsage;
     }
-    else
+    else // if CPU usage couldn't be calculated, set to "--"
     {
         data["cpuUsage"] = nullptr;
     }
@@ -196,6 +196,9 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
     data["isStandalone"] = isStandalone;
     data["tcForceMode"] = tcForceMode;
     data["extButtonForceMode"] = extBtnForceMode;
+
+    data["disableOnboardButton"] = disableOnboardButton;
+    data["disableExternalButton"] = disableExternalButton;
 
     data["followBrake"] = followBrake;
     data["invertBrake"] = invertBrake;
@@ -331,6 +334,16 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
         extBtnForceMode = data["extButtonForceMode"];
     }
 
+    if (data["disableOnboardButton"].is<bool>())
+    {
+        disableOnboardButton = data["disableOnboardButton"];
+    }
+
+    if (data["disableExternalButton"].is<bool>())
+    {
+        disableExternalButton = data["disableExternalButton"];
+    }
+
     if (data["followBrake"].is<bool>())
     {
         followBrake = data["followBrake"];
@@ -361,7 +374,7 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
     sendJSON(request, 200, resp);
 }
 
-//manage mode (saved from Web, handled here): ESP sends, this handles
+// manage mode (saved from Web, handled here): ESP sends, this handles
 static void modeIncoming(AsyncWebServerRequest *request, const String &body)
 {
     JsonDocument data;
@@ -470,24 +483,17 @@ void setupWebServer()
 // setup main section for handling requests
 void setupAPI()
 {
-    // on request settings
+    // ===== GET ENDPOINTS =====
+
+    // GET /api/settings - retrieve all current settings
     webServer.on("/api/settings", HTTP_GET, [](AsyncWebServerRequest *request)
                  { settingsOutgoing(request); });
 
-    // the JavaScript function uses 'setInterval' to 'poll' data every xms - use this to respond to it's request
+    // GET /api/dashboard - retrieve live status data (polled regularly by JS)
     webServer.on("/api/dashboard", HTTP_GET, [](AsyncWebServerRequest *request)
                  { statusOutgoing(request); });
 
-    // on request for save settings
-    webServer.on(
-        "/api/settings", HTTP_POST, [](AsyncWebServerRequest *request)
-        { (void)request; }, nullptr,
-        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
-        {
-            parseJSON(request, data, len, index, total, settingsIncoming);
-        });
-
-    // UDS read-by-identifier helper (GET)
+    // GET /api/uds/read - UDS read-by-identifier helper
     webServer.on("/api/uds/read", HTTP_GET, [](AsyncWebServerRequest *request)
                  {
                      auto reqP = request->getParam("req", false);
@@ -528,7 +534,35 @@ void setupAPI()
 
                      sendJSON(request, 200, response); });
 
-    // on request for mode change
+    // GET /api/learn/status - returns current learn progress and table (when valid)
+    webServer.on("/api/learn/status", HTTP_GET, [](AsyncWebServerRequest *request)
+                 {
+                     JsonDocument data;
+                     data["active"]     = (bool)haldexLearnActive;
+                     data["progress"]   = (uint8_t)haldexLearnStep;
+                     data["tableValid"] = haldexLearnTableValid;
+                     data["currentCF"]  = (uint8_t)haldexLearnCF;
+                     data["currentEng"] = received_haldex_engagement;
+                     if (haldexLearnTableValid)
+                     {
+                         JsonArray table = data["table"].to<JsonArray>();
+                         for (uint8_t i = 0; i <= 100; i++)
+                             table.add(haldexLearnTable[i]);
+                     }
+                     sendJSON(request, 200, data); });
+
+    // ===== POST ENDPOINTS =====
+
+    // POST /api/settings - save settings from web UI
+    webServer.on(
+        "/api/settings", HTTP_POST, [](AsyncWebServerRequest *request)
+        { (void)request; }, nullptr,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
+        {
+            parseJSON(request, data, len, index, total, settingsIncoming);
+        });
+
+    // POST /api/mode - change operating mode
     webServer.on(
         "/api/mode", HTTP_POST, [](AsyncWebServerRequest *request)
         { (void)request; }, nullptr,
@@ -537,7 +571,7 @@ void setupAPI()
             parseJSON(request, data, len, index, total, modeIncoming);
         });
 
-    // on request for tune change
+    // POST /api/tune - update throttle/speed/lock arrays
     webServer.on(
         "/api/tune", HTTP_POST, [](AsyncWebServerRequest *request)
         { (void)request; }, nullptr,
@@ -545,4 +579,37 @@ void setupAPI()
         {
             parseJSON(request, data, len, index, total, tuneIncoming);
         });
+
+    // POST /api/learn/start - begin the learn sweep
+    webServer.on("/api/learn/start", HTTP_POST, [](AsyncWebServerRequest *request)
+                 {
+                     if (!hasCANHaldex)
+                     {
+                         JsonDocument resp;
+                         resp["ok"]    = false;
+                         resp["error"] = "No Haldex CAN data available";
+                         sendJSON(request, 200, resp);
+                         return;
+                     }
+                     startHaldexLearn();
+                     JsonDocument resp;
+                     resp["ok"] = true;
+                     sendJSON(request, 200, resp); });
+
+    // POST /api/learn/cancel - abort an in-progress learn sweep
+    webServer.on("/api/learn/cancel", HTTP_POST, [](AsyncWebServerRequest *request)
+                 {
+                     haldexLearnCancel = true;
+                     JsonDocument resp;
+                     resp["ok"] = true;
+                     sendJSON(request, 200, resp); });
+
+    // POST /api/learn/clear - discard the stored learn table and revert to formula
+    webServer.on("/api/learn/clear", HTTP_POST, [](AsyncWebServerRequest *request)
+                 {
+                     haldexLearnTableValid = false;
+                     memset(haldexLearnTable, 0, sizeof(haldexLearnTable));
+                     JsonDocument resp;
+                     resp["ok"] = true;
+                     sendJSON(request, 200, resp); });
 }

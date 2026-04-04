@@ -168,6 +168,53 @@
                         <span class="toggle-slider"></span>
                         <span class="toggle-label">Turn on SavvyCAN</span>
                     </label>
+                    <label class="toggle">
+                        <input type="checkbox" id="disableOnboardButton">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Disable Onboard Button</span>
+                    </label>
+                    <label class="toggle">
+                        <input type="checkbox" id="disableExternalButton">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Disable External Button</span>
+                    </label>
+                </div>
+            </section>
+
+            <section class="card" id="learnSection">
+                <h2>Learn Haldex</h2>
+                <p class="hint">Sweeps correction factors 0–100% and records actual Haldex engagement at each step, building a calibration table that replaces the formula. Car must be running with Haldex CAN active.</p>
+                <p class="hint" id="learnStatusText">--</p>
+                <div class="learn-progress-wrap" id="learnProgressWrap" style="display:none;">
+                    <div class="learn-progress-bar">
+                        <div class="learn-progress-fill" id="learnProgressFill"></div>
+                    </div>
+                    <span class="learn-progress-label" id="learnProgressLabel">0%</span>
+                </div>
+                <div class="learn-track" id="learnTrack" style="display:none;">
+                    <div class="engagement-label">
+                        <span>Sent: <span id="learnCFValue">--</span>%</span>
+                        <span>Returned: <span id="learnEngValue">--</span>%</span>
+                    </div>
+                    <div class="learn-dual-bars">
+                        <div class="learn-bar-row">
+                            <span class="learn-bar-label">Sent</span>
+                            <div class="engagement-bar">
+                                <div class="learn-bar-fill-cf" id="learnCFFill"></div>
+                            </div>
+                        </div>
+                        <div class="learn-bar-row">
+                            <span class="learn-bar-label">Returned</span>
+                            <div class="engagement-bar">
+                                <div class="engagement-fill" id="learnEngFill"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="learn-controls">
+                    <button class="btn-secondary" id="learnStart">Learn Haldex</button>
+                    <button class="btn-secondary" id="learnCancel" style="display:none;">Cancel</button>
+                    <button class="btn-secondary" id="learnClear">Clear Learn Data</button>
                 </div>
             </section>
 
@@ -229,8 +276,6 @@
                     </label>
                 </div>
             </section>
-
-            <button class="btn-primary" id="saveSettings">Save Settings</button>
         </div>
 
         <div class="page" id="basic-page">
@@ -263,8 +308,6 @@
                     <div class="slider-value"><span id="disableThrottle">15</span> %</div>
                 </div>
             </section>
-
-            <button class="btn-primary" id="saveSettingsBasic">Save Settings</button>
         </div>
 
         <div class="page" id="expert-page">
@@ -378,7 +421,7 @@
             </section>
         </div>
 
-        <script src="./app.js?v=3.00.0" type="text/javascript"></script>
+        <script src="./app.js?v=3.00.1" type="text/javascript"></script>
         <!-- add version query param to force cache refresh on updates-->
 </body>
 

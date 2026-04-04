@@ -1,4 +1,5 @@
 #include <OpenHaldexC6_Calculations.h>
+#include <OpenHaldexC6_tasks.h>
 
 // Only executed when in MODE_FWD/MODE_5050/MODE_Expert
 static inline bool lock_enabled()
@@ -162,6 +163,13 @@ float get_lock_target_adjustment()
 
 uint8_t get_lock_target_adjusted_value(uint8_t value, bool invert)
 {
+  // during learn, use the current learn correction factor
+  if (haldexLearnActive)
+  {
+    uint8_t corrected_value = (uint16_t)value * haldexLearnCF / 100;
+    return (invert ? (0xFE - corrected_value) : corrected_value);
+  }
+
   // handle 5050 mode
   if (lock_target == 100)
   {
@@ -178,13 +186,46 @@ uint8_t get_lock_target_adjusted_value(uint8_t value, bool invert)
     return (invert ? 0xFE : 0x00);
   }
 
-  float correction_factor = ((float)lock_target / 2) + 20; // simple correction factor to make the lock more linear and less aggressive at lower values - this is based on testing and can be tweaked as needed (formula is just a guess based on testing, could be improved with more data points)
-  uint8_t corrected_value = value * (correction_factor / 100);
+  uint8_t correction_factor = 0; // calculate correction factor based on learn table if valid, otherwise use a default formula to determine correction factor (which is not very accurate, but better than nothing)
+  if (haldexLearnTableValid)
+  {
+    // find the smallest correction factor where the learned engagement meets or exceeds lock_target
+    for (uint8_t i = 0; i <= 100; i++)
+    {
+      if (haldexLearnTable[i] >= (uint8_t)lock_target)
+      {
+        correction_factor = i;
+        break;
+      }
+    }
+  }
+  else
+  {
+    correction_factor = (uint8_t)constrain(((float)lock_target / 2) + 20, 0, 100);
+  }
+
+  uint8_t corrected_value = (uint16_t)value * correction_factor / 100;
   if (lock_enabled())
   {
-    return (invert ? (0xFE - corrected_value) : corrected_value);
+    return (invert ? (0xFE - corrected_value) : corrected_value); // if lock enabled, return corrected value (or inverted), otherwise return 0 (or inverted)
   }
-  return (invert ? 0xFE : 0x00);
+  return (invert ? 0xFE : 0x00); // if lock not enabled, return 0 (or inverted)
+}
+
+void startHaldexLearn()
+{
+  if (haldexLearnActive)
+  {
+    return; // already running
+  }
+
+  memset(haldexLearnTable, 0, sizeof(haldexLearnTable));
+  haldexLearnCancel = false;
+  haldexLearnStep   = 0;
+  haldexLearnCF     = 0;
+  haldexLearnActive = true;
+
+  xTaskCreate(haldexLearnTask, "haldexLearn", 4096, nullptr, 1, nullptr);
 }
 
 void getLockData(twai_message_t &rx_message_chs)
@@ -365,6 +406,23 @@ void getLockData(twai_message_t &rx_message_chs)
   {
     switch (rx_message_chs.identifier)
     {
+/*
+      twai_message_t frame;
+      frame.identifier = ESP_18; // 0x135.  Fixed response, no changes
+      frame.extd = 0;
+      frame.rtr = 0;
+      frame.data_length_code = 8;
+      frame.data[0] = 0x00; // supposed to have CRC? doesn't affect
+      frame.data[1] = 0xC0; // always 0xC0, never changes
+      frame.data[2] = 0x00; // doesn't affect
+      frame.data[3] = 0x00; // doesn't affect
+      frame.data[4] = 0x00; // doesn't affect
+      frame.data[5] = 0x00; // doesn't affect
+      frame.data[6] = 0x00; // doesn't affect
+      frame.data[7] = 0x00; // doesn't affect
+      twai_transmit_v2(twai_bus_1, &frame, 0);
+*/
+    case ESP_19:
       rx_message_chs.data[0] = get_lock_target_adjusted_value(ESP_19_counter2, false);        // HL - wheel speed
       rx_message_chs.data[1] = get_lock_target_adjusted_value(ESP_19_counter, false);         // HL - wheel speed
       rx_message_chs.data[2] = get_lock_target_adjusted_value(ESP_19_counter2, false);        // HR - wheel speed

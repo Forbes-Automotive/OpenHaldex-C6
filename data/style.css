@@ -536,6 +536,76 @@ header h1 {
     font-weight: 600;
 }
 
+/* Learn Haldex progress bar */
+.learn-progress-wrap {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin: 0.75rem 0;
+}
+
+.learn-progress-bar {
+    flex: 1;
+    height: 1.25rem;
+    background: var(--surface-light);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.learn-progress-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--primary), var(--secondary));
+    transition: width 0.4s ease;
+}
+
+.learn-progress-label {
+    min-width: 3rem;
+    text-align: right;
+    font-weight: 600;
+    color: var(--primary);
+    font-size: 0.9rem;
+}
+
+.learn-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+}
+
+/* Learn tracking bars */
+.learn-track {
+    margin: 0.75rem 0;
+}
+
+.learn-dual-bars {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+}
+
+.learn-bar-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.learn-bar-label {
+    min-width: 4.5rem;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    text-align: right;
+}
+
+.learn-bar-fill-cf {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--secondary), var(--warning));
+    transition: width 0.4s ease;
+}
+
 /*
 @media (max-width: 600px) {
     .gauge-grid {

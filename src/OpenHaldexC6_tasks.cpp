@@ -4,6 +4,55 @@
 #include <OpenHaldexC6_EEP.h>
 #include <OpenHaldexC6_Analyzer.h>
 #include <OpenHaldexC6_StandaloneCAN.h>
+#include <OpenHaldexC6_Calculations.h>
+
+void haldexLearnTask(void *arg)
+{
+  const uint32_t settleMs = 300;
+  uint8_t lastValid = 0;
+
+  for (uint16_t cf = 0; cf <= 100; cf++)
+  {
+    if (haldexLearnCancel)
+    {
+      break;
+    }
+
+    haldexLearnStep = (uint8_t)cf;
+    haldexLearnCF   = (uint8_t)cf;
+
+    vTaskDelay(settleMs / portTICK_PERIOD_MS);
+
+    uint8_t eng = received_haldex_engagement;
+
+    if (eng == 0 && cf > 0)
+    {
+      eng = lastValid; // glaze over zero - keep previous valid reading
+    }
+    else
+    {
+      lastValid = eng;
+    }
+
+    haldexLearnTable[cf] = eng;
+  }
+
+  if (!haldexLearnCancel)
+  {
+    // only mark valid if at least one non-zero engagement was recorded
+    bool anyNonZero = false;
+    for (uint8_t i = 0; i <= 100; i++)
+    {
+      if (haldexLearnTable[i] > 0) { anyNonZero = true; break; }
+    }
+    haldexLearnTableValid = anyNonZero;
+    haldexLearnStep = anyNonZero ? 101 : 102; // 101 = complete OK, 102 = complete but no data
+  }
+
+  haldexLearnActive = false;
+  haldexLearnCF     = 0;
+  vTaskDelete(NULL);
+}
 
 void setupTasks()
 {

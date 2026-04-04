@@ -47,6 +47,7 @@ function initApp() {
   initModeButtons();
   initSettings();
   initExpertEditor();
+  initLearn();
   //initOtaPage(); todo - currently just old OTA page, would like to incorporate the styling across
 }
 
@@ -109,6 +110,11 @@ async function initStoredSettings() {
 
     document.getElementById("broadcastOpenHaldexOverCAN").checked =
       data.broadcastOpenHaldexOverCAN || false;
+
+    document.getElementById("disableOnboardButton").checked =
+      data.disableOnboardButton || false;
+    document.getElementById("disableExternalButton").checked =
+      data.disableExternalButton || false;
 
     // parse speed/throttle/lock array from the ESP
     speedHeader = data.speedArray;
@@ -232,39 +238,9 @@ async function saveLockTable() {
   }
 }
 
-// save current settings
-async function saveSettings() {
-  const settings = {
-    haldexGeneration: parseInt(
-      document.getElementById("haldexGeneration").value,
-    ),
-    forceModeValue: parseInt(document.getElementById("forceModeValue").value),
-    disengageUnderSpeed: parseInt(
-      document.getElementById("disengageUnderSpeedRange").value,
-    ),
-    disengageAboveSpeed: parseInt(
-      document.getElementById("disengageAboveSpeedRange").value,
-    ),
-    disableThrottle: parseInt(
-      document.getElementById("disableThrottleRange").value,
-    ),
-
-    disableController: document.getElementById("disableController").checked,
-    isStandalone: document.getElementById("isStandalone").checked,
-    analyzerMode: document.getElementById("analyzerMode").checked,
-
-    tcForceMode: document.getElementById("tcForceMode").checked,
-    extButtonForceMode: document.getElementById("extButtonForceMode").checked,
-
-    followBrake: document.getElementById("followBrake").checked,
-    invertBrake: document.getElementById("invertBrake").checked,
-    followHandbrake: document.getElementById("followHandbrake").checked,
-    invertHandbrake: document.getElementById("invertHandbrake").checked,
-
-    broadcastOpenHaldexOverCAN: document.getElementById(
-      "broadcastOpenHaldexOverCAN",
-    ).checked,
-  };
+// save individual setting immediately
+async function saveSetting(key, value) {
+  const settings = { [key]: value };
 
   try {
     const response = await fetchJson("/api/settings", {
@@ -273,15 +249,13 @@ async function saveSettings() {
       body: JSON.stringify(settings),
     });
 
-    if (response.ok) {
-      showNotification("Settings Saved");
-    } else {
-      showNotification("Failed to Save", "error");
+    if (!response.ok) {
+      showNotification("Failed to save setting", "error");
     }
   } catch (error) {
-    console.log("Save failed: " + error.message);
+    console.log("Saving setting failed: " + error.message);
+    showNotification("Error saving setting", "error");
   }
-  refreshStatus();
 }
 
 // initialise navigation:
@@ -359,14 +333,57 @@ function initModeButtons() {
   }
 }
 
-// initialise initSettings
+// initialise settings with immediate save on change
 function initSettings() {
-  document
-    .getElementById("saveSettings")
-    .addEventListener("click", saveSettings); // onclick, do this
-  document
-    .getElementById("saveSettingsBasic")
-    .addEventListener("click", saveSettings); // onclick, do this
+  // Selects (dropdown menus)
+  const selectIds = ["haldexGeneration", "forceModeValue"];
+  selectIds.forEach((id) => {
+    const elem = document.getElementById(id);
+    if (elem) {
+      elem.addEventListener("change", () => {
+        saveSetting(id, parseInt(elem.value));
+      });
+    }
+  });
+
+  // Range sliders
+  const rangeSliders = [
+    { element: "disengageUnderSpeedRange", key: "disengageUnderSpeed" },
+    { element: "disengageAboveSpeedRange", key: "disengageAboveSpeed" },
+    { element: "disableThrottleRange", key: "disableThrottle" },
+  ];
+  rangeSliders.forEach(({ element, key }) => {
+    const elem = document.getElementById(element);
+    if (elem) {
+      elem.addEventListener("input", () => {
+        saveSetting(key, parseInt(elem.value));
+      });
+    }
+  });
+
+  // Checkboxes
+  const checkboxIds = [
+    "disableController",
+    "isStandalone",
+    "analyzerMode",
+    "tcForceMode",
+    "extButtonForceMode",
+    "followBrake",
+    "invertBrake",
+    "followHandbrake",
+    "invertHandbrake",
+    "broadcastOpenHaldexOverCAN",
+    "disableOnboardButton",
+    "disableExternalButton",
+  ];
+  checkboxIds.forEach((id) => {
+    const elem = document.getElementById(id);
+    if (elem) {
+      elem.addEventListener("change", () => {
+        saveSetting(id, elem.checked);
+      });
+    }
+  });
 }
 
 function modeButton(mode) {
@@ -601,6 +618,119 @@ function restoreDefaults() {
       i++;
     }
   }
+}
+
+// initialise Learn Haldex UI
+function initLearn() {
+  let learnPollInterval = null;
+
+  const statusText    = document.getElementById("learnStatusText");
+  const progressWrap  = document.getElementById("learnProgressWrap");
+  const progressFill  = document.getElementById("learnProgressFill");
+  const progressLabel = document.getElementById("learnProgressLabel");
+  const learnTrack    = document.getElementById("learnTrack");
+  const learnCFFill   = document.getElementById("learnCFFill");
+  const learnEngFill  = document.getElementById("learnEngFill");
+  const learnCFValue  = document.getElementById("learnCFValue");
+  const learnEngValue = document.getElementById("learnEngValue");
+  const btnStart      = document.getElementById("learnStart");
+  const btnCancel     = document.getElementById("learnCancel");
+  const btnClear      = document.getElementById("learnClear");
+
+  function setProgress(pct) {
+    progressFill.style.width = pct + "%";
+    progressLabel.textContent = pct + "%";
+  }
+
+  function setTracking(cf, eng) {
+    learnCFFill.style.width   = cf  + "%";
+    learnEngFill.style.width  = eng + "%";
+    learnCFValue.textContent  = cf;
+    learnEngValue.textContent = eng;
+  }
+
+  function startPolling() {
+    btnStart.style.display     = "none";
+    btnCancel.style.display    = "";
+    progressWrap.style.display = "";
+    learnTrack.style.display   = "";
+    setProgress(0);
+    setTracking(0, 0);
+    learnPollInterval = setInterval(pollStatus, 100);
+  }
+
+  function stopPolling() {
+    clearInterval(learnPollInterval);
+    learnPollInterval          = null;
+    btnStart.style.display     = "";
+    btnCancel.style.display    = "none";
+    progressWrap.style.display = "none";
+    learnTrack.style.display   = "none";
+  }
+
+  async function pollStatus() {
+    const data = await fetchJson("/api/learn/status");
+    if (!data) return;
+
+    const pct = Math.min(100, Math.round(data.progress));
+    setProgress(pct);
+    setTracking(data.currentCF ?? 0, data.currentEng ?? 0);
+
+    if (!data.active) {
+      stopPolling();
+      if (data.progress === 102) {
+        statusText.textContent = "No Haldex CAN data recorded - check connection";
+        statusText.style.color = "var(--danger)";
+      } else if (data.tableValid) {
+        statusText.textContent = "Learn complete \u2713 - calibration table active";
+        statusText.style.color = "var(--success)";
+      } else {
+        statusText.textContent = "Learn cancelled or failed";
+        statusText.style.color = "var(--warning)";
+      }
+    }
+  }
+
+  btnStart.addEventListener("click", async () => {
+    statusText.textContent = "Learning\u2026";
+    statusText.style.color = "var(--text-dim)";
+    const resp = await fetchJson("/api/learn/start", { method: "POST" });
+    if (!resp || !resp.ok) {
+      statusText.textContent = resp && resp.error ? resp.error : "Failed to start learn";
+      statusText.style.color = "var(--danger)";
+      return;
+    }
+    startPolling();
+  });
+
+  btnCancel.addEventListener("click", async () => {
+    await fetchJson("/api/learn/cancel", { method: "POST" });
+    stopPolling();
+    statusText.textContent = "Learn cancelled";
+    statusText.style.color = "var(--warning)";
+  });
+
+  btnClear.addEventListener("click", async () => {
+    await fetchJson("/api/learn/clear", { method: "POST" });
+    statusText.textContent = "Learn data cleared - static factor active";
+    statusText.style.color = "var(--text-dim)";
+  });
+
+  // check initial state on page load
+  fetchJson("/api/learn/status").then((data) => {
+    if (!data) return;
+    if (data.active) {
+      statusText.textContent = "Learning\u2026";
+      statusText.style.color = "var(--text-dim)";
+      startPolling();
+    } else if (data.tableValid) {
+      statusText.textContent = "Learn complete \u2713 - calibration table active";
+      statusText.style.color = "var(--success)";
+    } else {
+      statusText.textContent = "No learn data - static factor active";
+      statusText.style.color = "var(--text-dim)";
+    }
+  });
 }
 
 function showNotification(message, type = "success") {

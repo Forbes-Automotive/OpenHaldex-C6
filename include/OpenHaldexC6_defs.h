@@ -228,6 +228,9 @@ extern bool paddleTipBoth;
 extern bool extBtnForceMode;
 extern bool extButtonForceModeFlag;
 
+extern bool disableOnboardButton;
+extern bool disableExternalButton;
+
 extern bool rebootWiFi;
 
 extern bool brakeActive;

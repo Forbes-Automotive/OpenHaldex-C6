@@ -1,4 +1,5 @@
-#include <OpenHaldexC6_EEP.h> // include the header for EEPROM/preference functions
+#include <OpenHaldexC6_EEP.h>          // include the header for EEPROM/preference functions
+#include <OpenHaldexC6_Calculations.h> // for haldexLearnTable and learn globals
 
 void readEEP() // function to read stored preferences into runtime variables
 {              // start readEEP
@@ -16,6 +17,8 @@ void readEEP() // function to read stored preferences into runtime variables
   pref.begin("invertHandbrake", false); // invert handbrake output preference
   pref.begin("tcForceMode", false);     // TC force mode preference
   pref.begin("extBtnForceMode", false); // external button force mode
+  pref.begin("dsbOnboardBtn", false);   // disable onboard button preference
+  pref.begin("dsbExtBtn", false);       // disable external button preference
 
   pref.begin("haldexGen", false);       // stored haldex generation
   pref.begin("forceModeValue", false);  // stored force mode value
@@ -28,6 +31,7 @@ void readEEP() // function to read stored preferences into runtime variables
   pref.begin("throttleArray", false); // stored throttle curve bytes
   pref.begin("speedArray", false);    // stored speed curve bytes
   pref.begin("lockArray", false);     // stored lock curve bytes
+  pref.begin("learnTable", false);    // stored haldex learn table
 
   // first run comes with EEP value of 255, so write actual values
   if (pref.getUInt("haldexGeneration") == 255) // detect first run
@@ -44,6 +48,8 @@ void readEEP() // function to read stored preferences into runtime variables
     pref.putBool("invertHandbrake", invertHandbrake);          // save invert handbrake
     pref.putBool("tcForceMode", tcForceMode);                  // save tc force mode
     pref.putBool("extBtnForceMode", extBtnForceMode);          // save ext button force mode
+    pref.putBool("dsbOnboardBtn", disableOnboardButton);        // save disable onboard button
+    pref.putBool("dsbExtBtn", disableExternalButton);           // save disable external button
 
     pref.putBool("otaUpdate", otaUpdate);                                            // save OTA update flag
     pref.putUChar("haldexGen", haldexGeneration);                                    // save haldex generation
@@ -55,6 +61,7 @@ void readEEP() // function to read stored preferences into runtime variables
     pref.putBytes("speedArray", (byte *)(&speedArray), sizeof(speedArray));          // save speed array bytes
     pref.putBytes("throttleArray", (byte *)(&throttleArray), sizeof(throttleArray)); // save throttle array bytes
     pref.putBytes("lockArray", (byte *)(&lockArray), sizeof(lockArray));             // save lock array bytes
+    pref.putBool("learnOK", false);                                                  // learn table not valid on first run
   } // end if first run
   else // normal run: load stored values
   {
@@ -67,6 +74,8 @@ void readEEP() // function to read stored preferences into runtime variables
     invertHandbrake = pref.getBool("invertHandbrake", false);          // load invert handbrake
     tcForceMode = pref.getBool("tcForceMode", false);                  // load tc force mode
     extBtnForceMode = pref.getBool("extBtnForceMode", false);          // load ext button force mode
+    disableOnboardButton = pref.getBool("dsbOnboardBtn", false);        // load disable onboard button
+    disableExternalButton = pref.getBool("dsbExtBtn", false);           // load disable external button
 
     otaUpdate = pref.getBool("otaUpdate", false);                          // load OTA update flag
     haldexGeneration = pref.getUChar("haldexGen", 1);                      // load haldex generation with default
@@ -79,6 +88,11 @@ void readEEP() // function to read stored preferences into runtime variables
     pref.getBytes("speedArray", &speedArray, sizeof(speedArray));          // read speed array bytes
     pref.getBytes("throttleArray", &throttleArray, sizeof(throttleArray)); // read throttle array bytes
     pref.getBytes("lockArray", &lockArray, sizeof(lockArray));             // read lock array bytes
+    haldexLearnTableValid = pref.getBool("learnOK", false);                // read learn table valid flag
+    if (haldexLearnTableValid)
+    {
+      pref.getBytes("learnTbl", haldexLearnTable, sizeof(haldexLearnTable)); // read learn table bytes
+    }
 
     switch (lastMode) // map stored lastMode to runtime enum
     {
@@ -146,6 +160,8 @@ void writeEEP(void *arg) // task function to periodically write preferences
     pref.putBool("invertHandbrake", invertHandbrake);          // write invert handbrake
     pref.putBool("tcForceMode", tcForceMode);                  // write tc force mode
     pref.putBool("extBtnForceMode", extBtnForceMode);          // write ext button force mode
+    pref.putBool("dsbOnboardBtn", disableOnboardButton);        // write disable onboard button
+    pref.putBool("dsbExtBtn", disableExternalButton);           // write disable external button
 
     pref.putUChar("haldexGen", haldexGeneration);                                    // write haldex generation
     pref.putUChar("forceModeValue", forceModeValue);                                 // write force mode value
@@ -156,6 +172,11 @@ void writeEEP(void *arg) // task function to periodically write preferences
     pref.putBytes("speedArray", (byte *)(&speedArray), sizeof(speedArray));          // write speed array
     pref.putBytes("throttleArray", (byte *)(&throttleArray), sizeof(throttleArray)); // write throttle array
     pref.putBytes("lockArray", (byte *)(&lockArray), sizeof(lockArray));             // write lock array
+    pref.putBool("learnOK", haldexLearnTableValid);                                  // write learn valid flag
+    if (haldexLearnTableValid)
+    {
+      pref.putBytes("learnTbl", haldexLearnTable, sizeof(haldexLearnTable)); // write learn table bytes
+    }
 
 #if detailedDebugEEP
     DEBUG("Written EEPROM with data:");                                                            // debug: print written prefs
