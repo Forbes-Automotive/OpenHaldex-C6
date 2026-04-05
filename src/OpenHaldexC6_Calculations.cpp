@@ -427,19 +427,19 @@ void getLockData(twai_message_t &rx_message_chs)
       rx_message_chs.data[1] = get_lock_target_adjusted_value(ESP_19_counter, false);         // HL - wheel speed
       rx_message_chs.data[2] = get_lock_target_adjusted_value(ESP_19_counter2, false);        // HR - wheel speed
       rx_message_chs.data[3] = get_lock_target_adjusted_value(ESP_19_counter, false);         // HR - wheel speed
-      rx_message_chs.data[4] = get_lock_target_adjusted_value(ESP_19_counter2 + 0xCA, false); // VL - wheel speed 0xDB
+      rx_message_chs.data[4] = get_lock_target_adjusted_value(ESP_19_counter2 + 0xFA, false); // VL - wheel speed 0xDB
       rx_message_chs.data[5] = get_lock_target_adjusted_value(ESP_19_counter, false);         // VL - wheel speed -- affects if =0x0B
-      rx_message_chs.data[6] = get_lock_target_adjusted_value(ESP_19_counter2 + 0xCA, false); // VR - wheel speed 0xDB
+      rx_message_chs.data[6] = get_lock_target_adjusted_value(ESP_19_counter2 + 0xFA, false); // VR - wheel speed 0xDB
       rx_message_chs.data[7] = get_lock_target_adjusted_value(ESP_19_counter, false);         // VR - wheel speed -- affects if =0x0B
       ESP_19_counter++;
       ESP_19_counter2++;
-      if (ESP_19_counter > 0x1A) // 0x1e
+      if (ESP_19_counter > 0xFA) // 0x1e
       {
-        ESP_19_counter = 0x01; // 0x10
+        ESP_19_counter = 0xF1; // 0x10
       }
-      if (ESP_19_counter2 > 0x0E) // 0x0a
+      if (ESP_19_counter2 > 0xFE) // 0x0a
       {
-        ESP_19_counter2 = 0x00; // 0x00
+        ESP_19_counter2 = 0xF0; // 0x00
       }
       break;
 
