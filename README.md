@@ -80,7 +80,7 @@ Assembled modules are available from Forbes Automotive if you do not wish to bui
 
 OpenHaldex sits between your vehicle and the OEM Haldex controller. It can operate as a passthrough (OEM behaviour), or modify messages to request different amounts of differential lock.  
 
-This is the original source of Generation 2, 4 and 5 logic - any forks or code copied off of the back of this project is NOT the work of Forbes Automotive and therefore we support other work unless it is remains part of this project.
+This is the original source of Generation 2, 4 and 5 logic - any forks or code copied from this project is NOT the work of Forbes Automotive and therefore we cannot support other work unless it is remains part of this project.
 
 **Supported generations:** Gen1, Gen2, Gen4 and Gen5
 
