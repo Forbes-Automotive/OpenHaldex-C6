@@ -24,6 +24,7 @@
 OpenHaldex is an open‑source **Haldex AWD controller** for Volkswagen and Audi Group vehicles using Haldex Generation 1, 2, 4 (PQ Chassis) and 5 (MQB) differentials.
 
 Install is easy with the new harnesses for later PQ & MQB chassis:
+
 **Lift seat -> Plug in -> Drive it**
 
 **Performance doesn't need to be expensive or complicated!**
