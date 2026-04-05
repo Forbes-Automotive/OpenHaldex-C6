@@ -21,10 +21,18 @@
 
 </p>
 
+OpenHaldex is an open‑source **Haldex AWD controller** for Volkswagen and Audi Group vehicles using Haldex Generation 1, 2, 4 (PQ Chassis) and 5 (MQB) differentials.
 
-OpenHaldex is an open‑source **Haldex AWD controller** for Volkswagen and Audi Group vehicles using Haldex Generation 1, 2, 4 and 5 differentials.
+Install is easy with the new harnesses for later PQ & MQB chassis:
+**Lift seat -> Plug in -> Drive it**
 
-The firmware runs on an **ESP32‑C6 microcontroller** and reads CAN bus messages from the vehicle, allowing the controller to modify or generate commands so the Haldex differential behaves exactly as configured.
+**Performance doesn't need to be expensive or complicated!**
+
+Starting from the codebase from A-Banging-Donk for Generation 1 differentials; OpenHaldexC6 has grown to adapt Generation 2, 4 and 5.  
+
+The firmware runs on an **ESP32‑C6** and reads CAN bus messages from the vehicle, allowing the controller to modify or generate commands so the Haldex differential behaves exactly as you've configured.  
+
+It can operate using OEM CAN signals or it is also able to run in Standalone mode - this makes it perfect for conversions!
 
 ![OpenHaldex-C6](/Images/openHaldexUI.png)
 
@@ -34,6 +42,8 @@ The firmware runs on an **ESP32‑C6 microcontroller** and reads CAN bus message
 - [Purchase](#purchase)
 - [Overview](#overview)
 - [Hardware](#hardware)
+- [Advantages Over Other 'OpenHaldex' Solutions](#advantages-over-other-openhaldex-solutions)
+- [Supported Platforms](#supported-platforms)
 - [Modes](#modes)
 - [Expert Mode](#expert-mode)
 - [Installation](#installation)
@@ -49,6 +59,9 @@ The firmware runs on an **ESP32‑C6 microcontroller** and reads CAN bus message
 - Built‑in Wi‑Fi for on‑device configuration and diagnostics
 - Multiple preset modes plus customisable mode profiles
 - Tune your Haldex system directly from your phone via Wi-Fi
+- Configurable inputs features onboard and external mode switching options 
+- Configurable outputs include two high-side drivers for handbrake and brake outputs (or PWM control for optional oil cooling!)
+- SavvyCAN support
 
 ![OpenHaldex-C6](/Images/BoardOverview.png)
 
@@ -64,9 +77,11 @@ Assembled modules are available from Forbes Automotive if you do not wish to bui
 
 ## Overview
 
-OpenHaldex sits between your vehicle and the OEM Haldex controller. It can operate as a passthrough (OEM behaviour), or modify messages to request different amounts of differential lock.
+OpenHaldex sits between your vehicle and the OEM Haldex controller. It can operate as a passthrough (OEM behaviour), or modify messages to request different amounts of differential lock.  
 
-**Supported generations:** Gen1, Gen2 and Gen4
+This is the original source of Generation 2, 4 and 5 logic - any forks or code copied off of the back of this project is NOT the work of Forbes Automotive and therefore we support other work unless it is remains part of this project.
+
+**Supported generations:** Gen1, Gen2, Gen4 and Gen5
 
 > Gen3 is currently unsupported.
 
@@ -74,17 +89,39 @@ OpenHaldex sits between your vehicle and the OEM Haldex controller. It can opera
 
 ## Hardware
 
-The PCB is based around an **ESP32‑C6 Mini** (with Wi‑Fi)
+The PCB is based around an **ESP32‑C6 Mini** (with Wi‑Fi) but has superior protection against ESD and transient voltages.  It has a built-in fuse and uses quality automotive based components for a reliable system.
 
 Two TWAI/CAN controllers are built into the PCB along with external IO control:
 
 - External mode button
 - On‑board RGB LED
-- Brake / handbrake signals
+- Brake / handbrake management (for Generation 1 systems)
 
-There are also two high‑side drivers for brake/handbrake but these could be repurposed for other functions.
+These two high‑side drivers for brake/handbrake could be repurposed for other functions like oil coolers!
 
 > This platform replaces the earlier Teensy (OpenHaldex T4) design to provide better wireless support and on‑device configuration.
+
+## Advantages Over Other 'OpenHaldex' Solutions
+
+- The 'proprietary PCB' is equally as proprietary as the LILYGO T-2Can
+- The LILYGO T-2Can does not feature any suitable means of over-voltage or fused protections
+- The LILYGO T-2Can does not feature an onboard mode LED - so no immediate user feedback of current mode
+- The LILYGO T-2Can does not offer external mode changing for quick 'on-the-fly' changes
+- The LILYGO T-2Can does not offer additional high-sided drivers for brake/handbrake control on Gen1 or Gen2 systems
+- The LILYGO T-2Can uses MS4553S as CAN interface chips - these have lower ESD protection and in high-voltage or short circuit situations will destroy their irreplaceable protection fuses
+- No optional JTAG break-out (which could be repurposed for other features - like GPS, for example)
+- No pre-designed enclosure
+- Terminations are screw-type - which can lead to poor user installation / connections - leading to sporadic communication faults or failures within the vehicles CAN network - this could include no-starts or steering failures
+- It's **still** a custom made piece of hardware including the custom wiring harness YOU'D need to make: collect connectors, crimp/solder or twist & tape, it won't be pretty
+- The cost is comparative
+---
+
+## Supported Platforms
+
+- Generation 1 - PQ 
+- Generation 2 - PQ
+- Generation 4 - PQ
+- Generation 5 - MQB
 
 ---
 
@@ -105,7 +142,7 @@ The controller provides several preset modes along with a fully customisable mod
 
 ## LED Indicators
 
-5 mm onboard LED colour indicates the active mode:
+5mm onboard LED colour indicates the active mode:
 
 | Colour | Mode |
 |------|------|
@@ -125,6 +162,14 @@ Expert mode allows lock targets to be configured based on **speed and throttle s
 ![ExpertMode](/Images/expertmode.jpg)
 
 *Expert mode grid configuration interface within the OpenHaldex C6 UI.*
+
+---
+
+## Haldex Learning
+
+Allow the controller to learn *your* Haldex by replacing the original methodology of approximating a lock percentage by cycling through all of the available lock percentages.  
+
+Use the 'Learn Haldex' in the Settings page and within one minute the controller will learn how to get EXACTLY the lock percentage you request.  No more guess-work, just exactly values.
 
 ---
 
@@ -174,12 +219,12 @@ Default CAN ID:
 > [!NOTE]
 > Broadcasting can conflict with other devices. The CAN ID can be adjusted in code if required.
 
-The module broadcasts its current state on the CAN bus.
+The module broadcasts its current state on the CAN bus.  This can be used by aftermarket ECUs or FIS displays to show current status
 
 ```
-data[1] = standalone_flags (bitmask for Gen1/Gen2/Gen4)
-data[2] = processed_haldex_engagement (mapped by firmware)
-data[3] = lock_target_percent
+data[1] = standalone_flags (bitmask for Gen1/Gen2/Gen4/Gen5)
+data[2] = processed_haldex_engagement (requested by firmware)
+data[3] = lock_target_percent (actual lock, returned by differential)
 data[4] = vehicle_speed
 data[5] = mode_override_flag
 data[6] = current_mode_number
@@ -214,18 +259,28 @@ If the Wi‑Fi interface becomes unresponsive:
 >[!TIP]
 > ### Optional Plug & Play Harness (Recommended)
 >
-> Recommended for quick installation (and removal) — typically **2 minutes**.
+> Recommended for quick installation (and removal) — typically **<10 minutes** on Generation 1 Controllers.
 
+> The latest harnesses for Generation 2, 4 and 5 are even simpler and you'll be experiencing your Haldex controller in less than 30 seconds:
+
+- Lift the rear seat
+- Split the factory 6-pin Haldex connector
+- Install your new harness & OpenHaldexC6 Controller
+- Drive it (you can put the seat back down too, if you want!)
+
+> For Generation 1 Controllers:
 Route cables as required and connect harness ends as described in the harness instructions.
 
 For full step‑by‑step instructions see the **[OpenHaldex Installation Guide](https://openhaldex.com/docs/OpenHaldex_Installation_Guide.pdf)**.
 
 ▶ **Installation demo (YouTube Short):** https://youtube.com/shorts/iUkNh9NbyKY?si=IhgqLIi0WM8wXqe9
 
+▶ **Installation demo (YouTube Short):** https://youtu.be/Wu-u-Dz1444
+
 > [!WARNING]
 > ### Manual Wiring (No Harness)
 >
-> Modules sold without a harness include connector pins for manual wiring. This is a little harder and more involved than using the optional harness, but with following the installation guide above it can still be completed easily. Give us a shout if you need a hand.
+> Modules sold without a harness include connector pins for manual wiring. This is a little harder and more involved than using the optional harness, but following the installation guide above it can still be completed easily. Give us a shout if you need a hand.
 
 Gen1:
 - Chassis Connector: `1J0‑973‑714`
@@ -275,28 +330,36 @@ This is the recommended method for most users.
 
 ## CAN Sniffing (SavvyCAN / GVRET)
 
+Adding more functionality couldn't be easier - you just need to know the feature you want and grab some CAN data to help implement it.  Using the SavvyCAN interface, you can listen to the CAN messages to see what the car is talking about...
+
 Enable **Analyzer Mode** in the setup menu to capture CAN frames.
 
 > [!WARNING]
-> Enabling Analyzer Mode disables active Haldex control and returns the device to OEM behaviour.
+> Enabling Analyzer Mode disables active Haldex control and returns the device to OEM 'pass-through' behaviour.
 
 ### SavvyCAN Connection
 
 1. Connect to the OpenHaldex Wi‑Fi AP
-2. In SavvyCAN select:
+2. In Settings, enable SavvyCAN
+
+3. In SavvyCAN:
+
+``` 
+Open 'Connection'
+```
 
 ```
 Add New Device Connection → Network Connection (GVRET)
 ```
 
-3. Enter:
+4. Enter:
 
 ```
 IP: 192.168.1.1
 Port: 23
 ```
 
-4. Set CAN speed:
+5. Set CAN speed:
 
 ```
 500000
@@ -306,7 +369,7 @@ Port: 23
 
 ## PCB & Enclosure
 
-Gerber files and enclosure designs are available in the **PCB** folder.
+Gerber files and enclosure designs are available in the **PCB** folder.  You can use these to get your own units if you wish.
 
 Pinout and functionality remain consistent across supported enclosure versions.
 
@@ -323,7 +386,7 @@ Pinout and functionality remain consistent across supported enclosure versions.
 
 ## Acknowledgements
 
-- **Forbes Automotive** — Lead development of the OpenHaldex C6 platform, including reverse‑engineering and open‑source implementation for **Gen2 and Gen4 Haldex systems**, along with ongoing maintenance of the project
+- **Forbes Automotive** — Lead development of the OpenHaldex C6 platform, including reverse‑engineering and open‑source implementation for **Gen2, Gen4 and Gen5 Haldex systems**, along with ongoing maintenance of the project
 - **A Banging Donk** — [Original OpenHaldex project](https://github.com/ABangingDonk/OpenHaldexT4) for Gen1 vehicles
 - **Arwid Vasilev** — PCB redesign (V1.02)
 - **LVT Technologies** — OTA update integration (now deprecated, but still appreciated)
