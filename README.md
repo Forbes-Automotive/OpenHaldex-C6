@@ -261,7 +261,6 @@ If the Wi‑Fi interface becomes unresponsive:
 > ### Optional Plug & Play Harness (Recommended)
 >
 > Recommended for quick installation (and removal) — typically **<10 minutes** on Generation 1 Controllers.
-
 > The latest harnesses for Generation 2, 4 and 5 are even simpler and you'll be experiencing your Haldex controller in less than 30 seconds:
 
 - Lift the rear seat
