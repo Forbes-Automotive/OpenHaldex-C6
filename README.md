@@ -306,8 +306,9 @@ Routing summary:
   - MX Pin 6 -> Haldex Pin 6 (Haldex CAN High)
 
 - Vehicle Connector — `VW 1J0‑973‑813`:
+
 | Pin | Signal | Notes |
-|----:|:------|:------|
+|----|------|------|
 | 1 | Term15 | Pass-through: Vehicle → Haldex |
 | 2 | Ground/MALT | Pass-through: Vehicle → Haldex and branch to MX Pin 2 |
 | 3 | Term30 | Pass-through: Vehicle → Haldex and branch to MX Pin 1 |
@@ -316,8 +317,9 @@ Routing summary:
 | 6 | Chassis High | To MX Pin 4 (chassis side) |
 
 - Haldex Connector — `VW 1J0‑973‑713`:
+
 | Pin | Signal | Notes |
-|----:|:------|:------|
+|----|------|------|
 | 1 | Term15 | Pass-through: Vehicle → Haldex |
 | 2 | Ground/MALT | Pass-through from Vehicle side |
 | 3 | Term30 | Pass-through from Vehicle side |
@@ -330,7 +332,7 @@ Routing summary:
 ### MX23A12NF Connector Pinout
 
 | Pin | Signal | Notes |
-|----:|:------|:------|
+|----|------|------|
 | 1 | Vbatt | +12 V |
 | 2 | Ground/MALT | Ground |
 | 3 | Chassis CAN Low | To chassis/ECU side |
