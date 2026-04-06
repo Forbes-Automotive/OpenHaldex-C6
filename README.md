@@ -286,11 +286,46 @@ Gen1:
 - Chassis Connector: `1J0‑973‑714`
 - Haldex Conneector: `1J0‑973‑814`
 
-Gen2>:
+Gen4>:
 - Haldex Connector — `VW 1J0‑973‑713`
 - Vehicle Connector — `VW 1J0‑973‑813`
 
-![InstallationPins-C6](/Images/InstallationPins.png)
+Build this as a **Y-branch** harness between the two VW 6-pin connectors, with a long tail to the MX plug.
+
+Routing summary:
+
+- Pins 1, 2, 3 are pass-through between Vehicle and Haldex.
+- **Permanent power (Term30) and ground (MALT) must also be branched to the OpenHaldex controller**:
+  - Term30 -> MX Pin 1
+  - Ground/MALT -> MX Pin 2
+- Chassis CAN is taken from the Vehicle side and sent to the controller:
+  - Vehicle Pin 5 -> MX Pin 3 (Chassis CAN Low)
+  - Vehicle Pin 6 -> MX Pin 4 (Chassis CAN High)
+- Returned CAN from the controller then goes to the Haldex side:
+  - MX Pin 5 -> Haldex Pin 5 (Haldex CAN Low)
+  - MX Pin 6 -> Haldex Pin 6 (Haldex CAN High)
+
+- Vehicle Connector — `VW 1J0‑973‑813`:
+| Pin | Signal | Notes |
+|----:|:------|:------|
+| 1 | Term15 | Pass-through: Vehicle → Haldex |
+| 2 | Ground/MALT | Pass-through: Vehicle → Haldex and branch to MX Pin 2 |
+| 3 | Term30 | Pass-through: Vehicle → Haldex and branch to MX Pin 1 |
+| 4 | N/A | Not used |
+| 5 | Chassis Low | To MX Pin 3 (chassis side) |
+| 6 | Chassis High | To MX Pin 4 (chassis side) |
+
+- Haldex Connector — `VW 1J0‑973‑713`:
+| Pin | Signal | Notes |
+|----:|:------|:------|
+| 1 | Term15 | Pass-through: Vehicle → Haldex |
+| 2 | Ground/MALT | Pass-through from Vehicle side |
+| 3 | Term30 | Pass-through from Vehicle side |
+| 4 | N/A | Not used |
+| 5 | Haldex Low | From MX Pin 5 (returned CAN) |
+| 6 | Haldex High | From MX Pin 6 (returned CAN) |
+
+![Gen4/Gen5 Y-Branch Harness Diagram](/Images/Gen4_Gen5_Y_Branch_Harness.png)
 
 ### MX23A12NF Connector Pinout
 
