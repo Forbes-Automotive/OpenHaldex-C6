@@ -97,6 +97,7 @@ Two TWAI/CAN controllers are built into the PCB along with external IO control:
 - External mode button
 - On‑board RGB LED
 - Brake / handbrake management (for Generation 1 systems)
+  *Note: some brake/handbrake outputs may require a 10k pulldown resistor on certain platforms(!)
 
 These two high‑side drivers for brake/handbrake could be repurposed for other functions like oil coolers!
 
@@ -130,29 +131,14 @@ These two high‑side drivers for brake/handbrake could be repurposed for other 
 
 The controller provides several preset modes along with a fully customisable mode:
 
-| Mode | Behaviour |
-|-----|-----------|
-| Stock | OEM behaviour |
-| FWD | Zero lock |
-| 7525 | 25% lock |
-| 6040 | 40% lock |
-| 5050 | 100% lock |
-| Expert | User‑defined lock profile |
-
----
-
-## LED Indicators
-
-5mm onboard LED colour indicates the active mode:
-
-| Colour | Mode |
-|------|------|
-| Red | Stock |
-| Green | FWD |
-| Cyan | 7525 |
-| Magenta | 6040 |
-| Blue | 5050 |
-| White | Expert |
+| Mode | Behaviour | LED Colour |
+|-----|-----------|-----------|
+| Stock | OEM behaviour | Red |
+| FWD | Zero lock | Green | 
+| 7525 | 25% lock | Cyan |
+| 6040 | 40% lock | Magenta |
+| 5050 | 100% lock | Blue |
+| Expert | User‑defined lock profile | White |
 
 ---
 
@@ -170,7 +156,7 @@ Expert mode allows lock targets to be configured based on **speed and throttle s
 
 Allow the controller to learn *your* Haldex by replacing the original methodology of approximating a lock percentage by cycling through all of the available lock percentages.  
 
-Use the 'Learn Haldex' in the Settings page and within one minute the controller will learn how to get EXACTLY the lock percentage you request.  No more guess-work, just exactly values.
+Use the 'Learn Haldex' in the Settings page and within one minute the controller will learn how to get EXACTLY the lock percentage you request.  No more guess-work, just exact values.
 
 ---
 
