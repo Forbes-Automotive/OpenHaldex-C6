@@ -49,6 +49,7 @@ It can operate using OEM CAN signals or it is also able to run in Standalone mod
 - [Expert Mode](#expert-mode)
 - [Installation](#installation)
 - [Firmware Installation](#firmware-installation-esp-web-tools)
+- [Low Power Mode](#low-power-mode)
 - [CAN Sniffing](#can-sniffing-savvycan--gvret)
 - [PCB & Enclosure](#pcb--enclosure)
 - [Acknowledgements](#acknowledgements)
@@ -62,7 +63,11 @@ It can operate using OEM CAN signals or it is also able to run in Standalone mod
 - Tune your Haldex system directly from your phone via Wi-Fi
 - Configurable inputs features onboard and external mode switching options 
 - Configurable outputs include two high-side drivers for handbrake and brake outputs (or PWM control for optional oil cooling!)
-- SavvyCAN support
+- SavvyCAN support via Wi‑Fi or Serial
+- Wi‑Fi access point password protection, with long-press reset
+- Force mode via CAN using hazard lights or TC button
+- Adjustable LED brightness
+- MQB UDS support (ongoing)
 
 ![OpenHaldex-C6](/Images/BoardOverview.png)
 
@@ -80,7 +85,7 @@ Assembled modules are available from Forbes Automotive if you do not wish to bui
 
 OpenHaldex sits between your vehicle and the OEM Haldex controller. It can operate as a passthrough (OEM behaviour), or modify messages to request different amounts of differential lock.  
 
-This is the original source of Generation 2, 4 and 5 logic - any forks or code copied from this project is NOT the work of Forbes Automotive and therefore we cannot support other work unless it is remains part of this project.
+This is the original source of Generation 2, 4 (including GM) and 5 logic - any forks or code copied from this project is NOT the work of Forbes Automotive and therefore we cannot support other work unless it is remains part of this project.
 
 **Supported generations:** Gen1, Gen2, Gen4 and Gen5
 
@@ -123,6 +128,7 @@ These two high‑side drivers for brake/handbrake could be repurposed for other 
 - Generation 1 - PQ 
 - Generation 2 - PQ
 - Generation 4 - PQ
+- Generation 4 - GM
 - Generation 5 - MQB
 
 ---
@@ -158,6 +164,10 @@ Allow the controller to learn *your* Haldex by replacing the original methodolog
 
 Use the 'Learn Haldex' in the Settings page and within one minute the controller will learn how to get EXACTLY the lock percentage you request.  No more guess-work, just exact values.
 
+### Gen5 'Fix Hunting'
+
+Certain Generation 5 controllers — specifically those running the **554K** variant — use a different torque model to calculate the lock request. On these units, the standard learning process will not produce accurate results. Use the **Fix Hunt** option in the Settings page instead of the standard Learn Haldex.
+
 ---
 
 ## Changing Modes
@@ -179,6 +189,15 @@ Use the Web UI at:
 **CAN**
 
 Send a CAN message containing the mode number in **Byte 0**.
+
+**CAN — Force Mode (Hazards / TC Button)**
+
+Two optional force mode triggers are available via CAN signals already present on the bus:
+
+- **Hazard lights** — activating the hazard switch will trigger a force mode command
+- **TC button** — pressing the traction control button can also trigger force mode
+
+Both are optional and can be enabled in the Settings page. They allow mode changes from OEM controls without any additional wiring.
 
 ---
 
@@ -231,6 +250,8 @@ data[7] = pedal_value
 
 3. Access the Web UI
 
+A password for the access point can be set from the Settings page. If you are locked out or forget your password, long-pressing the `Mode` button will reset the Wi‑Fi password and restore the standard open connection.
+
 <p align="center">
   <img src="/Images/UIDemo.png" alt="OpenHaldex C6 Web UI" width="900" style="max-width:100%;">
 </p>
@@ -238,6 +259,20 @@ data[7] = pedal_value
 If the Wi‑Fi interface becomes unresponsive:
 
 - Long‑press the `Mode` button to reset Wi‑Fi.
+
+---
+
+## Low Power Mode
+
+After **5 minutes** with no Wi‑Fi clients connected and no CAN activity, the controller automatically shuts down the Wi‑Fi AP and turns off the LED. This happens regardless of any other settings. As soon as CAN traffic returns — typically the moment the car wakes up — Wi‑Fi is restored automatically. No user action is required.
+
+**CAN Sleep** is an additional, optional setting available on the Settings page. When enabled, the ESP32‑C6 CPU will also enter light sleep whenever FreeRTOS is idle. The TWAI peripheral is configured to power down during light sleep but preserves its registers and receive queue across cycles, so the controller resumes cleanly on the next CAN frame without losing anything.
+
+Enabling CAN Sleep is most beneficial on installs where the module has a permanent +12V supply. If the connector is already switched off with ignition, it is less relevant.
+
+When enabled, stay connected and monitor the number of Chassis frames when the car is asleep (in Settings).  Adjust the LP slider to be above that value.  After this and no WiFi connections, the ESP will go to sleep and re-wake when the CAN traffic begins again (car unlocked).  
+
+When in standalone mode, the Haldex ECU will go to sleep fully, so ANY CAN traffic here will wake the module.
 
 ---
 
@@ -363,7 +398,7 @@ Enable **Analyzer Mode** in the setup menu to capture CAN frames.
 ### SavvyCAN Connection
 
 1. Connect to the OpenHaldex Wi‑Fi AP
-2. In Settings, enable SavvyCAN
+2. In Settings, enable SavvyCAN via WiFi
 
 3. In SavvyCAN:
 
@@ -387,6 +422,15 @@ Port: 23
 ```
 500000
 ```
+
+### Serial Connection
+
+SavvyCAN can also connect directly over USB without needing Wi‑Fi:
+
+1. Connect the OpenHaldex controller via USB-C
+2. In Settings, enable SavvyCAN via Serial
+3. In SavvyCAN, add a new device connection → **Serial Connection (GVRET)**
+4. Select the correct COM port and set the speed to **500000**
 
 ---
 
