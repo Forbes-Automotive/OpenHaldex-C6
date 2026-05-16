@@ -1,4 +1,4 @@
-<p align="center">
+﻿<p align="center">
   <a href="https://forbes-automotive.com/?utm_source=github&utm_medium=readme&utm_campaign=openhaldex" target="_blank">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="/Images/FA-logo-white.png">
@@ -241,7 +241,7 @@ data[7] = pedal_value
 
 ## Wi‑Fi Setup
 
-1. Connect to the access point **OpenHaldex‑C6**
+1. Connect to the access point **OpenHaldex‑C6** (open by default).
 2. Open a browser and navigate to
 
 ```
@@ -250,7 +250,12 @@ data[7] = pedal_value
 
 3. Access the Web UI
 
-A password for the access point can be set from the Settings page. If you are locked out or forget your password, long-pressing the `Mode` button will reset the Wi‑Fi password and restore the standard open connection.
+From the **Diagnostics** page you can:
+
+- **Change the WiFi Name (SSID)** — set any 1–32 character printable name (e.g. `MyHaldex`, `MK7-R`). The AP restarts immediately on save.
+- **Set / change the WiFi Password** — WPA2, minimum 8 characters. Leave blank for an open network.
+
+If you are locked out or forget your password, **long-pressing the `Mode` button** will clear the WiFi password and restore the open AP. The SSID is preserved (use **Reset to Default** in the UI if you want to revert the name to `OpenHaldex-C6`).
 
 <p align="center">
   <img src="/Images/UIDemo.png" alt="OpenHaldex C6 Web UI" width="900" style="max-width:100%;">
@@ -258,22 +263,83 @@ A password for the access point can be set from the Settings page. If you are lo
 
 If the Wi‑Fi interface becomes unresponsive:
 
-- Long‑press the `Mode` button to reset Wi‑Fi.
+- Long‑press the `Mode` button to clear the WiFi password and restart the AP open.
 
 ---
 
 ## Low Power Mode
 
-After **5 minutes** with no Wi‑Fi clients connected and no CAN activity, the controller automatically shuts down the Wi‑Fi AP and turns off the LED. This happens regardless of any other settings. As soon as CAN traffic returns — typically the moment the car wakes up — Wi‑Fi is restored automatically. No user action is required.
+OpenHaldex C6 is designed to live on a **permanent +12 V** feed without flattening your battery. With Low Power Mode configured correctly the controller draws approximately:
 
-**CAN Sleep** is an additional, optional setting available on the Settings page. When enabled, the ESP32‑C6 CPU will also enter light sleep whenever FreeRTOS is idle. The TWAI peripheral is configured to power down during light sleep but preserves its registers and receive queue across cycles, so the controller resumes cleanly on the next CAN frame without losing anything.
+| State | Current |
+|---|---|
+| Sleeping (car off, WiFi off, CAN quiet) | **~14 mA** |
+| Awake (CAN activity detected *or* WiFi client connected) | **~50 mA** |
 
-Enabling CAN Sleep is most beneficial on installs where the module has a permanent +12V supply. If the connector is already switched off with ignition, it is less relevant.
+There are three layers of power saving. Each layer builds on the previous one and all are configured from the **Settings** page.
 
-When enabled, stay connected and monitor the number of Chassis frames when the car is asleep (in Settings).  Adjust the LP slider to be above that value.  After this and no WiFi connections, the ESP will go to sleep and re-wake when the CAN traffic begins again (car unlocked).  
+---
 
-When in standalone mode, the Haldex ECU will go to sleep fully, so ANY CAN traffic here will wake the module.
+### Layer 1 — Idle AP Shutdown *(always active, no setup needed)*
 
+After **5 minutes** with no WiFi clients connected and no CAN activity, the controller automatically shuts down the WiFi AP and turns off the LED. This runs regardless of any other Low Power settings.
+
+As soon as CAN traffic resumes — typically the instant the car wakes up — WiFi is restored automatically. No user action required.
+
+---
+
+### Layer 2 — CAN Sleep *(optional)*
+
+Enable the **CAN Sleep** toggle in Settings. When active:
+
+- The ESP32-C6 CPU enters **light sleep** whenever FreeRTOS is idle, cutting CPU power consumption significantly.
+- The TWAI (CAN) peripheral powers down during sleep but **preserves its registers and receive queue** across cycles, so no messages are lost on wake-up.
+- The CAN transceiver chips remain powered and continue listening on the bus, so the first incoming frame wakes the controller instantly.
+
+This mode gives the majority of power savings for most installs and is the recommended starting point.
+
+---
+
+### Layer 3 — CAN Sleep (Aggressive) *(optional, builds on Layer 2)*
+
+Enable **CAN Sleep (Aggressive)** in Settings — everything from Layer 2 remains active, plus:
+
+- **The CAN transceiver chips are completely shut down** (standby pin asserted). This eliminates the ~10 mA standby draw per transceiver.
+- The CPU minimum clock drops to **10 MHz**.
+- WiFi AP transmit power is trimmed to reduce active-client current.
+- Wake is **interrupt-driven**: a GPIO ISR on each CAN_RX line fires on the first bus edge and re-enables the transceivers within microseconds. 
+
+Use Aggressive mode when the car sits unused for days at a time and you want the absolute lowest standby current (~14 mA).
+
+---
+
+### How to set it up
+
+Low Power Mode requires **one short calibration step** the first time, because every car idles its CAN bus at a slightly different rate.
+
+**Step 1 — Measure your Sleeping CAN rate**
+
+1. Park and lock the car. Wait 30 minutes or until the Chassis bus goes fully quiet.
+2. Stay connected to the OpenHaldex WiFi AP — the controller will remain awake while a client is connected.
+3. Open the Web UI → **Settings** and watch the **Chassis fps** and **Haldex fps** counters.
+4. Note the highest reading you see while the car is asleep. Most cars show **0 fps**; some show a handful of fps from a periodic gateway heartbeat.
+
+**Step 2 — Set the wake threshold**
+
+5. Set the **LP Wake Threshold (fps)** slider to a value **above** the parked-bus reading — e.g. if the bus is quiet at 0 fps, set the slider to **5**; if it idles at 8 fps, set the slider to **15**.
+
+**Step 3 — Enable Sleep and Disconnect**
+
+6. Enable **CAN Sleep** (and optionally **CAN Sleep (Aggressive)**) in Settings.
+7. **Disconnect from the WiFi AP** (close the browser / forget the network).
+
+The controller will now sleep, drawing ~14 mA, and **wake automatically whenever the CAN frame rate rises above the threshold** — i.e. when you unlock or start the car.
+
+> [!NOTE]
+> **Standalone mode:** with no chassis bus, the Haldex ECU itself sleeps fully, so any Haldex-bus CAN traffic wakes the module regardless of the slider value.
+
+> [!NOTE]
+> **Switched-ignition installs:** if the module is already powered off with the ignition, Low Power Mode saves little and is optional.
 ---
 
 ## Installation
