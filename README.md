@@ -129,7 +129,9 @@ These two high‑side drivers for brake/handbrake could be repurposed for other 
 - Generation 2 - PQ
 - Generation 4 - PQ
 - Generation 4 - GM
-- Generation 5 - MQB
+- Generation 4 - Ford (ongoing)
+- Generation 5 - MQB (0CQ)
+- Generation 5 - PQ (0AY)
 
 ---
 
