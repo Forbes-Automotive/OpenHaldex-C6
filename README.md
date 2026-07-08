@@ -21,7 +21,7 @@
 
 </p>
 
-OpenHaldex is a **Haldex AWD controller** for Volkswagen and Audi Group vehicles using Haldex Generation 1, 2, 4 (PQ Chassis) and 5 (MQB) differentials. The full source and hardware files are published for personal, non‑commercial use under the Forbes Automotive Source‑Available License (FASL) v1.0, and it incorporates MIT‑licensed upstream work — see [Licensing](#licensing).
+OpenHaldex is a **open-source Haldex AWD controller** for Volkswagen and Audi Group vehicles using Haldex Generation 1, 2, 4 (PQ Chassis) and 5 (MQB) differentials. The full source and hardware files are published under the permissive **MIT License**, so anyone is free to use, modify, and redistribute them, and it incorporates MIT‑licensed upstream work — see [Licensing](#licensing).
 
 Install is easy with the new harnesses for later PQ & MQB chassis:
 
@@ -545,15 +545,17 @@ Pinout and functionality remain consistent across supported enclosure versions.
 
 ## Licensing
 
-OpenHaldex‑C6 is **source‑available**, not "open source" in the [OSI](https://opensource.org/osd) sense. The firmware source and the hardware design files (Gerbers, schematics, PCB layouts and enclosure files) are published so you can build, inspect, modify and fabricate a controller **for your own personal, non‑commercial use** — they are **not** licensed for commercial mass production, bulk PCB fabrication, or the sale of compiled binaries or hardware without written permission.
+OpenHaldex‑C6 is **open source** under the permissive [MIT License](https://opensource.org/licenses/MIT). The firmware source and the hardware design files (Gerbers, schematics, PCB layouts and enclosure files) are published so you can freely build, inspect, modify, redistribute and fabricate a controller for any purpose, including commercial use, subject only to preserving the copyright and license notices.
 
-- **Forbes Automotive original code and hardware design files** (Gen2 / Gen4 / Gen5 work, PCB Gerbers, schematics and enclosure files) — **Forbes Automotive Source‑Available License (FASL) v1.0**. See [LICENSE.md](LICENSE.md).
-- **OpenHaldex‑S3 derived portions** (Chris / meatro) — **MIT**. These remain under MIT; the MIT notice must be preserved and MIT permits commercial use of those firmware portions.
-- **Original OpenHaldex (Gen1, ABangingDonk)** — upstream basis; see notice file.
+- **Forbes Automotive original code and hardware design files** (Gen2 / Gen4 / Gen5 work, PCB Gerbers, schematics and enclosure files) — **MIT License**. See [LICENSE.md](LICENSE.md).
+- **OpenHaldex‑S3 derived portions** (Chris / meatro) — **MIT**. These remain under MIT; the MIT notice must be preserved.
+- **Original OpenHaldex (Gen1, ABangingDonk)**.
 
 Full attribution and upstream license texts are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). If you redistribute source or binaries, keep the third‑party notices and license texts with the distribution.
 
-> **In short:** build one for yourself — that's encouraged. Manufacturing these PCBs in bulk to sell or ship is not permitted without written permission.
+**One UI condition:** any modification or redistribution of the web UI (the `data/` assets) must retain the **OpenHaldex‑C6** banner in some visible, user‑facing form. You can restyle or reposition it, but the name identifying the origin of the interface must stay. See [LICENSE.md](LICENSE.md).
+
+> **In short:** use it, build it, modify it, redistribute it — that's all encouraged. Just keep the copyright and license notices intact, and keep the OpenHaldex‑C6 banner in the UI.
 
 ---
 

@@ -1,13 +1,12 @@
 # Third-Party Notices
 
-OpenHaldex-C6 is distributed under the **Forbes Automotive Source-Available License
-(FASL) v1.0** for the portions original to Forbes Automotive.
+OpenHaldex-C6 is distributed under the **MIT License** for the portions original
+to Forbes Automotive.
 
 It also incorporates and derives from third-party work that is licensed
 separately. Those portions retain their original licenses. Where a conflict exists
-between FASL and an upstream license, **the upstream license governs the upstream
-portions.** In particular, MIT-licensed portions remain usable under the MIT terms
-(including commercial use) regardless of FASL.
+between the MIT License and an upstream license, **the upstream license governs the
+upstream portions.**
 
 This file records the upstream projects, the components derived from them, and the
 license/permission basis relied upon.
@@ -35,7 +34,7 @@ license/permission basis relied upon.
 
 > MIT requires that the copyright notice and permission notice below be retained in
 > all copies or substantial portions of the derived code. These portions remain
-> available under MIT and are not restricted by FASL.
+> available under MIT.
 
 ### MIT License (OpenHaldex-S3)
 
@@ -70,16 +69,16 @@ SOFTWARE.
 - Portions original to Forbes Automotive (including Gen2 / Gen4 / Gen5 reverse
   engineering and implementation, other Forbes-authored code, and the hardware
   design files — Gerbers, schematics, PCB layouts and enclosure files) are
-  distributed under the **Forbes Automotive Source-Available License (FASL) v1.0**.
+  distributed under the **MIT License**.
   See `LICENSE.md`.
 
 ---
 
 ## Summary of licensing model
 
-- **Project labeling:** OpenHaldex-C6 is **source-available**, not "open source" in
-  the OSI sense. FASL restricts commercial use and redistribution.
+- **Project labeling:** OpenHaldex-C6 is **open source** under the permissive MIT
+  License, which permits use, modification, redistribution and commercial use.
 - **MIT portions** (OpenHaldex-S3 derived, and any MIT-basis upstream) remain under
   MIT and may be used commercially by others under MIT terms.
 - **Attribution:** upstream copyright and permission notices must be preserved in
-  source and binary distributions, per both MIT and FASL redistribution terms.
+  source and binary distributions, per the MIT redistribution terms.
