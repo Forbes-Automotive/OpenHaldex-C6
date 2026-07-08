@@ -82,6 +82,11 @@ static void resetGvretParser() {
 
 // Control replies are part of the GVRET handshake; deliver them reliably.
 static bool gvretWriteBlocking(const uint8_t *data, size_t len, uint32_t timeoutMs) {
+  if (analyzerSerial) {
+    Serial.write(data, len);
+    return true;
+  }
+
   if (!analyzerClient || !analyzerClient.connected()) {
     return false;
   }
@@ -108,6 +113,11 @@ static bool gvretWriteBlocking(const uint8_t *data, size_t len, uint32_t timeout
 
 // Frame streaming is best-effort; drop if TCP can't keep up.
 static bool gvretWriteNonBlocking(const uint8_t *data, size_t len) {
+  if (analyzerSerial) {
+    Serial.write(data, len);
+    return true;
+  }
+
   if (!analyzerClient || !analyzerClient.connected()) {
     return false;
   }
@@ -356,6 +366,10 @@ static uint32_t parseHexId(const char *text, size_t len, bool &ok) {
 }
 
 static void slcanSendAck() {
+  if (analyzerSerial) {
+    Serial.write('\r');
+    return;
+  }
   if (analyzerClient && analyzerClient.connected()) {
     analyzerClient.write("\r");
   }
@@ -476,8 +490,10 @@ static void slcanSendFrame(const AnalyzerFrame &entry) {
   *ptr++ = '\r';
   *ptr = '\0';
 
-  if (analyzerClient && analyzerClient.connected()) {
-    size_t len = (size_t)(ptr - buffer);
+  size_t len = (size_t)(ptr - buffer);
+  if (analyzerSerial) {
+    Serial.write((const uint8_t *)buffer, len);
+  } else if (analyzerClient && analyzerClient.connected()) {
     // Best-effort send; attempt once and drop if it doesn't fully send.
     size_t written = analyzerClient.write((const uint8_t *)buffer, len);
     (void)written;
@@ -500,17 +516,55 @@ static void analyzerCloseClient() {
 }
 
 static void analyzerTask(void *arg) {
-  // Handles TCP IO and dequeues CAN frames when analyzerMode is active.
+  // Handles IO and dequeues CAN frames when analyzerMode or analyzerSerial is active.
   (void)arg;
 
+  bool serialStarted = false;
   uint32_t framesDequeued = 0;
+
   while (1) {
-    if (!analyzerMode) {
+    if (!analyzerMode && !analyzerSerial) {
+      // Neither mode active: close WiFi client if any, reset Serial-started flag.
       analyzerCloseClient();
       analyzerServerStarted = false;
+      if (serialStarted) {
+        serialStarted = false;
+        resetGvretParser();
+      }
       vTaskDelay(kAnalyzerPollDelayMs / portTICK_PERIOD_MS);
       continue;
     }
+
+    if (!analyzerQueue) {
+      vTaskDelay(kAnalyzerPollDelayMs / portTICK_PERIOD_MS);
+      continue;
+    }
+
+    // --- Serial GVRET mode (SavvyCAN over USB/Serial at 1 Mbaud) ---
+    if (analyzerSerial) {
+      if (!serialStarted) {
+        Serial.begin(1000000);
+        Serial.setTxTimeoutMs(10);
+        serialStarted = true;
+        resetGvretParser();
+        DEBUG("[Analyzer] Serial GVRET started at 1 Mbaud");
+      }
+      // Always GVRET for serial
+      while (Serial.available()) {
+        uint8_t byteIn = (uint8_t)Serial.read();
+        gvretHandleByte(byteIn);
+      }
+      AnalyzerFrame entry;
+      while (xQueueReceive(analyzerQueue, &entry, 0) == pdTRUE) {
+        framesDequeued++;
+        gvretSendFrame(entry);
+      }
+      vTaskDelay(kAnalyzerPollDelayMs / portTICK_PERIOD_MS);
+      continue;
+    }
+
+    // --- WiFi GVRET / SLCAN mode ---
+    serialStarted = false;
 
     if (analyzerActiveProtocol != analyzerProtocol) {
       analyzerActiveProtocol = analyzerProtocol;
@@ -520,11 +574,6 @@ static void analyzerTask(void *arg) {
     if (WiFi.getMode() == WIFI_OFF) {
       analyzerCloseClient();
       analyzerServerStarted = false;
-      vTaskDelay(kAnalyzerPollDelayMs / portTICK_PERIOD_MS);
-      continue;
-    }
-
-    if (!analyzerQueue) {
       vTaskDelay(kAnalyzerPollDelayMs / portTICK_PERIOD_MS);
       continue;
     }
@@ -589,20 +638,35 @@ void setupAnalyzer() {
 void setAnalyzerMode(bool enable) {
   analyzerMode = enable;
   if (analyzerMode) {
+    analyzerSerial = false; // mutually exclusive with Serial mode
     // Analyzer mode should not transmit control frames; force controller off.
     if (!disableController) {
       disableController = true;
     }
   }
   if (!analyzerMode && analyzerQueue) {
-    xQueueReset(analyzerQueue); 
+    xQueueReset(analyzerQueue);
+  }
+}
+
+void setAnalyzerSerialMode(bool enable) {
+  analyzerSerial = enable;
+  if (analyzerSerial) {
+    analyzerMode = false; // mutually exclusive with WiFi mode
+    // Serial analyzer also bypasses control frames.
+    if (!disableController) {
+      disableController = true;
+    }
+  }
+  if (!analyzerSerial && analyzerQueue) {
+    xQueueReset(analyzerQueue);
   }
 }
 
 void analyzerQueueFrame(const twai_message_t &frame, uint8_t bus) {
   static uint32_t framesEnqueued = 0;
   static uint32_t framesDropped = 0;
-  if (!analyzerMode || !analyzerQueue) {
+  if ((!analyzerMode && !analyzerSerial) || !analyzerQueue) {
     return;
   }
 

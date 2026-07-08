@@ -1,6 +1,7 @@
 #include <OpenHaldexC6_API.h>
 #include <OpenHaldexC6_UDS.h>
 #include <OpenHaldexC6_Calculations.h>
+#include <OpenHaldexC6_WiFi.h>
 
 #include <cstring>
 
@@ -104,21 +105,26 @@ static void statusOutgoing(AsyncWebServerRequest *request)
 
     data["mode"] = state.mode;
 
+    // Ext-button force flag is driven by the external button
+    data["extButtonActive"] = extButtonForceModeFlag;
+
     if (chassisOk) // if chassis CAN ok, set related values
     {
         data["speed"] = received_vehicle_speed;
         data["throttle"] = int(received_pedal_value);
         data["asrOn"] = !asrForceModeFlag;
         data["tcOn"] = !tcForceModeFlag;
+        data["hazardActive"] = hazardForceModeFlag;
         data["rpm"] = received_vehicle_rpm;
         data["boost"] = received_vehicle_boost;
     }
-    else // if chassis CAN not ok, set related values to
+    else // if chassis CAN not ok, set related values to null (displayed as "--" in the UI)
     {
         data["speed"] = nullptr;
         data["throttle"] = nullptr;
         data["asrOn"] = nullptr;
         data["tcOn"] = nullptr;
+        data["hazardActive"] = nullptr;
         data["rpm"] = nullptr;
         data["boost"] = nullptr;
     }
@@ -127,6 +133,26 @@ static void statusOutgoing(AsyncWebServerRequest *request)
     data["brakeOut"] = brakeActive;
     data["handbrakeIn"] = handbrakeSignalActive;
     data["handbrakeOut"] = handbrakeActive;
+
+    // CAN-decoded brake / handbrake state (MQB has both; PQ has brake only -
+    // PQ handbrake remains on the physical GPIO).
+    if (chassisOk)
+    {
+        data["brakeFromCAN"] = brakeFromCAN;
+        if (haldexGeneration == 50)
+        {
+            data["handbrakeFromCAN"] = handbrakeFromCAN;
+        }
+        else
+        {
+            data["handbrakeFromCAN"] = nullptr; // for non-MQB platforms, set to null (displayed as "--" in the UI) since we don't have this data from CAN
+        }
+    }
+    else
+    {
+        data["brakeFromCAN"] = nullptr;     // if chassis CAN not ok, set to null (displayed as "--" in the UI)
+        data["handbrakeFromCAN"] = nullptr; // if chassis CAN not ok, set to null (displayed as "--" in the UI)
+    }
 
     data["lockTarget"] = int(lock_target);
 
@@ -141,8 +167,29 @@ static void statusOutgoing(AsyncWebServerRequest *request)
         data["tempProtection"] = received_temp_protection;
         data["couplingOpen"] = received_coupling_open;
         data["speedLimit"] = received_speed_limit;
+
+        if (haldexGeneration == 41)
+        {
+            JsonObject gen41 = data["gen41"].to<JsonObject>();
+            JsonObject sec = gen41["secAxle"].to<JsonObject>();
+            sec["statusRaw"] = received_sec_axle_status_raw;
+            sec["torqueNm"] = received_sec_axle_torque_nm;
+            sec["clutchState"] = received_sec_axle_clutch_state;
+            sec["active"] = received_sec_axle_active;
+            sec["fdcmHealthy"] = received_sec_axle_fdcm_healthy;
+            sec["arc"] = received_sec_axle_arc;
+            JsonObject rear = gen41["rearAxle"].to<JsonObject>();
+            rear["statusFlags"] = received_rear_axle_status_flags;
+            rear["metricA"] = received_rear_axle_metric_a;
+            rear["metricB"] = received_rear_axle_metric_b;
+            JsonObject hb = gen41["heartbeat"].to<JsonObject>();
+            hb["aliveBus0"] = received_haldex_alive_bus0;
+            hb["drivetrainOk"] = received_drivetrain_state_ok;
+            hb["aliveBus0AgeMs"] = received_haldex_alive_bus0_ms ? (millis() - received_haldex_alive_bus0_ms) : 0;
+            hb["drivetrainAgeMs"] = received_drivetrain_state_ms ? (millis() - received_drivetrain_state_ms) : 0;
+        }
     }
-    else // if haldex CAN not ok, set related values to "--"
+    else // if haldex CAN not ok, set related values to null (displayed as "--" in the UI)
     {
         data["lockActual"] = nullptr;
         data["haldexState"] = nullptr;
@@ -161,8 +208,23 @@ static void statusOutgoing(AsyncWebServerRequest *request)
     data["lastChassisMs"] = lastCANChassisTick > 0 ? (millis() - lastCANChassisTick) : 0;
     data["lastHaldexMs"] = lastCANHaldexTick > 0 ? (millis() - lastCANHaldexTick) : 0;
 
+    if (haldexOk && udsMQBEnabled)
+    {
+        JsonObject uds = data["uds"].to<JsonObject>();
+        uds["terminalVoltage"] = udsTerminalVoltage;
+        uds["moduleTemp"] = udsModuleTemp;
+        uds["clutchTemp"] = udsClutchTemp;
+        uds["coolingFinTemp"] = udsCoolingFinTemp;
+        uds["clutchCurrent"] = udsClutchCurrent;
+        uds["clutchPWM"] = udsClutchPWM;
+        uds["clutchVoltage"] = udsClutchVoltage;
+        uds["blockagePct"] = udsBlockagePct;
+    }
+
     data["uptimeMs"] = millis();
     data["freeHeap"] = ESP.getFreeHeap();
+    data["lpChassisFrameCount"] = lpChassisFrameCount;
+    data["lpHaldexFrameCount"] = lpHaldexFrameCount;
 
     const int cpuUsage = getCPUUsagePercent(); // calculate CPU usage percentage using FreeRTOS task run time stats
     if (cpuUsage >= 0)
@@ -183,7 +245,9 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
     JsonDocument data;
     // values
     data["haldexGeneration"] = haldexGeneration;
-    data["forceModeValue"] = forceModeValue;
+    data["tcForceModeValue"] = tcForceModeValue;
+    data["hazardForceModeValue"] = hazardForceModeValue;
+    data["extBtnForceModeValue"] = extBtnForceModeValue;
     data["disengageUnderSpeed"] = disengageUnderSpeed;
     data["disengageAboveSpeed"] = disengageAboveSpeed;
     data["disableThrottle"] = disableThrottle;
@@ -194,11 +258,21 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
     // bools
     data["disableController"] = disableController;
     data["isStandalone"] = isStandalone;
+    data["useCANifAvailable"] = useCANifAvailable;
     data["tcForceMode"] = tcForceMode;
     data["extButtonForceMode"] = extBtnForceMode;
+    data["hazardForceMode"] = hazardForceMode;
 
     data["disableOnboardButton"] = disableOnboardButton;
     data["disableExternalButton"] = disableExternalButton;
+    data["fixHunting"] = fixHunting;
+    data["canSleepEnabled"] = canSleepEnabled;
+    data["canSleepAggressive"] = canSleepAggressive;
+    data["lpWakeThresholdFps"] = lpWakeThresholdFps;
+
+    data["analyzerMode"] = analyzerMode;
+    data["analyzerSerial"] = analyzerSerial;
+    data["udsMQBEnabled"] = udsMQBEnabled;
 
     data["followBrake"] = followBrake;
     data["invertBrake"] = invertBrake;
@@ -206,6 +280,8 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
     data["invertHandbrake"] = invertHandbrake;
 
     data["broadcastOpenHaldexOverCAN"] = broadcastOpenHaldexOverCAN;
+
+    data["ledBrightness"] = ledBrightness;
 
     // throttle/speed/lock array send
     // row array
@@ -249,17 +325,32 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
     if (data["haldexGeneration"].is<uint8_t>())
     {
         int generation = data["haldexGeneration"];
-        if (generation == 1 || generation == 2 || generation == 4 || generation == 5 || generation == 41)
+        if (generation == 1 || generation == 2 || generation == 4 || generation == 50 || generation == 51 || generation == 41)
         {
             haldexGeneration = (uint8_t)generation;
             lastMode = generation;
         }
     }
 
-    if (data["forceModeValue"].is<uint8_t>())
+    if (data["tcForceModeValue"].is<uint8_t>())
     {
-        forceModeValue = (uint8_t)data["forceModeValue"];
-        DEBUG("forcemodevalue: %d", forceModeValue);
+        uint8_t v = data["tcForceModeValue"];
+        if (v < 6)
+            tcForceModeValue = v;
+    }
+
+    if (data["hazardForceModeValue"].is<uint8_t>())
+    {
+        uint8_t v = data["hazardForceModeValue"];
+        if (v < 6)
+            hazardForceModeValue = v;
+    }
+
+    if (data["extBtnForceModeValue"].is<uint8_t>())
+    {
+        uint8_t v = data["extBtnForceModeValue"];
+        if (v < 6)
+            extBtnForceModeValue = v;
     }
 
     if (data["disengageUnderSpeed"].is<uint16_t>())
@@ -307,6 +398,10 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
             vTaskSuspend(handle_frames25);
             vTaskSuspend(handle_frames20);
             vTaskSuspend(handle_frames10);
+            vTaskSuspend(handle_frames13);
+            vTaskSuspend(handle_frames50);
+            vTaskSuspend(handle_frames250);
+            vTaskSuspend(handle_gen41_dual_bus_rates);
         }
         else
         {
@@ -316,12 +411,31 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
             vTaskResume(handle_frames25);
             vTaskResume(handle_frames20);
             vTaskResume(handle_frames10);
+            vTaskResume(handle_frames13);
+            vTaskResume(handle_frames50);
+            vTaskResume(handle_frames250);
+            vTaskResume(handle_gen41_dual_bus_rates);
         }
     }
 
     if (data["analyzerMode"].is<bool>())
     {
         setAnalyzerMode(data["analyzerMode"]);
+    }
+
+    if (data["analyzerSerial"].is<bool>())
+    {
+        setAnalyzerSerialMode(data["analyzerSerial"]);
+    }
+
+    if (data["udsMQBEnabled"].is<bool>())
+    {
+        udsMQBEnabled = data["udsMQBEnabled"];
+    }
+
+    if (data["useCANifAvailable"].is<bool>())
+    {
+        useCANifAvailable = data["useCANifAvailable"];
     }
 
     if (data["tcForceMode"].is<bool>())
@@ -334,6 +448,16 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
         extBtnForceMode = data["extButtonForceMode"];
     }
 
+    if (data["hazardForceMode"].is<bool>())
+    {
+        hazardForceMode = data["hazardForceMode"];
+        if (!hazardForceMode)
+        {
+
+            hazardForceModeFlag = false; // clear active flag when feature is disabled
+        }
+    }
+
     if (data["disableOnboardButton"].is<bool>())
     {
         disableOnboardButton = data["disableOnboardButton"];
@@ -344,6 +468,30 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
         disableExternalButton = data["disableExternalButton"];
     }
 
+    if (data["fixHunting"].is<bool>())
+    {
+        fixHunting = data["fixHunting"];
+    }
+
+    if (data["canSleepEnabled"].is<bool>())
+    {
+        canSleepEnabled = data["canSleepEnabled"];
+        // Aggressive depends on the sleep path (esp_pm_configure / light sleep).
+        // Disabling the base feature should also disable aggressive mode
+        if (!canSleepEnabled)
+            canSleepAggressive = false;
+    }
+    if (data["canSleepAggressive"].is<bool>())
+    {
+        canSleepAggressive = data["canSleepAggressive"];
+        // Enabling aggressive implies the base sleep path is on.
+        if (canSleepAggressive)
+            canSleepEnabled = true;
+    }
+    if (data["lpWakeThresholdFps"].is<uint16_t>())
+    {
+        lpWakeThresholdFps = constrain((uint16_t)data["lpWakeThresholdFps"], 0, 2000);
+    }
     if (data["followBrake"].is<bool>())
     {
         followBrake = data["followBrake"];
@@ -367,6 +515,11 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
     if (data["broadcastOpenHaldexOverCAN"].is<bool>())
     {
         broadcastOpenHaldexOverCAN = data["broadcastOpenHaldexOverCAN"];
+    }
+
+    if (data["ledBrightness"].is<int>())
+    {
+        ledBrightness = (uint8_t)constrain((int)data["ledBrightness"], 0, 255);
     }
 
     JsonDocument resp;
@@ -459,7 +612,7 @@ void setupWebServer()
     if (!LittleFS.begin(false))
     {
         DEBUG("LittleFS mount failed!"); // littleFS didn't mount
-        // add a warning function - flashing LED?
+        // add a warning visual - flashing LED?
         return;
     }
     DEBUG("LittleFS mounted successfully");
@@ -612,4 +765,132 @@ void setupAPI()
                      JsonDocument resp;
                      resp["ok"] = true;
                      sendJSON(request, 200, resp); });
+
+    // NOTE: route registration order matters. ESPAsyncWebServer's URL matcher
+    // accepts a registered "/api/wifi" handler for any URL that starts with
+    // "/api/wifi/" (see WebHandlerImpl.h canHandle). The more-specific routes 
+    // must be registered BEFORE "/api/wifi"
+    // or POSTs to "/api/wifi/ssid" get missed 
+
+    // POST /api/wifi/ssid/reset - restore factory SSID and restart AP
+    webServer.on("/api/wifi/ssid/reset", HTTP_POST, [](AsyncWebServerRequest *request)
+                 {
+                     resetWifiSsid();
+                     JsonDocument resp;
+                     resp["ok"] = true;
+                     resp["ssid"] = wifiSsid;
+                     sendJSON(request, 200, resp); });
+
+    // GET /api/wifi/ssid - return current AP SSID
+    webServer.on("/api/wifi/ssid", HTTP_GET, [](AsyncWebServerRequest *request)
+                 {
+                     JsonDocument resp;
+                     resp["ssid"] = wifiSsid;
+                     resp["default"] = wifiHostNameDefault;
+                     sendJSON(request, 200, resp); });
+
+    // POST /api/wifi/ssid - change AP SSID; AP restarts immediately
+    webServer.on(
+        "/api/wifi/ssid", HTTP_POST, [](AsyncWebServerRequest *request)
+        { (void)request; }, nullptr,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
+        {
+            parseJSON(request, data, len, index, total, [](AsyncWebServerRequest *req, const String &body)
+                      {
+                JsonDocument d;
+                if (deserializeJson(d, body) != DeserializationError::Ok)
+                {
+                    JsonDocument resp; resp["ok"] = false; resp["error"] = "Invalid JSON";
+                    sendJSON(req, 400, resp); return;
+                }
+                if (!d["ssid"].is<const char *>())
+                {
+                    JsonDocument resp; resp["ok"] = false; resp["error"] = "Missing 'ssid' field";
+                    sendJSON(req, 400, resp); return;
+                }
+                const char *newSsid = d["ssid"];
+                const size_t ssidLen = strlen(newSsid);
+                if (ssidLen < 1)
+                {
+                    JsonDocument resp; resp["ok"] = false; resp["error"] = "SSID must be at least 1 character";
+                    sendJSON(req, 400, resp); return;
+                }
+                if (ssidLen > 32)
+                {
+                    JsonDocument resp; resp["ok"] = false; resp["error"] = "SSID too long (max 32)";
+                    sendJSON(req, 400, resp); return;
+                }
+                // basic printable-ASCII guard (reject control chars / non-ASCII to keep AP discoverable)
+                for (size_t i = 0; i < ssidLen; ++i)
+                {
+                    unsigned char c = (unsigned char)newSsid[i];
+                    if (c < 0x20 || c > 0x7E)
+                    {
+                        JsonDocument resp; resp["ok"] = false; resp["error"] = "SSID must be printable ASCII";
+                        sendJSON(req, 400, resp); return;
+                    }
+                }
+                memset(wifiSsid, 0, sizeof(wifiSsid));
+                strncpy(wifiSsid, newSsid, sizeof(wifiSsid) - 1);
+                rebootWiFi = true; // restart AP with new SSID
+                JsonDocument resp;
+                resp["ok"] = true;
+                resp["ssid"] = wifiSsid;
+                sendJSON(req, 200, resp); });
+        });
+
+    // POST /api/wifi/reset - clear password and restart AP as open network
+    webServer.on("/api/wifi/reset", HTTP_POST, [](AsyncWebServerRequest *request)
+                 {
+                     resetWifiPassword();
+                     JsonDocument resp;
+                     resp["ok"] = true;
+                     sendJSON(request, 200, resp); });
+
+    // GET /api/wifi - return whether a WiFi password is currently set
+    webServer.on("/api/wifi", HTTP_GET, [](AsyncWebServerRequest *request)
+                 {
+                     JsonDocument resp;
+                     resp["passwordSet"] = (strlen(wifiPassword) >= 8);
+                     sendJSON(request, 200, resp); });
+
+    // POST /api/wifi - set or clear WiFi password; AP restarts immediately
+    webServer.on(
+        "/api/wifi", HTTP_POST, [](AsyncWebServerRequest *request)
+        { (void)request; }, nullptr,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
+        {
+            parseJSON(request, data, len, index, total, [](AsyncWebServerRequest *req, const String &body)
+                      {
+                JsonDocument d;
+                if (deserializeJson(d, body) != DeserializationError::Ok)
+                {
+                    JsonDocument resp; resp["ok"] = false; resp["error"] = "Invalid JSON";
+                    sendJSON(req, 400, resp); return;
+                }
+                if (!d["password"].is<const char *>())
+                {
+                    JsonDocument resp; resp["ok"] = false; resp["error"] = "Missing 'password' field";
+                    sendJSON(req, 400, resp); return;
+                }
+                const char *newPwd = d["password"];
+                const size_t pwdLen = strlen(newPwd);
+                if (pwdLen > 0 && pwdLen < 8)
+                {
+                    JsonDocument resp; resp["ok"] = false; resp["error"] = "Password must be at least 8 characters or empty";
+                    sendJSON(req, 400, resp); return;
+                }
+                if (pwdLen >= 65)
+                {
+                    JsonDocument resp; resp["ok"] = false; resp["error"] = "Password too long (max 64)";
+                    sendJSON(req, 400, resp); return;
+                }
+                memset(wifiPassword, 0, sizeof(wifiPassword));
+                if (pwdLen > 0) strncpy(wifiPassword, newPwd, sizeof(wifiPassword) - 1);
+                rebootWiFi = true; // restart AP with new credentials
+                JsonDocument resp;
+                resp["ok"] = true;
+                resp["passwordSet"] = (pwdLen >= 8);
+                sendJSON(req, 200, resp); });
+        });
 }

@@ -2,7 +2,7 @@
 #include <OpenHaldexC6_defs.h>
 
 // Current firmware version
-#define FW_VERSION "3.00.0" // update this with every firmware release AND change .html version query param to force cache refresh of web UI
+#define FW_VERSION "8.00.2" // update this with every firmware release AND change .html version query param to force cache refresh of web UI
 
 /*
 Version Control:
@@ -36,12 +36,31 @@ V2.10.0 - release
 V2.10.1 - fixed the CAN health - always showed Unhealthy because it wasn't updating the flag
 
 V3.00.0 - added support for Gen5 and Gen4 GM/SAAB Gen4 (but logged under 41 as in 4.1 since it's a variant of Gen4)
-V3.00.1 - added 'Disable Onboard Button' and 'Disable External Button' options to allow disabling of the onboard button
+V3.00.1 - added 'Disable Onboard Button' and 'Disable External Button' options to allow disabling of the onboard button & added Learn Haldex function
+
+V4.00.0 - added support for Gen41 dual-bus (late Insignia) - standalone frames, plus feedback decoding per GMW8762 PPEI
+V4.00.1 - added low power mode to disable WiFi AP when no CAN traffic for 5+ minutes and no clients connected, to reduce power consumption when used in a parked car. WiFi restarts automatically when CAN traffic returns.
+V4.00.2 - added Password Protection
+
+V5.00.0 - added 'Fix Hunting' option to switch Motor_11 to BPK packing, which can help with hunting at partial lock on 554K controllers
+
+V6.00.0 - added interrupt-based CAN handling, revised Hazard force mode handling, added LED brightness control, adjusted sleep configuration for low power mode 
+V6.01.0 - added WiFi naming and better sleep configuration for low power mode, added 'Follow Hazard' force mode option, added 'Disable Hazard Force Mode' option to allow disabling of hazard force mode when the hazard switch is active, added 'Hazard Force Mode Source' option to select which CAN signal is used to trigger hazard force mode (Blinkmodi_02 vs GATEWAY_72)
+
+V7.00.0 - added support for Gen5 (0AY) Haldex - a mix of Gen2 and Gen4 (but ultimately Gen5 chassis).
+
+V8.00.0 - added support for Ford (based on example CAN data, totally untested!)
+V8.00.1 - added fix for password and SSID change
+
+V8.00.2 - added fix for TC/hazards not re-enabling stock mode
+*/
+
+
+/*
 
 ** to do **:
         > add throttle/speed axis refresh
         > add 'ota' to match existing layout
         > add reduction in throttle/speed off
-        > look into correction_factor (_calculations.cpp) and look to adjust to bring request inline with actual
         > move CAN into interrupt based - ESP_INTR_FLAG_IRAM
 */

@@ -43,7 +43,7 @@ header {
 
 header h1 {
     font-size: 1.5rem;
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.25rem;
 }
 
 .status-bar {
@@ -128,6 +128,33 @@ header h1 {
     color: var(--text-dim);
     font-size: 0.9rem;
     margin-bottom: 1rem;
+}
+
+.state-legend {
+    margin-top: 0.75rem;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    line-height: 1.6;
+}
+.state-legend table {
+    border-collapse: collapse;
+    width: 100%;
+}
+.state-legend th, .state-legend td {
+    padding: 2px 6px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+}
+.state-legend th {
+    color: var(--text);
+    font-weight: 600;
+}
+.state-legend .bit-active {
+    color: var(--danger);
+    font-weight: 700;
+}
+.state-legend .bit-inactive {
+    color: var(--text-dim);
 }
 
 .mode-grid {
@@ -284,6 +311,51 @@ header h1 {
     font-size: 1.1rem;
     color: var(--primary);
     font-weight: 600;
+}
+
+/* Compact inline brightness row inside toggle-group */
+.brightness-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.brightness-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: 1;
+    color: var(--primary);
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.slider-inline {
+    flex: 1;
+    height: 6px;
+    background: var(--surface-light);
+    border-radius: 3px;
+    outline: none;
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+.slider-inline::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 18px;
+    height: 18px;
+    background: var(--primary);
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.slider-inline::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    background: var(--primary);
+    border-radius: 50%;
+    cursor: pointer;
+    border: none;
 }
 
 .toggle-group {
@@ -519,6 +591,15 @@ header h1 {
     gap: 0.75rem;
 }
 
+.subsection-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin: 1rem 0 0.5rem;
+}
+
 .diag-item {
     display: flex;
     justify-content: space-between;
@@ -616,3 +697,52 @@ header h1 {
         grid-template-columns: repeat(2, 1fr);
     }
 }*/
+
+/* WiFi password card */
+.wifi-password-row {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
+.input-wifi-password {
+    flex: 1;
+    padding: 0.75rem;
+    background: var(--surface-light);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 1rem;
+}
+
+.input-wifi-password::placeholder {
+    color: var(--text-dim);
+}
+
+.input-wifi-password:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+
+.btn-icon-eye {
+    padding: 0.75rem;
+    background: var(--surface-light);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 1.1rem;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: border-color 0.2s;
+}
+
+.btn-icon-eye:hover {
+    border-color: var(--primary);
+}
+
+.wifi-controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+    margin-top: 0.25rem;
+}

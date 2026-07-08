@@ -252,7 +252,7 @@ void handleOTAUpdate(AsyncWebServerRequest *request, String filename, size_t ind
     delay(1000);
 
     for (int i = 0; i <= 8; i++) {
-      strip.setLedColorData(led_channel, led_brightness/2, led_brightness/2, led_brightness/2);  // red
+      strip.setLedColorData(led_channel, ledBrightness/2, ledBrightness/2, ledBrightness/2);  // red
       strip.show();
       delay(50);
       strip.setLedColorData(led_channel, 0, 0, 0);  // red

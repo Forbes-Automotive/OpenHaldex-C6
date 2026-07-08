@@ -18,6 +18,7 @@
             <h1>OpenHaldex-C6</h1>
             <div class="status-bar">
                 <!--<span class="status-badge" id="wsStatus">Connecting...</span>-->
+                <span class="status-badge" id="modeStatus">Mode: --</span>
                 <span class="status-badge" id="canStatus">CAN: --</span>
             </div>
         </header>
@@ -87,7 +88,7 @@
                 </div>
             </section>
 
-            <section class="card">
+            <section class="card" id="haldexDataCard">
                 <h2>Haldex Data</h2>
                 <div class="gauge-grid">
                     <div class="gauge">
@@ -123,11 +124,86 @@
                 </div>
             </section>
 
-            <section>
+            <section class="card" id="gen41Card" style="display:none;">
+                <h2>Gen 4.1 (GM/SAAB) Data</h2>
+
+                <h3 class="subsection-title">Secondary Axle</h3>
+                <div class="diag-grid">
+                    <div class="diag-item">
+                        <span class="diag-label">Torque:</span>
+                        <span class="diag-value"><span id="g41SecTorqueNm">--</span> Nm</span>
+                    </div>
+                    <div class="diag-item">
+                        <span class="diag-label">Clutch State:</span>
+                        <span class="diag-value" id="g41SecClutchState">--</span>
+                    </div>
+                </div>
+
+                <h3 class="subsection-title">Rear Axle</h3>
+                <div class="diag-grid">
+                    <div class="diag-item">
+                        <span class="diag-label">Metric A:</span>
+                        <span class="diag-value" id="g41RearMetricA">--</span>
+                    </div>
+                    <div class="diag-item">
+                        <span class="diag-label">Metric B:</span>
+                        <span class="diag-value" id="g41RearMetricB">--</span>
+                    </div>
+                </div>
+            </section>
+
+            <section class="card">
                 <div class="gauge">
                     <div class="gauge-label">Haldex State</div>
                     <div class="gauge-value" id="haldexState">--</div>
                     <div class="gauge-unit"> bits</div>
+                </div>
+                <div id="haldexStateLegend" class="state-legend"></div>
+            </section>
+
+            <section class="card" id="udsDataCard" style="display:none;">
+                <h2>UDS Data (MQB)</h2>
+                <div class="gauge-grid">
+                    <div class="gauge">
+                        <div class="gauge-label">Terminal Volt.</div>
+                        <div class="gauge-value" id="udsTerminalVoltage">--</div>
+                        <div class="gauge-unit">V</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Module Temp</div>
+                        <div class="gauge-value" id="udsModuleTemp">--</div>
+                        <div class="gauge-unit">°C</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Clutch Temp</div>
+                        <div class="gauge-value" id="udsClutchTemp">--</div>
+                        <div class="gauge-unit">°C</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Fin Temp</div>
+                        <div class="gauge-value" id="udsCoolingFinTemp">--</div>
+                        <div class="gauge-unit">°C</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Clutch Current</div>
+                        <div class="gauge-value" id="udsClutchCurrent">--</div>
+                        <div class="gauge-unit">A</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">PWM Signal</div>
+                        <div class="gauge-value" id="udsClutchPWM">--</div>
+                        <div class="gauge-unit">%</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Voltage (2BE4)</div>
+                        <div class="gauge-value" id="udsClutchVoltage">--</div>
+                        <div class="gauge-unit">V</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Blockage</div>
+                        <div class="gauge-value" id="udsBlockagePct">--</div>
+                        <div class="gauge-unit">%</div>
+                    </div>
                 </div>
             </section>
         </div>
@@ -140,50 +216,17 @@
                     <option value="2">Generation 2</option>
                     <option value="3">Generation 3 - Volvo</option>
                     <option value="4">Generation 4</option>
-                    <option value="5">Generation 5</option>
+                    <option value="50">Generation 5 (0CQ)</option>
+                    <option value="51">Generation 5 (0AY)</option>
                     <option value="41">Generation 4 - GM/SAAB</option>
                 </select>
             </section>
 
-            <section class="card">
-                <h2>Controller Options</h2>
-                <div class="toggle-group">
-                    <label class="toggle">
-                        <input type="checkbox" id="disableController">
-                        <span class="toggle-slider"></span>
-                        <span class="toggle-label">Controller Disabled</span>
-                    </label>
-                    <label class="toggle">
-                        <input type="checkbox" id="isStandalone">
-                        <span class="toggle-slider"></span>
-                        <span class="toggle-label">Standalone Mode</span>
-                    </label>
-                    <label class="toggle">
-                        <input type="checkbox" id="broadcastOpenHaldexOverCAN">
-                        <span class="toggle-slider"></span>
-                        <span class="toggle-label">Broadcast over CAN</span>
-                    </label>
-                    <label class="toggle">
-                        <input type="checkbox" id="analyzerMode">
-                        <span class="toggle-slider"></span>
-                        <span class="toggle-label">Turn on SavvyCAN</span>
-                    </label>
-                    <label class="toggle">
-                        <input type="checkbox" id="disableOnboardButton">
-                        <span class="toggle-slider"></span>
-                        <span class="toggle-label">Disable Onboard Button</span>
-                    </label>
-                    <label class="toggle">
-                        <input type="checkbox" id="disableExternalButton">
-                        <span class="toggle-slider"></span>
-                        <span class="toggle-label">Disable External Button</span>
-                    </label>
-                </div>
-            </section>
-
             <section class="card" id="learnSection">
                 <h2>Learn Haldex</h2>
-                <p class="hint">Sweeps correction factors 0–100% and records actual Haldex engagement at each step, building a calibration table that replaces the formula. Car must be running with Haldex CAN active.</p>
+                <p class="hint">Sweeps correction factors 0–100% and records actual Haldex engagement at each step,
+                    building a calibration table that replaces the formula. Car must be running with Haldex CAN active.
+                </p>
                 <p class="hint" id="learnStatusText">--</p>
                 <div class="learn-progress-wrap" id="learnProgressWrap" style="display:none;">
                     <div class="learn-progress-bar">
@@ -216,36 +259,81 @@
                     <button class="btn-secondary" id="learnCancel" style="display:none;">Cancel</button>
                     <button class="btn-secondary" id="learnClear">Clear Learn Data</button>
                 </div>
+                <div class="toggle-group" style="margin-top: 12px;">
+                    <label class="toggle">
+                        <input type="checkbox" id="fixHunting">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Fix Hunting</span>
+                    </label>
+                    <p class="hint">Enable only if the Haldex hunts at partial lock (e.g. 60/40 or 70/30) on a 554K controller.</p>
+                </div>
             </section>
 
             <section class="card">
-                <h2>Input Options</h2>
+                <h2>Mode Options</h2>
                 <div class="toggle-group">
                     <label class="toggle">
                         <input type="checkbox" id="tcForceMode">
                         <span class="toggle-slider"></span>
                         <span class="toggle-label">Use TC to Force Mode</span>
                     </label>
-                    <p class="hint">Use the Traction Control Signal (via. CAN) to force 5050</p>
+                    <select id="tcForceModeValue" class="input-select">
+                        <option value="0">Stock</option>
+                        <option value="1">FWD</option>
+                        <option value="2">50:50</option>
+                        <option value="3">60:40</option>
+                        <option value="4">75:25</option>
+                        <option value="5">Expert</option>
+                    </select>
+                    <p class="hint">Use the Traction Control Signal (via. CAN) to force mode</p>
 
                     <label class="toggle">
-                        <input type="checkbox" id="extButtonForceMode">
+                        <input type="checkbox" id="hazardForceMode">
                         <span class="toggle-slider"></span>
-                        <span class="toggle-label">Use Ext. Button to Force Mode</span>
+                        <span class="toggle-label">Use Hazards to Force Mode</span>
                     </label>
-                    <p class="hint">Use the External Mode Button to force 5050</p>
+                    <select id="hazardForceModeValue" class="input-select">
+                        <option value="0">Stock</option>
+                        <option value="1">FWD</option>
+                        <option value="2">50:50</option>
+                        <option value="3">60:40</option>
+                        <option value="4">75:25</option>
+                        <option value="5">Expert</option>
+                    </select>
+                    <p class="hint">Use the Hazard Lights (via. CAN) to force mode</p>
 
+                    <div class="brightness-row" style="margin-top:10px;">
+                        <span class="toggle-label">Ext. Control</span>
+                        <select id="extButtonForceMode" class="input-select">
+                            <option value="0">Press: Advance Mode</option>
+                            <option value="1">Hold: Force Mode</option>
+                        </select>
+                    </div>
+                    <div id="extBtnForceModeValueRow" style="display:none;">
+                        <select id="extBtnForceModeValue" class="input-select">
+                            <option value="0">Stock</option>
+                            <option value="1">FWD</option>
+                            <option value="2">50:50</option>
+                            <option value="3">60:40</option>
+                            <option value="4">75:25</option>
+                            <option value="5">Expert</option>
+                        </select>
+                    </div>
+                    <p class="hint">Press: each tap advances to the next mode. Hold: button held forces the selected mode; releasing reverts.</p>
+
+                    <div class="brightness-row" style="margin-top:10px;">
+                        <span class="toggle-label">Force Mode Priority</span>
+                        <select id="forceModesPriority" class="input-select">
+                            <option value="0">Hazard &gt; TC &gt; Ext</option>
+                            <option value="1">TC &gt; Hazard &gt; Ext</option>
+                            <option value="2">Hazard &gt; Ext &gt; TC</option>
+                            <option value="3">TC &gt; Ext &gt; Hazard</option>
+                            <option value="4">Ext &gt; TC &gt; Hazard</option>
+                            <option value="5">Ext &gt; Hazard &gt; TC</option>
+                        </select>
+                    </div>
+                    <p class="hint">When multiple triggers are active simultaneously, the highest-priority one wins.</p>
                 </div>
-
-                <h2>Force Mode</h2>
-                <select id="forceModeValue" class="input-select">
-                    <option value="0">Stock</option>
-                    <option value="1">FWD</option>
-                    <option value="2">50:50</option>
-                    <option value="3">60:40</option>
-                    <option value="4">75:25</option>
-                    <option value="5">Expert</option>
-                </select>
             </section>
 
             <section class="card">
@@ -256,24 +344,109 @@
                         <span class="toggle-slider"></span>
                         <span class="toggle-label">Follow Brake Input</span>
                     </label>
-
                     <label class="toggle">
                         <input type="checkbox" id="invertBrake">
                         <span class="toggle-slider"></span>
                         <span class="toggle-label">Invert Brake Input</span>
                     </label>
-
                     <label class="toggle">
                         <input type="checkbox" id="followHandbrake">
                         <span class="toggle-slider"></span>
                         <span class="toggle-label">Follow Handbrake Input</span>
                     </label>
-
                     <label class="toggle">
                         <input type="checkbox" id="invertHandbrake">
                         <span class="toggle-slider"></span>
                         <span class="toggle-label">Invert Handbrake Input</span>
                     </label>
+                </div>
+            </section>
+
+            <section class="card">
+                <h2>Controller Options</h2>
+                <div class="toggle-group">
+                    <label class="toggle">
+                        <input type="checkbox" id="disableController">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Controller Disabled</span>
+                    </label>
+                    <label class="toggle">
+                        <input type="checkbox" id="isStandalone">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Standalone Mode</span>
+                    </label>
+                    <label class="toggle">
+                        <input type="checkbox" id="useCANifAvailable">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Use CAN if Available</span>
+                    </label>
+                    <label class="toggle">
+                        <input type="checkbox" id="broadcastOpenHaldexOverCAN">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Broadcast over CAN</span>
+                    </label>
+                    <label class="toggle">
+                        <input type="checkbox" id="analyzerMode">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">SavvyCAN via. WiFi</span>
+                    </label>
+                    <label class="toggle">
+                        <input type="checkbox" id="analyzerSerial">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">SavvyCAN via. Serial</span>
+                    </label>
+                    <label class="toggle">
+                        <input type="checkbox" id="udsMQBEnabled">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Enable UDS (MQB)</span>
+                    </label>
+                    <p class="hint">Gen 5 (MQB) only. Polls the Haldex ECU directly for live diagnostic data. Requires Haldex CAN healthy.</p>
+                    <p class="hint">Note: Will Disable Diag. Comms, Disable if Diag Req.</p>
+                    <label class="toggle">
+                        <input type="checkbox" id="disableOnboardButton">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Disable Onboard Button</span>
+                    </label>
+                    <label class="toggle">
+                        <input type="checkbox" id="disableExternalButton">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Disable External Button</span>
+                    </label>
+                    <label class="toggle">
+                        <input type="checkbox" id="canSleepEnabled">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Enable CAN Sleep</span>
+                    </label>
+                    <p class="hint">After 5 min idle with no WiFi clients and both CAN buses silent, sleep until a CAN frame arrives. The first wake frame may be lost.</p>
+                    <label class="toggle">
+                        <input type="checkbox" id="canSleepAggressive">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Enable CAN Sleep (Aggressive)</span>
+                    </label>
+                    <p class="hint">Additionally parks the CAN transceivers in standby while sleeping, drops CPU floor to 10MHz, and lowers WiFi AP TX power. Bus activity wakes the transceivers via GPIO interrupt within microseconds; a 2s safety-net probe runs as backup.</p>
+                    <div class="brightness-row">
+                        <span class="toggle-label">LP Wake Threshold</span>
+                        <div class="brightness-controls">
+                            <input type="range" id="lpWakeThresholdFpsRange" min="0" max="2000" step="10" value="1100" class="slider-inline">
+                            <span id="lpWakeThresholdFpsValue">1100</span> fps
+                        </div>
+                    </div>
+                    <p class="hint">OEM: chassis bus fps to confirm ignition-on. Standalone: Haldex bus fps. Parked = 0 fps.</p>
+                    <div class="brightness-row">
+                        <span class="toggle-label">Live Frame Rate</span>
+                        <div class="brightness-controls">
+                            <span>Chassis: <span id="lpChassisFrameRate">--</span> fps</span>
+                            &nbsp;&nbsp;
+                            <span>Haldex: <span id="lpHaldexFrameRate">--</span> fps</span>
+                        </div>
+                    </div>
+                    <div class="brightness-row">
+                        <span class="toggle-label">LED Brightness</span>
+                        <div class="brightness-controls">
+                            <input type="range" id="ledBrightnessRange" min="0" max="100" step="5" value="100" class="slider-inline">
+                            <span id="ledBrightnessValue">100</span>%
+                        </div>
+                    </div>
                 </div>
             </section>
         </div>
@@ -306,6 +479,23 @@
                 <div class="slider-container">
                     <input type="range" id="disableThrottleRange" min="0" max="100" value="15" class="slider">
                     <div class="slider-value"><span id="disableThrottle">15</span> %</div>
+                </div>
+            </section>
+
+            <section class="card">
+                <h2>Lock Release Rate (%/s)</h2>
+                <p class="hint">Controls how quickly the lock target decays when releasing throttle or changing mode. Higher = faster release. Lock-up is always instantaneous. Disable for instant release (legacy behaviour).</p>
+
+                <div class="toggle-group">
+                    <label class="toggle">
+                        <input type="checkbox" id="lockReleaseEnabled" checked>
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Enable Gradual Release</span>
+                    </label>
+                </div>
+                <div class="slider-container" id="lockReleaseRateContainer">
+                    <input type="range" id="lockReleaseRateRange" min="5" max="500" step="5" value="120" class="slider">
+                    <div class="slider-value"><span id="lockReleaseRateValue">120</span> %/s</div>
                 </div>
             </section>
         </div>
@@ -373,6 +563,10 @@
                         <span class="diag-label">TC:</span>
                         <span class="diag-value" id="diagTcStatus">--</span>
                     </div>
+                    <div class="diag-item">
+                        <span class="diag-label">Hazard:</span>
+                        <span class="diag-value" id="diagHazardActive">--</span>
+                    </div>
                 </div>
             </section>
 
@@ -395,6 +589,42 @@
                         <span class="diag-label">Handbrake Out:</span>
                         <span class="diag-value" id="diagHandbrakeOut">--</span>
                     </div>
+                    <div class="diag-item">
+                        <span class="diag-label">Brake (CAN):</span>
+                        <span class="diag-value" id="diagBrakeFromCAN">--</span>
+                    </div>
+                    <div class="diag-item">
+                        <span class="diag-label">Handbrake (CAN):</span>
+                        <span class="diag-value" id="diagHandbrakeFromCAN">--</span>
+                        <span class="diag-label" id="diagHandbrakeFromCANNote" style="font-size:0.75em;color:#888;">(Gen5 MQB only)</span>
+                    </div>
+                </div>
+            </section>
+
+            <section class="card">
+                <h2>WiFi Name (SSID)</h2>
+                <p class="hint">Change the access-point name broadcast by the controller. 1&ndash;32 printable ASCII characters. Saving restarts the AP &mdash; you will need to reconnect.</p>
+                <p class="hint" id="wifiSsidStatus">--</p>
+                <div class="wifi-password-row">
+                    <input type="text" id="wifiSsidInput" placeholder="OpenHaldex-C6" class="input-wifi-password" maxlength="32" autocomplete="off" spellcheck="false">
+                </div>
+                <div class="wifi-controls">
+                    <button class="btn-secondary" id="wifiSsidSave">Save &amp; Apply</button>
+                    <button class="btn-secondary" id="wifiSsidReset">Reset to Default</button>
+                </div>
+            </section>
+
+            <section class="card">
+                <h2>WiFi Password</h2>
+                <p class="hint">Set a WPA2 password (min. 8 characters) to secure the access point. Leave blank to keep an open network. Long-pressing the mode button always resets back to open.</p>
+                <p class="hint" id="wifiPasswordStatus">--</p>
+                <div class="wifi-password-row">
+                    <input type="password" id="wifiPasswordInput" placeholder="No password (open network)" class="input-wifi-password" maxlength="64" autocomplete="new-password">
+                    <button class="btn-icon-eye" id="wifiPasswordToggle" title="Show / hide password">&#128065;</button>
+                </div>
+                <div class="wifi-controls">
+                    <button class="btn-secondary" id="wifiPasswordSave">Save &amp; Apply</button>
+                    <button class="btn-secondary" id="wifiPasswordReset">Reset to Open</button>
                 </div>
             </section>
 
@@ -421,7 +651,7 @@
             </section>
         </div>
 
-        <script src="./app.js?v=3.00.1" type="text/javascript"></script>
+        <script src="./app.js?v=8.00.2" type="text/javascript"></script>
         <!-- add version query param to force cache refresh on updates-->
 </body>
 

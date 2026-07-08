@@ -21,7 +21,7 @@
 
 </p>
 
-OpenHaldex is an open‑source **Haldex AWD controller** for Volkswagen and Audi Group vehicles using Haldex Generation 1, 2, 4 (PQ Chassis) and 5 (MQB) differentials.
+OpenHaldex is a **Haldex AWD controller** for Volkswagen and Audi Group vehicles using Haldex Generation 1, 2, 4 (PQ Chassis) and 5 (MQB) differentials. The full source and hardware files are published for personal, non‑commercial use under the Forbes Automotive Source‑Available License (FASL) v1.0, and it incorporates MIT‑licensed upstream work — see [Licensing](#licensing).
 
 Install is easy with the new harnesses for later PQ & MQB chassis:
 
@@ -53,6 +53,7 @@ It can operate using OEM CAN signals or it is also able to run in Standalone mod
 - [CAN Sniffing](#can-sniffing-savvycan--gvret)
 - [PCB & Enclosure](#pcb--enclosure)
 - [Acknowledgements](#acknowledgements)
+- [Licensing](#licensing)
 - [Disclaimer](#disclaimer)
 
 ## Features
@@ -107,21 +108,6 @@ Two TWAI/CAN controllers are built into the PCB along with external IO control:
 These two high‑side drivers for brake/handbrake could be repurposed for other functions like oil coolers!
 
 > This platform replaces the earlier Teensy (OpenHaldex T4) design to provide better wireless support and on‑device configuration.
-
-## Advantages Over Other 'OpenHaldex' Solutions
-
-- The 'proprietary PCB' is equally as proprietary as the LILYGO T-2Can
-- The LILYGO T-2Can does not feature any suitable means of over-voltage or fused protections
-- The LILYGO T-2Can does not feature an onboard mode LED - so no immediate user feedback of current mode
-- The LILYGO T-2Can does not offer external mode changing for quick 'on-the-fly' changes
-- The LILYGO T-2Can does not offer additional high-sided drivers for brake/handbrake control on Gen1 or Gen2 systems
-- The LILYGO T-2Can uses MS4553S as CAN interface chips - these have lower ESD protection and in high-voltage or short circuit situations will destroy their irreplaceable protection fuses
-- No optional JTAG break-out (which could be repurposed for other features - like GPS, for example)
-- No pre-designed enclosure
-- Terminations are screw-type - which can lead to poor user installation / connections - leading to sporadic communication faults or failures within the vehicles CAN network - this could include no-starts or steering failures
-- It's **still** a custom made piece of hardware including the custom wiring harness YOU'D need to make: collect connectors, crimp/solder or twist & tape, it won't be pretty
-- The cost is comparative
----
 
 ## Supported Platforms
 
@@ -394,12 +380,40 @@ Routing summary:
   - MX Pin 5 -> Haldex Pin 5 (Haldex CAN Low)
   - MX Pin 6 -> Haldex Pin 6 (Haldex CAN High)
 
+Generation 1 > 4:
+- Vehicle Connector — `VW 1J0‑973‑714`:
+
+| Pin | Signal | Notes |
+|----|------|------|
+| 1 | Term15 | Pass-through: Vehicle → Haldex |
+| 2 | Ground | Pass-through: Vehicle → Haldex and branch to MX Pin 2 |
+| 3 | Brake Light | Pass-through: Vehicle → Haldex |
+| 4 | Handbrake | Pass-through: Vehicle → Haldex |
+| 5 | K-Line | Pass-through: Vehicle → Haldex |
+| 6 | N/A | Not Used |
+| 7 | Chassis Low | To MX Pin 3 (chassis side) |
+| 8 | Chassis High | To MX Pin 4 (chassis side) |
+
+- Haldex Connector — `VW 1J0‑973‑814`:
+
+| Pin | Signal | Notes |
+|----|------|------|
+| 1 | Term15 | Pass-through: Vehicle → Haldex |
+| 2 | Ground | Pass-through: Vehicle → Haldex and branch to MX Pin 2 |
+| 3 | Brake Light | Pass-through: Vehicle → Haldex |
+| 4 | Handbrake | Pass-through: Vehicle → Haldex |
+| 5 | K-Line | Pass-through: Vehicle → Haldex |
+| 6 | N/A | Not Used |
+| 7 | Chassis Low | To MX Pin 5 (Haldex side) |
+| 8 | Chassis High | To MX Pin 6 (Haldex side) |
+
+Generation 5:
 - Vehicle Connector — `VW 1J0‑973‑813`:
 
 | Pin | Signal | Notes |
 |----|------|------|
 | 1 | Term15 | Pass-through: Vehicle → Haldex |
-| 2 | Ground/MALT | Pass-through: Vehicle → Haldex and branch to MX Pin 2 |
+| 2 | Ground | Pass-through: Vehicle → Haldex and branch to MX Pin 2 |
 | 3 | Term30 | Pass-through: Vehicle → Haldex and branch to MX Pin 1 |
 | 4 | N/A | Not used |
 | 5 | Chassis Low | To MX Pin 3 (chassis side) |
@@ -413,8 +427,8 @@ Routing summary:
 | 2 | Ground/MALT | Pass-through from Vehicle side |
 | 3 | Term30 | Pass-through from Vehicle side |
 | 4 | N/A | Not used |
-| 5 | Haldex Low | From MX Pin 5 (returned CAN) |
-| 6 | Haldex High | From MX Pin 6 (returned CAN) |
+| 5 | Haldex Low | From MX Pin 5 (Haldex side) |
+| 6 | Haldex High | From MX Pin 6 (Haldex side) |
 
 ![Gen4/Gen5 Y-Branch Harness Diagram](/Images/Gen4_Gen5_Y_Branch_Harness.png)
 
@@ -521,10 +535,25 @@ Pinout and functionality remain consistent across supported enclosure versions.
 
 ## Acknowledgements
 
-- **Forbes Automotive** — Lead development of the OpenHaldex C6 platform, including reverse‑engineering and open‑source implementation for **Gen2, Gen4 and Gen5 Haldex systems**, along with ongoing maintenance of the project
+- **Forbes Automotive** — Lead development of the OpenHaldex C6 platform, including reverse‑engineering and implementation for **Gen2, Gen4 and Gen5 Haldex systems**, along with ongoing maintenance of the project
 - **A Banging Donk** — [Original OpenHaldex project](https://github.com/ABangingDonk/OpenHaldexT4) for Gen1 vehicles
+- **Chris (meatro) — OpenHaldex‑S3** — [OpenHaldex‑S3](https://github.com/meatro/OpenHaldex-S3) (MIT). Portions of the map editor / Expert Mode, CAN View, web UI, PlatformIO structure and API control derive from this project
 - **Arwid Vasilev** — PCB redesign (V1.02)
 - **LVT Technologies** — OTA update integration (now deprecated, but still appreciated)
+
+---
+
+## Licensing
+
+OpenHaldex‑C6 is **source‑available**, not "open source" in the [OSI](https://opensource.org/osd) sense. The firmware source and the hardware design files (Gerbers, schematics, PCB layouts and enclosure files) are published so you can build, inspect, modify and fabricate a controller **for your own personal, non‑commercial use** — they are **not** licensed for commercial mass production, bulk PCB fabrication, or the sale of compiled binaries or hardware without written permission.
+
+- **Forbes Automotive original code and hardware design files** (Gen2 / Gen4 / Gen5 work, PCB Gerbers, schematics and enclosure files) — **Forbes Automotive Source‑Available License (FASL) v1.0**. See [LICENSE.md](LICENSE.md).
+- **OpenHaldex‑S3 derived portions** (Chris / meatro) — **MIT**. These remain under MIT; the MIT notice must be preserved and MIT permits commercial use of those firmware portions.
+- **Original OpenHaldex (Gen1, ABangingDonk)** — upstream basis; see notice file.
+
+Full attribution and upstream license texts are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). If you redistribute source or binaries, keep the third‑party notices and license texts with the distribution.
+
+> **In short:** build one for yourself — that's encouraged. Manufacturing these PCBs in bulk to sell or ship is not permitted without written permission.
 
 ---
 

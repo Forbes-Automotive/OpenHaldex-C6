@@ -2,6 +2,193 @@
 
 using namespace OpenHaldexC6;
 
+// ---------------------------------------------------------------------------
+// UDS MQB polling task (Gen 5 only)
+// Requests are sent on Bus 1 to CAN ID 0x771 (Haldex physical address).
+// Responses come from 0x779 on Bus 1, routed here via udsRxQueue by
+// parseCAN_hdx so there is no TWAI RX queue contention.
+// ---------------------------------------------------------------------------
+
+static bool udsSendFrame(uint32_t canId, const uint8_t *payload, uint8_t payloadLen)
+{
+    if (payloadLen > 7) return false;
+    twai_message_t msg{};
+    msg.identifier = canId;
+    msg.extd       = 0;
+    msg.rtr        = 0;
+    msg.data_length_code = 8;
+    msg.data[0] = uint8_t(0x00 | payloadLen); // SF PCI byte
+    memcpy(&msg.data[1], payload, payloadLen);
+    for (uint8_t i = payloadLen + 1; i < 8; i++) msg.data[i] = 0xAA; // ISO-TP padding
+    return (twai_transmit_v2(twai_bus_1, &msg, pdMS_TO_TICKS(10)) == ESP_OK);
+}
+
+static void udsDecodeDID(uint16_t did, const twai_message_t &frame)
+{
+    // Validate: single-frame (PCI high nibble 0), positive RDBI response (0x62), DID echo matches.
+    if ((frame.data[0] & 0xF0) != 0x00) return;
+    const uint8_t payloadLen = frame.data[0] & 0x0F;
+    if (payloadLen < 4) return;                                      // need SID(1) + DID(2) + data(1+)
+    if (frame.data[1] != 0x62) return;
+    const uint16_t respDID = ((uint16_t)frame.data[2] << 8) | frame.data[3];
+    if (respDID != did) return;
+
+    // Actual measurement data starts at frame.data[4]
+    switch (did)
+    {
+    case 0x0286: // Terminal Voltage: 1 byte, × 0.1 V  (0x8F=143 → 14.3 V confirmed)
+        if (payloadLen >= 4)
+            udsTerminalVoltage = frame.data[4] * 0.1f;
+        break;
+
+    case 0x028D: // Control Module Temperature: 1 byte, temp = raw − 55 °C  (0x52=82 → 27 °C confirmed)
+        if (payloadLen >= 4)
+            udsModuleTemp = (float)frame.data[4] - 55.0f;
+        break;
+
+    case 0x2BE6: // Haldex Clutch Current: 2 bytes BE, × 0.001 A  (0x000F=15 → 0.015 A confirmed)
+        if (payloadLen >= 5)
+            udsClutchCurrent = (((uint16_t)frame.data[4] << 8) | frame.data[5]) * 0.001f;
+        break;
+
+    case 0x2BE7: // Haldex Clutch PWM: 1 byte, raw %  (0x00=0 → 0 % confirmed)
+        if (payloadLen >= 4)
+            udsClutchPWM = frame.data[4];
+        break;
+
+    case 0x2BF1: // Clutch Temperature: 2 bytes LE16, (D6×256+D5 − 22767)/100 °C
+                 // D5=0x53,D6=0x63 → LE16=25427 → 26.60 °C confirmed
+        if (payloadLen >= 5)
+            udsClutchTemp = ((int32_t)((uint16_t)frame.data[5] * 256 + frame.data[4]) - 22767) / 100.0f;
+        break;
+
+    case 0x2BE4: // Cooling Fin Temperature: 2 bytes LE16, (D6×256+D5 − 22767)/100 °C
+                 // D5=0x71,D6=0x63 → LE16=25457 → 26.90 °C confirmed
+        if (payloadLen >= 5)
+            udsCoolingFinTemp = ((int32_t)((uint16_t)frame.data[5] * 256 + frame.data[4]) - 22767) / 100.0f;
+        break;
+
+    case 0x2BE9: // Haldex Clutch Voltage: 2 bytes BE, × 0.001 V  (0x001F=31 → 0.031 V ≈ 0 V at rest confirmed)
+        if (payloadLen >= 5)
+            udsClutchVoltage = (((uint16_t)frame.data[4] << 8) | frame.data[5]) * 0.001f;
+        break;
+
+    default:
+        break;
+    }
+}
+
+void udsMQBTask(void *arg)
+{
+    static constexpr uint32_t kReqId  = 0x70FU; // physical request to Haldex ECU on Bus 1
+    // VCDS uses 0x70F on Bus 0 which OpenHaldex bridges to Bus 1; the Haldex ECU
+    // listens on 0x70F and responds at 0x779 — confirmed from SavvyCAN capture.
+    // Response 0x779 is routed from parseCAN_hdx into udsRxQueue
+
+    static constexpr uint16_t kDIDs[] = {
+        0x0286, // Terminal Voltage
+        0x028D, // Control Module Temperature
+        0x2BE6, // Haldex Clutch Current
+        0x2BE7, // Haldex Clutch PWM
+        0x2BF1, // Clutch Temperature
+        0x2BE4, // Cooling Fin Temperature
+        0x2BE9, // Haldex Clutch Voltage
+    };
+    static constexpr uint8_t kDIDCount = sizeof(kDIDs) / sizeof(kDIDs[0]);
+
+    udsRxQueue = xQueueCreate(8, sizeof(twai_message_t));
+
+    while (1)
+    {
+        // Gen5 covers both MQB (50) and 0AY PQ-derived 0AY (51) - both use the same UDS stack.
+        if (!udsMQBEnabled || !hasCANHaldex || (haldexGeneration != 50 && haldexGeneration != 51) || analyzerMode || analyzerSerial)
+        {
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
+
+        xQueueReset(udsRxQueue); // flush any stale frames before opening session
+
+        // Open extended diagnostic session (DiagnosticSessionControl 0x03)
+        const uint8_t sessReq[] = {0x10, 0x03};
+        udsSendFrame(kReqId, sessReq, sizeof(sessReq));
+
+        twai_message_t sessResp;
+        if (xQueueReceive(udsRxQueue, &sessResp, pdMS_TO_TICKS(2000)) != pdTRUE)
+        {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue; // no response - retry
+        }
+        // Verify positive session response [xx 50 03 ...]
+        if (sessResp.data_length_code < 3 || sessResp.data[1] != 0x50 || sessResp.data[2] != 0x03)
+        {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+
+        // Session open - poll DIDs round-robin, sending TesterPresent every 375 ms
+        uint32_t lastTP = millis();
+        uint8_t  didIdx = 0;
+
+        while (udsMQBEnabled && hasCANHaldex && (haldexGeneration == 50 || haldexGeneration == 51) && !analyzerMode && !analyzerSerial)
+        {
+            if ((millis() - lastTP) >= 375U)
+            {
+                // TesterPresent with suppress-positive-response bit set (0x80) - no reply expected
+                const uint8_t tpReq[] = {0x3E, 0x80};
+                udsSendFrame(kReqId, tpReq, sizeof(tpReq));
+                lastTP = millis();
+            }
+
+            const uint16_t did = kDIDs[didIdx];
+            const uint8_t rdbiReq[] = {0x22, (uint8_t)(did >> 8), (uint8_t)(did & 0xFF)};
+            udsSendFrame(kReqId, rdbiReq, sizeof(rdbiReq));
+
+            // Drain-and-match: keep consuming frames until we get a positive RDBI
+            // response or the window expires. This discards TesterPresent acks
+            // (0x7E) and any other stale frames that can land before the DID reply.
+            {
+                const uint32_t kWindow = 500; // ms total receive window per DID
+                uint32_t deadline = millis() + kWindow;
+                twai_message_t rsp;
+                for (;;)
+                {
+                    uint32_t elapsed = millis();
+                    if (elapsed >= deadline) break;
+                    uint32_t remaining = deadline - elapsed;
+                    if (xQueueReceive(udsRxQueue, &rsp, pdMS_TO_TICKS(remaining < 50 ? remaining : 50)) == pdTRUE)
+                    {
+                        // Only process positive single-frame RDBI responses
+                        if ((rsp.data[0] & 0xF0) == 0x00 && rsp.data[1] == 0x62 && rsp.data_length_code >= 4)
+                        {
+                            // Decode by the DID actually echoed in the response, not by `did`.
+                            // This handles out-of-order or stale frames: if the response belongs
+                            // to a DIFFERENT DID we still decode it, but keep waiting for `did`.
+                            const uint16_t respDID = ((uint16_t)rsp.data[2] << 8) | rsp.data[3];
+                            udsDecodeDID(respDID, rsp);
+                            if (respDID == did) break; // got the one we were waiting for
+                        }
+                        // Else: TP ack, NRC, or other frame — discard and keep waiting
+                    }
+                }
+            }
+
+            didIdx = (didIdx + 1) % kDIDCount;
+            vTaskDelay(pdMS_TO_TICKS(150)); // ~150 ms between polls -> full 9-DID cycle ≈ 1.35 s
+        }
+
+        // Session ended or conditions changed - clear all UDS data
+        udsTerminalVoltage = 0.0f;
+        udsModuleTemp      = 0.0f;
+        udsClutchTemp      = 0.0f;
+        udsCoolingFinTemp = 0.0f;
+        udsClutchCurrent   = 0.0f;
+        udsClutchPWM       = 0;
+        udsClutchVoltage   = 0.0f;
+        udsBlockagePct     = 0;
+    }
+}
+
 UDS::UDS(twai_handle_t canBus)
     : _canBus(canBus)
 {

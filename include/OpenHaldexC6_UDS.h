@@ -47,3 +47,8 @@ namespace OpenHaldexC6
     static constexpr uint32_t kHaldexRequestId = 0x7E0;
     static constexpr uint32_t kHaldexResponseId = 0x7E8;
 }
+
+// UDS MQB diagnostic polling task (Gen 5 only).
+// Sends requests to 0x771 on Bus 1; reads responses from udsRxQueue
+// (parseCAN_hdx routes 0x779 frames there when udsRxQueue != nullptr).
+void udsMQBTask(void *arg);

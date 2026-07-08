@@ -1,6 +1,18 @@
 let currentEditCell = null; // global flag for current editted cell
 
 const MODE_NAMES = ["Stock", "FWD", "50:50", "60:40", "75:25", "Expert"]; // mode names as Strings
+
+// Cached settings for banner force-mode display and state legend (loaded once from /api/settings)
+let _tcForceModeValue     = 2;
+let _hazardForceModeValue = 2;
+let _extBtnForceModeValue = 2;
+let _tcForceMode = false;
+let _hazardForceMode = false;
+let _extBtnForceMode = false;
+let _haldexGeneration = 1;
+let _isStandalone = false;
+let _useCANifAvailable = false;
+let _disableController = false;
 const setIntervalDuration = 500; // set refresh duration (for quickly to poll ESP for data)
 
 var speedHeader = [0, 30, 60, 90, 120, 160, 180]; // default speed header (for x-axis)
@@ -48,6 +60,8 @@ function initApp() {
   initSettings();
   initExpertEditor();
   initLearn();
+  initWifiSsid();
+  initWifi();
   //initOtaPage(); todo - currently just old OTA page, would like to incorporate the styling across
 }
 
@@ -70,7 +84,9 @@ async function initStoredSettings() {
     // values
     document.getElementById("haldexGeneration").value =
       data.haldexGeneration || 1;
-    document.getElementById("forceModeValue").value = data.forceModeValue || 0;
+    document.getElementById("tcForceModeValue").value     = data.tcForceModeValue     ?? 2;
+    document.getElementById("hazardForceModeValue").value  = data.hazardForceModeValue  ?? 2;
+    document.getElementById("extBtnForceModeValue").value  = data.extBtnForceModeValue  ?? 2;
 
     document.getElementById("disengageUnderSpeedRange").value =
       data.disengageUnderSpeed || 0;
@@ -87,19 +103,51 @@ async function initStoredSettings() {
     document.getElementById("disableThrottle").textContent =
       data.disableThrottle || 0;
 
+    const ledBrightPct = Math.round((data.ledBrightness !== undefined ? data.ledBrightness : 255) / 2.55);
+    document.getElementById("ledBrightnessRange").value = ledBrightPct;
+    document.getElementById("ledBrightnessValue").textContent = ledBrightPct;
+
+    const lockRateRange = document.getElementById("lockReleaseRateRange");
+    const lockRateVal   = document.getElementById("lockReleaseRateValue");
+    if (lockRateRange && data.lockReleaseRatePerSec !== undefined) {
+      lockRateRange.value = data.lockReleaseRatePerSec;
+      if (lockRateVal) lockRateVal.textContent = data.lockReleaseRatePerSec;
+    }
+
+    const lockReleaseEnabledElem = document.getElementById("lockReleaseEnabled");
+    if (lockReleaseEnabledElem) {
+      lockReleaseEnabledElem.checked = data.lockReleaseEnabled !== undefined ? data.lockReleaseEnabled : true;
+      const container = document.getElementById("lockReleaseRateContainer");
+      if (container) container.style.opacity = lockReleaseEnabledElem.checked ? "" : "0.4";
+      if (lockRateRange) lockRateRange.disabled = !lockReleaseEnabledElem.checked;
+    }
+
+    if (data.forceModesPriority !== undefined) {
+      document.getElementById("forceModesPriority").value = data.forceModesPriority;
+    }
+
     document.getElementById("FW_VERSION").textContent = data.FW_VERSION || "--";
 
     //document.getElementById('mode').value = data.mode || 1;
-    //document.getElementById('lockReleaseRatePerSec').value = data.lockReleaseRatePerSec || 1;
 
     // bools
     document.getElementById("disableController").checked =
       data.disableController || false;
     document.getElementById("isStandalone").checked =
       data.isStandalone || false;
+    document.getElementById("useCANifAvailable").checked =
+      data.useCANifAvailable || false;
     document.getElementById("tcForceMode").checked = data.tcForceMode || false;
-    document.getElementById("extButtonForceMode").checked =
-      data.extButtonForceMode || false;
+    {
+      const extBtnCtrlElem = document.getElementById("extButtonForceMode");
+      if (extBtnCtrlElem) {
+        extBtnCtrlElem.value = data.extButtonForceMode ? "1" : "0";
+        const fmvRow = document.getElementById("extBtnForceModeValueRow");
+        if (fmvRow) fmvRow.style.display = data.extButtonForceMode ? "" : "none";
+      }
+    }
+    document.getElementById("hazardForceMode").checked =
+      data.hazardForceMode || false;
 
     document.getElementById("followBrake").checked = data.followBrake || false;
     document.getElementById("invertBrake").checked = data.invertBrake || false;
@@ -115,6 +163,48 @@ async function initStoredSettings() {
       data.disableOnboardButton || false;
     document.getElementById("disableExternalButton").checked =
       data.disableExternalButton || false;
+
+    const fixHuntingElem = document.getElementById("fixHunting");
+    if (fixHuntingElem) fixHuntingElem.checked = data.fixHunting || false;
+
+    const canSleepElem = document.getElementById("canSleepEnabled");
+    if (canSleepElem) canSleepElem.checked = data.canSleepEnabled || false;
+
+    const canSleepAggrElem = document.getElementById("canSleepAggressive");
+    if (canSleepAggrElem) canSleepAggrElem.checked = data.canSleepAggressive || false;
+
+    // Aggressive implies basic - lock the basic checkbox while aggressive is on.
+    if (canSleepElem && canSleepAggrElem) {
+      canSleepElem.disabled = canSleepAggrElem.checked;
+    }
+
+    const lpWakeRange = document.getElementById("lpWakeThresholdFpsRange");
+    const lpWakeVal   = document.getElementById("lpWakeThresholdFpsValue");
+    if (lpWakeRange && data.lpWakeThresholdFps !== undefined) {
+      lpWakeRange.value = data.lpWakeThresholdFps;
+      if (lpWakeVal) lpWakeVal.textContent = data.lpWakeThresholdFps;
+    }
+
+    const analyzerModeElem = document.getElementById("analyzerMode");
+    if (analyzerModeElem) analyzerModeElem.checked = data.analyzerMode || false;
+
+    const analyzerSerialElem = document.getElementById("analyzerSerial");
+    if (analyzerSerialElem) analyzerSerialElem.checked = data.analyzerSerial || false;
+
+    const udsMqbElem = document.getElementById("udsMQBEnabled");
+    if (udsMqbElem) udsMqbElem.checked = data.udsMQBEnabled || false;
+
+    // cache for banner / legend
+    _tcForceModeValue     = data.tcForceModeValue     ?? 2;
+    _hazardForceModeValue = data.hazardForceModeValue  ?? 2;
+    _extBtnForceModeValue = data.extBtnForceModeValue  ?? 2;
+    _tcForceMode = data.tcForceMode || false;
+    _hazardForceMode = data.hazardForceMode || false;
+    _extBtnForceMode = data.extButtonForceMode || false;
+    _haldexGeneration = data.haldexGeneration || 1;
+    _isStandalone = data.isStandalone || false;
+    _useCANifAvailable = data.useCANifAvailable || false;
+    _disableController = data.disableController || false;
 
     // parse speed/throttle/lock array from the ESP
     speedHeader = data.speedArray;
@@ -137,6 +227,23 @@ async function refreshStatus() {
   try {
     const data = await fetchJson("/api/dashboard"); // send request for basic data
 
+    // Live frame-rate monitor for LP wake threshold tuning
+    if (data.lpChassisFrameCount !== undefined && data.lpHaldexFrameCount !== undefined) {
+      const now = Date.now();
+      if (refreshStatus._lastFrameTime) {
+        const dt = (now - refreshStatus._lastFrameTime) / 1000;
+        const cFps = Math.round((data.lpChassisFrameCount - refreshStatus._lastChassis) / dt);
+        const hFps = Math.round((data.lpHaldexFrameCount  - refreshStatus._lastHaldex)  / dt);
+        const cEl = document.getElementById("lpChassisFrameRate");
+        const hEl = document.getElementById("lpHaldexFrameRate");
+        if (cEl) cEl.textContent = cFps;
+        if (hEl) hEl.textContent = hFps;
+      }
+      refreshStatus._lastFrameTime = now;
+      refreshStatus._lastChassis   = data.lpChassisFrameCount;
+      refreshStatus._lastHaldex    = data.lpHaldexFrameCount;
+    }
+
     const displayValue = (value) => (value ?? "--");
     const displayOnOff = (value) =>
       value === undefined || value === null ? "--" : value ? "On" : "Off";
@@ -156,6 +263,14 @@ async function refreshStatus() {
     );
     document.getElementById("engagementFill").style.width =
       `${data.lockActual ?? 0}%`;
+
+    // Haldex Data card (Gen 1–4, non-UDS)
+    document.getElementById("haldexEngagement").textContent = displayValue(data.haldexEngagement);
+    document.getElementById("clutch1Report").textContent   = displayValue(data.clutch1Report);
+    document.getElementById("clutch2Report").textContent   = displayValue(data.clutch2Report);
+    document.getElementById("tempProtection").textContent  = displayOnOff(data.tempProtection);
+    document.getElementById("couplingOpen").textContent    = displayOnOff(data.couplingOpen);
+    document.getElementById("speedLimit").textContent      = displayOnOff(data.speedLimit);
 
     if (data.mode !== undefined) {
       modeButton(data.mode); // set the mode button - there may be external influences
@@ -182,6 +297,9 @@ async function refreshStatus() {
     document.getElementById("diagTcStatus").textContent = displayOnOff(
       data.tcOn,
     );
+    document.getElementById("diagHazardActive").textContent = displayOnOff(
+      data.hazardActive,
+    );
     document.getElementById("diagBrakeIn").textContent = displayOnOff(
       data.brakeIn,
     );
@@ -192,6 +310,12 @@ async function refreshStatus() {
       displayOnOff(data.handbrakeIn);
     document.getElementById("diagHandbrakeOut").textContent =
       displayOnOff(data.handbrakeOut);
+    document.getElementById("diagBrakeFromCAN").textContent = displayOnOff(
+      data.brakeFromCAN,
+    );
+    document.getElementById("diagHandbrakeFromCAN").textContent = displayOnOff(
+      data.handbrakeFromCAN,
+    );
     document.getElementById("diagCpuUsage").textContent = displayValue(
       data.cpuUsage,
     );
@@ -204,6 +328,49 @@ async function refreshStatus() {
         ? "--"
         : hex2bin(data.haldexState);
 
+    updateBannerSubtitle(data);
+    // Gen50 (0CQ/MQB): state byte is Allrad_03 byte 3 (Charisma) — use gen=50 legend.
+    // Gen51 (0AY) and all PQ gens (1/2/4): state byte is Allrad_1 byte 0 (PQ fault flags) — use gen-specific PQ legend.
+    const legendGen = _haldexGeneration;
+    renderHaldexStateLegend(data.haldexState, legendGen);
+
+    // Gen 4.1 (GM/SAAB) specific data
+    const gen41Card = document.getElementById("gen41Card");
+    if (data.gen41) {
+      gen41Card.style.display = "";
+      const sa = data.gen41.secAxle;
+      const ra = data.gen41.rearAxle;
+
+      document.getElementById("g41SecTorqueNm").textContent = displayValue(sa?.torqueNm);
+      document.getElementById("g41SecClutchState").textContent = displayValue(sa?.clutchState);
+
+      document.getElementById("g41RearMetricA").textContent = displayValue(ra?.metricA);
+      document.getElementById("g41RearMetricB").textContent = displayValue(ra?.metricB);
+    } else {
+      gen41Card.style.display = "none";
+    }
+
+    // UDS MQB diagnostic data — replaces the standard Haldex Data card when active
+    const haldexDataCard = document.getElementById("haldexDataCard");
+    const udsCard = document.getElementById("udsDataCard");
+    if (data.uds) {
+      if (haldexDataCard) haldexDataCard.style.display = "none";
+      if (udsCard) {
+        udsCard.style.display = "";
+        document.getElementById("udsTerminalVoltage").textContent = data.uds.terminalVoltage?.toFixed(1) ?? "--";
+        document.getElementById("udsModuleTemp").textContent = data.uds.moduleTemp?.toFixed(1) ?? "--";
+        document.getElementById("udsClutchTemp").textContent = data.uds.clutchTemp?.toFixed(1) ?? "--";
+        document.getElementById("udsCoolingFinTemp").textContent = data.uds.coolingFinTemp?.toFixed(1) ?? "--";
+        document.getElementById("udsClutchCurrent").textContent = data.uds.clutchCurrent?.toFixed(3) ?? "--";
+        document.getElementById("udsClutchPWM").textContent = displayValue(data.uds.clutchPWM);
+        document.getElementById("udsClutchVoltage").textContent = data.uds.clutchVoltage?.toFixed(3) ?? "--";
+        document.getElementById("udsBlockagePct").textContent = displayValue(data.uds.blockagePct);
+      }
+    } else {
+      if (haldexDataCard) haldexDataCard.style.display = "";
+      if (udsCard) udsCard.style.display = "none";
+    }
+
     refreshTrace(data); // update the live trace
   } catch (error) {
     console.log("Status failed: " + error.message);
@@ -212,6 +379,72 @@ async function refreshStatus() {
 
 function hex2bin(hex) {
   return ("00000000" + parseInt(hex, 16).toString(2)).substr(-8);
+}
+
+// Update the header subtitle with current mode and any active force mode.
+function updateBannerSubtitle(data) {
+  const el = document.getElementById("modeStatus");
+  if (!el) return;
+  const modeName = MODE_NAMES[data.mode] ?? "Unknown";
+  let text = `Mode: ${modeName}`;
+
+  // Surface EVERY active force trigger so a flag can never be silently active.
+  // Each trigger must be BOTH enabled and have its live flag asserted - matching
+  // the firmware gate in OpenHaldexC6_can.cpp. tcForceModeFlag/hazardForceModeFlag
+  // are CAN-driven and extButtonActive is button-driven, so any of them can fire
+  // without the user having touched the UI.
+  const active = [];
+  if (_tcForceMode     && data.tcOn === false)            active.push({ trig: "TC",     fmv: _tcForceModeValue });
+  if (_hazardForceMode && data.hazardActive === true)     active.push({ trig: "Hazard", fmv: _hazardForceModeValue });
+  if (_extBtnForceMode && data.extButtonActive === true)  active.push({ trig: "Ext",    fmv: _extBtnForceModeValue });
+
+  if (active.length) {
+    const parts = active.map((a) => `${MODE_NAMES[a.fmv] ?? "Unknown"} (${a.trig})`);
+    text += ` | Force: ${parts.join(", ")}`;
+  }
+  el.textContent = text;
+}
+
+// Render a bit-by-bit legend for the Haldex state byte, generation-aware.
+function renderHaldexStateLegend(rawHex, gen) {
+  const el = document.getElementById("haldexStateLegend");
+  if (!el) return;
+  if (rawHex === undefined || rawHex === null) { el.innerHTML = ""; return; }
+  const val = parseInt(rawHex, 16);
+
+  if (gen === 1 || gen === 2 || gen === 4 || gen === 51) {
+    // PQ (Gen 1/2/4): Allrad_1 byte 0 — fault/status flags
+    const bits = [
+      { bit: 0, label: "Clutch Fault",           desc: "Fehler_Allrad_Kupplung" },
+      { bit: 1, label: "Over-Temp Protection",    desc: "Übertemperaturschutz" },
+      { bit: 2, label: "Clutch Stiffness Fault",  desc: "Fehlerstatus_Kupplungssteifigkeit" },
+      { bit: 3, label: "Coupling Fully Open",     desc: "Kupplung_komplett_offen" },
+      { bit: 4, label: "Limp Mode",               desc: "Notlauf" },
+      { bit: 5, label: "AWD Warning Lamp",        desc: "Allrad_Warnlampe" },
+      { bit: 6, label: "Speed Limit",             desc: "Geschwindigkeitsbegrenzung" },
+    ];
+    let html = `<table><tr><th>Bit</th><th>Name</th><th>State</th></tr>`;
+    bits.forEach(({ bit, label }) => {
+      const active = (val >> bit) & 1;
+      const cls = active ? "bit-active" : "bit-inactive";
+      html += `<tr><td>${bit}</td><td>${label}</td><td class="${cls}">${active ? "SET" : "ok"}</td></tr>`;
+    });
+    html += `</table>`;
+    el.innerHTML = html;
+  } else if (gen === 50) {
+    // MQB (Gen 5): Allrad_03 byte 3 = ALR_Charisma_FahrPr / ALR_Charisma_Status
+    const prog = val & 0x0F;
+    const flags = (val >> 4) & 0x0F;
+    el.innerHTML =
+      `<table><tr><th>Field</th><th>Value</th></tr>` +
+      `<tr><td>Driving Programme (bits 0–3)</td><td>${prog}</td></tr>` +
+      `<tr><td>Status Flags (bits 4–7)</td><td>0x${flags.toString(16).toUpperCase()}</td></tr>` +
+      `</table><p style="margin:4px 0 0;">Note: bit 4–5 of byte 1 = longitudinal lock state (0=open, 1=partial, 2=closed) — separate from this byte.</p>`;
+  } else if (gen === 41) {
+    el.innerHTML = `<em>Gen 4.1: dedicated status variables used — see Gen41 card above.</em>`;
+  } else {
+    el.innerHTML = "";
+  }
 }
 
 // save current lock table
@@ -297,6 +530,35 @@ function initNavigation() {
   disableThrottleRange.addEventListener("input", () => {
     disableThrottle.textContent = disableThrottleRange.value;
   });
+
+  const ledBrightnessRange = document.getElementById("ledBrightnessRange");
+  const ledBrightnessValue = document.getElementById("ledBrightnessValue");
+  if (ledBrightnessRange) {
+    ledBrightnessRange.addEventListener("input", () => {
+      ledBrightnessValue.textContent = ledBrightnessRange.value;
+    });
+  }
+
+  // LP wake threshold slider
+  const lpWakeRange = document.getElementById("lpWakeThresholdFpsRange");
+  const lpWakeVal   = document.getElementById("lpWakeThresholdFpsValue");
+  if (lpWakeRange) {
+    lpWakeRange.addEventListener("input", () => {
+      if (lpWakeVal) lpWakeVal.textContent = lpWakeRange.value;
+    });
+    lpWakeRange.addEventListener("change", () => {
+      saveSetting("lpWakeThresholdFps", parseInt(lpWakeRange.value));
+    });
+  }
+
+  // Lock release rate slider (display update only — save handled in initSettings)
+  const lockRateRange = document.getElementById("lockReleaseRateRange");
+  const lockRateVal   = document.getElementById("lockReleaseRateValue");
+  if (lockRateRange) {
+    lockRateRange.addEventListener("input", () => {
+      if (lockRateVal) lockRateVal.textContent = lockRateRange.value;
+    });
+  }
 }
 
 // initialise dashboard:
@@ -311,6 +573,25 @@ function initModeButtons() {
   buttons.forEach((btn) => {
     btn.addEventListener("click", () => {
       const mode = parseInt(btn.dataset.mode);
+
+      // Guard: controller disabled
+      if (_disableController) {
+        showNotification("Controller is disabled — enable it in Controller Options before changing mode", "error");
+        return;
+      }
+
+      // Guard: Stock unavailable in standalone (no chassis CAN to read from)
+      if (mode === 0 && _isStandalone) {
+        showNotification("Stock mode is unavailable in Standalone — no chassis CAN to read from", "error");
+        return;
+      }
+
+      // Guard: Expert requires CAN data (not standalone without 'Use CAN if Available')
+      if (mode === 5 && _isStandalone && !_useCANifAvailable) {
+        showNotification("Expert mode requires 'Use CAN if Available' to be enabled when in Standalone", "error");
+        return;
+      }
+
       modeButton(mode); // change highlighted mode
       sendMode(mode); // send new mode to ESP
     });
@@ -336,7 +617,7 @@ function initModeButtons() {
 // initialise settings with immediate save on change
 function initSettings() {
   // Selects (dropdown menus)
-  const selectIds = ["haldexGeneration", "forceModeValue"];
+  const selectIds = ["haldexGeneration", "tcForceModeValue", "hazardForceModeValue", "extBtnForceModeValue", "forceModesPriority"];
   selectIds.forEach((id) => {
     const elem = document.getElementById(id);
     if (elem) {
@@ -348,26 +629,41 @@ function initSettings() {
 
   // Range sliders
   const rangeSliders = [
-    { element: "disengageUnderSpeedRange", key: "disengageUnderSpeed" },
-    { element: "disengageAboveSpeedRange", key: "disengageAboveSpeed" },
-    { element: "disableThrottleRange", key: "disableThrottle" },
+    { element: "disengageUnderSpeedRange", key: "disengageUnderSpeed", parse: parseInt },
+    { element: "disengageAboveSpeedRange", key: "disengageAboveSpeed", parse: parseInt },
+    { element: "disableThrottleRange",     key: "disableThrottle",     parse: parseInt },
+    { element: "lockReleaseRateRange",     key: "lockReleaseRatePerSec", parse: parseFloat },
   ];
-  rangeSliders.forEach(({ element, key }) => {
+  rangeSliders.forEach(({ element, key, parse }) => {
     const elem = document.getElementById(element);
     if (elem) {
       elem.addEventListener("input", () => {
-        saveSetting(key, parseInt(elem.value));
+        saveSetting(key, (parse || parseInt)(elem.value));
       });
     }
   });
 
-  // Checkboxes
+  // LED brightness: UI is 0-100%, firmware stores 0-255
+  const ledBrightElem = document.getElementById("ledBrightnessRange");
+  if (ledBrightElem) {
+    ledBrightElem.addEventListener("input", () => {
+      saveSetting("ledBrightness", Math.round(parseInt(ledBrightElem.value) * 2.55));
+    });
+  }
+
+  // Checkboxes — keep cached state in sync for mode-button guards
+  const checkboxCacheMap = {
+    disableController: (v) => { _disableController = v; },
+    isStandalone:      (v) => { _isStandalone = v; },
+    useCANifAvailable: (v) => { _useCANifAvailable = v; },
+  };
+
   const checkboxIds = [
     "disableController",
     "isStandalone",
-    "analyzerMode",
+    "useCANifAvailable",
     "tcForceMode",
-    "extButtonForceMode",
+    "hazardForceMode",
     "followBrake",
     "invertBrake",
     "followHandbrake",
@@ -375,15 +671,86 @@ function initSettings() {
     "broadcastOpenHaldexOverCAN",
     "disableOnboardButton",
     "disableExternalButton",
+    "fixHunting",
+    "canSleepEnabled",
+    "canSleepAggressive",
+    "udsMQBEnabled",
+    "lockReleaseEnabled",
   ];
   checkboxIds.forEach((id) => {
     const elem = document.getElementById(id);
     if (elem) {
       elem.addEventListener("change", () => {
+        if (checkboxCacheMap[id]) checkboxCacheMap[id](elem.checked);
         saveSetting(id, elem.checked);
       });
     }
   });
+
+  // Ext. Control select (Press: Advance Mode / Hold: Force Mode)
+  {
+    const extBtnCtrlElem = document.getElementById("extButtonForceMode");
+    if (extBtnCtrlElem) {
+      const fmvRow = document.getElementById("extBtnForceModeValueRow");
+      extBtnCtrlElem.addEventListener("change", () => {
+        const isHold = extBtnCtrlElem.value === "1";
+        saveSetting("extButtonForceMode", isHold);
+        if (fmvRow) fmvRow.style.display = isHold ? "" : "none";
+      });
+    }
+  }
+
+  // Lock release: toggle slider enabled state and opacity when checkbox changes.
+  const lockReleaseEnabledElem = document.getElementById("lockReleaseEnabled");
+  const lockReleaseRateElem    = document.getElementById("lockReleaseRateRange");
+  const lockReleaseContainer   = document.getElementById("lockReleaseRateContainer");
+  if (lockReleaseEnabledElem) {
+    lockReleaseEnabledElem.addEventListener("change", () => {
+      const en = lockReleaseEnabledElem.checked;
+      if (lockReleaseRateElem) lockReleaseRateElem.disabled = !en;
+      if (lockReleaseContainer) lockReleaseContainer.style.opacity = en ? "" : "0.4";
+    });
+  }
+
+  // CAN sleep: Aggressive implies Basic. Keep the two checkboxes in sync.
+  const canSleepElem = document.getElementById("canSleepEnabled");
+  const canSleepAggrElem = document.getElementById("canSleepAggressive");
+  if (canSleepElem && canSleepAggrElem) {
+    canSleepAggrElem.addEventListener("change", () => {
+      if (canSleepAggrElem.checked && !canSleepElem.checked) {
+        canSleepElem.checked = true;
+        saveSetting("canSleepEnabled", true);
+      }
+      canSleepElem.disabled = canSleepAggrElem.checked;
+    });
+    canSleepElem.addEventListener("change", () => {
+      if (!canSleepElem.checked && canSleepAggrElem.checked) {
+        canSleepAggrElem.checked = false;
+        saveSetting("canSleepAggressive", false);
+        canSleepElem.disabled = false;
+      }
+    });
+  }
+
+  // SavvyCAN mode - mutually exclusive: WiFi and Serial cannot both be active.
+  const analyzerModeElem = document.getElementById("analyzerMode");
+  const analyzerSerialElem = document.getElementById("analyzerSerial");
+  if (analyzerModeElem && analyzerSerialElem) {
+    analyzerModeElem.addEventListener("change", () => {
+      if (analyzerModeElem.checked) {
+        analyzerSerialElem.checked = false;
+        saveSetting("analyzerSerial", false);
+      }
+      saveSetting("analyzerMode", analyzerModeElem.checked);
+    });
+    analyzerSerialElem.addEventListener("change", () => {
+      if (analyzerSerialElem.checked) {
+        analyzerModeElem.checked = false;
+        saveSetting("analyzerMode", false);
+      }
+      saveSetting("analyzerSerial", analyzerSerialElem.checked);
+    });
+  }
 }
 
 function modeButton(mode) {
@@ -730,6 +1097,146 @@ function initLearn() {
       statusText.textContent = "No learn data - static factor active";
       statusText.style.color = "var(--text-dim)";
     }
+  });
+}
+
+// initialise WiFi SSID section
+function initWifiSsid() {
+  const input    = document.getElementById("wifiSsidInput");
+  const status   = document.getElementById("wifiSsidStatus");
+  const btnSave  = document.getElementById("wifiSsidSave");
+  const btnReset = document.getElementById("wifiSsidReset");
+  if (!input || !status || !btnSave || !btnReset) return;
+
+  let defaultSsid = "OpenHaldex-C6";
+
+  function renderStatus(ssid) {
+    if (!ssid) {
+      status.textContent = "--";
+      status.style.color = "var(--text-dim)";
+      return;
+    }
+    if (ssid === defaultSsid) {
+      status.textContent = "Default SSID: " + ssid;
+      status.style.color = "var(--text-dim)";
+    } else {
+      status.textContent = "\u2713 Custom SSID: " + ssid;
+      status.style.color = "var(--success)";
+    }
+  }
+
+  // load current SSID
+  fetchJson("/api/wifi/ssid").then((data) => {
+    if (!data) return;
+    if (data.default) defaultSsid = data.default;
+    if (data.ssid) {
+      input.value = data.ssid;
+      input.placeholder = data.ssid;
+      renderStatus(data.ssid);
+    }
+  });
+
+  // save SSID
+  btnSave.addEventListener("click", async () => {
+    const ssid = input.value.trim();
+    if (ssid.length < 1) {
+      showNotification("SSID cannot be empty", "error");
+      return;
+    }
+    if (ssid.length > 32) {
+      showNotification("SSID too long (max 32)", "error");
+      return;
+    }
+    if (!/^[\x20-\x7E]+$/.test(ssid)) {
+      showNotification("SSID must be printable ASCII", "error");
+      return;
+    }
+    const resp = await fetchJson("/api/wifi/ssid", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ssid: ssid }),
+    });
+    if (!resp) { showNotification("Failed to reach device", "error"); return; }
+    if (!resp.ok) {
+      showNotification(resp.error || "Failed to save SSID", "error");
+      return;
+    }
+    status.textContent = "AP restarting as \"" + resp.ssid + "\"\u2026";
+    status.style.color = "var(--success)";
+    showNotification("WiFi SSID saved - reconnect to AP");
+  });
+
+  // reset to factory SSID
+  btnReset.addEventListener("click", async () => {
+    const resp = await fetchJson("/api/wifi/ssid/reset", { method: "POST" });
+    if (!resp || !resp.ok) { showNotification("Reset failed", "error"); return; }
+    input.value = resp.ssid || defaultSsid;
+    status.textContent = "AP restarting as \"" + (resp.ssid || defaultSsid) + "\"\u2026";
+    status.style.color = "var(--text-dim)";
+    showNotification("WiFi SSID reset to default - reconnect to AP");
+  });
+}
+
+// initialise WiFi password section
+function initWifi() {
+  const input   = document.getElementById("wifiPasswordInput");
+  const toggle  = document.getElementById("wifiPasswordToggle");
+  const status  = document.getElementById("wifiPasswordStatus");
+  const btnSave = document.getElementById("wifiPasswordSave");
+  const btnReset= document.getElementById("wifiPasswordReset");
+
+  // show / hide password toggle
+  toggle.addEventListener("click", () => {
+    const isHidden = input.type === "password";
+    input.type = isHidden ? "text" : "password";
+    toggle.textContent = isHidden ? "\uD83D\uDE48" : "\uD83D\uDC41";
+  });
+
+  // load current status (just whether a password is set; never reveal the value)
+  fetchJson("/api/wifi").then((data) => {
+    if (!data) return;
+    if (data.passwordSet) {
+      status.textContent = "\u2713 Password set - AP is secured";
+      status.style.color = "var(--success)";
+    } else {
+      status.textContent = "No password - AP is open";
+      status.style.color = "var(--text-dim)";
+    }
+  });
+
+  // save password
+  btnSave.addEventListener("click", async () => {
+    const pwd = input.value.trim();
+    const resp = await fetchJson("/api/wifi", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: pwd }),
+    });
+    if (!resp) { showNotification("Failed to reach device", "error"); return; }
+    if (!resp.ok) {
+      showNotification(resp.error || "Failed to save password", "error");
+      return;
+    }
+    input.value = "";
+    if (resp.passwordSet) {
+      status.textContent = "\u2713 Password set - AP restarting\u2026";
+      status.style.color = "var(--success)";
+      showNotification("WiFi password saved - reconnect to AP");
+    } else {
+      status.textContent = "No password - AP restarting as open\u2026";
+      status.style.color = "var(--text-dim)";
+      showNotification("WiFi password cleared");
+    }
+  });
+
+  // reset to open network
+  btnReset.addEventListener("click", async () => {
+    const resp = await fetchJson("/api/wifi/reset", { method: "POST" });
+    if (!resp || !resp.ok) { showNotification("Reset failed", "error"); return; }
+    input.value = "";
+    status.textContent = "No password - AP restarting as open\u2026";
+    status.style.color = "var(--text-dim)";
+    showNotification("WiFi reset to open network - reconnect to AP");
   });
 }
 
