@@ -43,7 +43,6 @@ It can operate using OEM CAN signals or it is also able to run in Standalone mod
 - [Purchase](#purchase)
 - [Overview](#overview)
 - [Hardware](#hardware)
-- [Advantages Over Other 'OpenHaldex' Solutions](#advantages-over-other-openhaldex-solutions)
 - [Supported Platforms](#supported-platforms)
 - [Modes](#modes)
 - [Expert Mode](#expert-mode)
