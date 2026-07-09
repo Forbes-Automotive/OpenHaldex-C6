@@ -552,8 +552,6 @@ OpenHaldex‑C6 is **open source** under the permissive [MIT License](https://op
 
 Full attribution and upstream license texts are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). If you redistribute source or binaries, keep the third‑party notices and license texts with the distribution.
 
-**One UI condition:** any modification or redistribution of the web UI (the `data/` assets) must retain the **OpenHaldex‑C6** banner in some visible, user‑facing form. You can restyle or reposition it, but the name identifying the origin of the interface must stay. See [LICENSE.md](LICENSE.md).
-
 > **In short:** use it, build it, modify it, redistribute it — that's all encouraged. Just keep the copyright and license notices intact, and keep the OpenHaldex‑C6 banner in the UI.
 
 ---
