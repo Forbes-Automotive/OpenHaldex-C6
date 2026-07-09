@@ -10,7 +10,11 @@ static inline bool lock_enabled()
   if (state.mode != MODE_EXPERT)
   {
     throttle_ok = (state.pedal_threshold == 0) || (int(received_pedal_value) >= state.pedal_threshold);
-    speed_ok = (disengageUnderSpeed == 0) || (received_vehicle_speed <= disengageUnderSpeed) || (received_vehicle_speed >= disengageAboveSpeed);
+    // Allow lock only within the window [disengageUnderSpeed, disengageAboveSpeed].
+    // A bound of 0 means that side of the window is disabled.
+    bool under_ok = (disengageUnderSpeed == 0) || (received_vehicle_speed >= disengageUnderSpeed);
+    bool above_ok = (disengageAboveSpeed == 0) || (received_vehicle_speed <= disengageAboveSpeed);
+    speed_ok = under_ok && above_ok;
     return throttle_ok && speed_ok;
   }
 
@@ -97,7 +101,7 @@ static float get_expert_lock_target()
 
 float get_lock_target_adjustment()
 {
-  // const MODE_NAMES = ['Stock', 'FWD', '50:50', '60:40', '75:25', 'Expert']; // mode names as Strings
+  // const MODE_NAMES = ['Stock', 'FWD', '50:50', '60:40', '75:25', 'Expert']; // mode names as Strings - just to note here
   if (extBtnForceMode || tcForceMode || hazardForceMode) // if any force-mode trigger is enabled
   {
     // Determine which trigger is active and pick its configured mode value.
@@ -126,11 +130,11 @@ float get_lock_target_adjustment()
 
     uint8_t fmv = 0; // force mode value (0=Stock, 1=FWD, 2=50:50, 3=60:40, 4=75:25, 5=Expert)
     bool anyActive = false;
-    const uint8_t pri = (forceModesPriority < 6) ? forceModesPriority : 0;
+    const uint8_t priority = (forceModesPriority < 6) ? forceModesPriority : 0;
 
     for (uint8_t i = 0; i < 3; i++)
     {
-      const uint8_t idx = priorityOrders[pri][i];
+      const uint8_t idx = priorityOrders[priority][i];
       if (triggers[idx].enabled && triggers[idx].flag)
       {
         fmv = triggers[idx].value;
@@ -232,12 +236,27 @@ uint8_t get_lock_target_adjusted_value(uint8_t value, bool invert)
   if (haldexLearnTableValid)
   {
     // find the smallest correction factor where the learned engagement meets or exceeds lock_target
+    bool found = false;
     for (uint8_t i = 0; i <= 100; i++)
     {
       if (haldexLearnTable[i] >= (uint8_t)lock_target)
       {
         correction_factor = i;
+        found = true;
         break;
+      }
+    }
+    if (!found)
+    {
+      // requested lock exceeds anything the sweep learned - clamp to the highest learned entry
+      uint8_t best_engagement = 0;
+      for (uint8_t i = 0; i <= 100; i++)
+      {
+        if (haldexLearnTable[i] >= best_engagement)
+        {
+          best_engagement = haldexLearnTable[i];
+          correction_factor = i;
+        }
       }
     }
   }
@@ -314,6 +333,25 @@ void getLockData(twai_message_t &rx_message_chs)
     }
   }
   lock_target = smoothed_lock_target;
+
+  // If the incoming frame is a known frame for this generation and its bit is
+  // cleared, skip all editing.  If its bit is set, allow editing
+  {
+    int _feGen = frameEditGenIdx(haldexGeneration);
+    if (_feGen >= 0)
+    {
+      for (uint16_t _i = 0; _i < frameEditBlockCount; _i++)
+      {
+        if (frameEditBlocks[_i].genIdx == (uint8_t)_feGen &&
+            frameEditBlocks[_i].canId == rx_message_chs.identifier)
+        {
+          if (!frameEditEnabled((uint8_t)_feGen, frameEditBlocks[_i].bit))
+            return; // block disabled -> pass the car's real frame through untouched
+          break;
+        }
+      }
+    }
+  }
 
   // begin frame parsing / editting
   // edit the frames if configured as Gen1...
@@ -408,6 +446,111 @@ void getLockData(twai_message_t &rx_message_chs)
       rx_message_chs.data[6] = 0x00;
       rx_message_chs.data[7] = 0x0A;
       break;
+
+    // ---- Transferred from standalone (gated off by default) ----------------
+    case BRAKES4_ID:
+      rx_message_chs.data[0] = 0x00;
+      rx_message_chs.data[1] = 0x00;
+      rx_message_chs.data[2] = 0x00;
+      rx_message_chs.data[3] = 0x00;
+      rx_message_chs.data[4] = 0x00;
+      rx_message_chs.data[5] = 0x00;
+      rx_message_chs.data[6] = BRAKES4_counter;
+      rx_message_chs.data[7] = BRAKES4_counter;
+      BRAKES4_counter = BRAKES4_counter + 10;
+      if (BRAKES4_counter > 0xF0)
+        BRAKES4_counter = 0;
+      break;
+    case BRAKES5_ID:
+      rx_message_chs.data[0] = 0xFE;
+      rx_message_chs.data[1] = 0x7F;
+      rx_message_chs.data[2] = 0x03;
+      rx_message_chs.data[3] = 0x00;
+      rx_message_chs.data[4] = 0x00;
+      rx_message_chs.data[5] = 0x00;
+      rx_message_chs.data[6] = BRAKES5_counter;
+      rx_message_chs.data[7] = BRAKES5_counter2;
+      BRAKES5_counter = BRAKES5_counter + 10;
+      if (BRAKES5_counter > 0xF0)
+        BRAKES5_counter = 0;
+      BRAKES5_counter2 = BRAKES5_counter2 + 10;
+      if (BRAKES5_counter2 > 0xF3)
+        BRAKES5_counter2 = 3;
+      break;
+    case BRAKES9_ID:
+      rx_message_chs.data[0] = BRAKES9_counter;
+      rx_message_chs.data[1] = BRAKES9_counter2;
+      rx_message_chs.data[2] = 0x00;
+      rx_message_chs.data[3] = 0x00;
+      rx_message_chs.data[4] = 0x00;
+      rx_message_chs.data[5] = 0x00;
+      rx_message_chs.data[6] = 0x02;
+      rx_message_chs.data[7] = 0x00;
+      BRAKES9_counter = BRAKES9_counter + 10;
+      if (BRAKES9_counter > 0xF1)
+        BRAKES9_counter = 0x11;
+      BRAKES9_counter2 = BRAKES9_counter2 + 10;
+      if (BRAKES9_counter2 > 0xF0)
+        BRAKES9_counter2 = 0x00;
+      break;
+    case BRAKES10_ID:
+      rx_message_chs.data[0] = 0xA6;
+      rx_message_chs.data[1] = BRAKES10_counter;
+      rx_message_chs.data[2] = 0x75;
+      rx_message_chs.data[3] = 0xD4;
+      rx_message_chs.data[4] = 0x51;
+      rx_message_chs.data[5] = 0x47;
+      rx_message_chs.data[6] = 0x1D;
+      rx_message_chs.data[7] = 0x0F;
+      BRAKES10_counter = BRAKES10_counter + 1;
+      if (BRAKES10_counter > 0xF)
+        BRAKES10_counter = 0;
+      break;
+    case MOTOR5_ID:
+      rx_message_chs.data[0] = 0xFE;
+      rx_message_chs.data[1] = 0x00;
+      rx_message_chs.data[2] = 0x00;
+      rx_message_chs.data[3] = 0x00;
+      rx_message_chs.data[4] = 0x00;
+      rx_message_chs.data[5] = 0x00;
+      rx_message_chs.data[6] = 0x00;
+      rx_message_chs.data[7] = MOTOR5_counter;
+      MOTOR5_counter++;
+      break;
+    case MOTOR2_ID:
+      rx_message_chs.data[0] = 0x00;
+      rx_message_chs.data[1] = 0x30;
+      rx_message_chs.data[2] = 0x00;
+      rx_message_chs.data[3] = 0x0A;
+      rx_message_chs.data[4] = 0x0A;
+      rx_message_chs.data[5] = 0x10;
+      rx_message_chs.data[6] = 0xFE;
+      rx_message_chs.data[7] = 0xFE;
+      break;
+    case mLW_1:
+      rx_message_chs.data[0] = 0x20;
+      rx_message_chs.data[1] = 0x00;
+      rx_message_chs.data[2] = 0x00;
+      rx_message_chs.data[3] = 0x00;
+      rx_message_chs.data[4] = 0x80;
+      rx_message_chs.data[5] = mLW_1_counter;
+      rx_message_chs.data[6] = 0x00;
+      mLW_1_crc = 255 - (rx_message_chs.data[0] + rx_message_chs.data[1] + rx_message_chs.data[2] + rx_message_chs.data[3] + rx_message_chs.data[5]);
+      rx_message_chs.data[7] = mLW_1_crc;
+      mLW_1_counter = mLW_1_counter + 16;
+      if (mLW_1_counter >= 0xF0)
+        mLW_1_counter = 0;
+      break;
+    case mKombi_1:
+      rx_message_chs.data[0] = 0x00;
+      rx_message_chs.data[1] = 0x02;
+      rx_message_chs.data[2] = 0x00;
+      rx_message_chs.data[3] = 0x00;
+      rx_message_chs.data[4] = 0x36;
+      rx_message_chs.data[5] = 0x00;
+      rx_message_chs.data[6] = 0x00;
+      rx_message_chs.data[7] = 0x00;
+      break;
     }
   }
 
@@ -461,7 +604,16 @@ void getLockData(twai_message_t &rx_message_chs)
       break;
 
     case BRAKES4_ID:
-      rx_message_chs.data[0] = get_lock_target_adjusted_value(0xFE, false);
+      if (haldexLearnActive || state.mode != MODE_5050)
+      {
+        appliedTorque = get_lock_target_adjusted_value(0x7F, false); // regulated clamp
+      }
+      else
+      {
+        appliedTorque = get_lock_target_adjusted_value(0xFE, false); // full clamp (27 bar)
+      }
+
+      rx_message_chs.data[0] = appliedTorque;
       rx_message_chs.data[1] = 0x00;
       rx_message_chs.data[2] = 0x00;
       rx_message_chs.data[3] = 0x64;
@@ -480,6 +632,71 @@ void getLockData(twai_message_t &rx_message_chs)
       {
         BRAKES4_counter = 0x00;
       }
+      break;
+
+    // ---- Transferred from standalone (gated off by default) ----------------
+    case mKombi_1:
+      rx_message_chs.data[0] = 0x24;
+      rx_message_chs.data[1] = 0x00;
+      rx_message_chs.data[2] = 0x1D;
+      rx_message_chs.data[3] = 0xB9;
+      rx_message_chs.data[4] = 0x07;
+      rx_message_chs.data[5] = 0x42;
+      rx_message_chs.data[6] = 0x09;
+      rx_message_chs.data[7] = 0x81;
+      break;
+    case mKombi_3:
+      rx_message_chs.data[0] = 0x60;
+      rx_message_chs.data[1] = 0x43;
+      rx_message_chs.data[2] = 0x01;
+      rx_message_chs.data[3] = 0x10;
+      rx_message_chs.data[4] = 0x66;
+      rx_message_chs.data[5] = 0xF1;
+      rx_message_chs.data[6] = 0x03;
+      rx_message_chs.data[7] = 0x02;
+      break;
+    case mGate_Komf_1:
+      rx_message_chs.data[0] = 0x03;
+      rx_message_chs.data[1] = 0x11;
+      rx_message_chs.data[2] = 0x58;
+      rx_message_chs.data[3] = 0x00;
+      rx_message_chs.data[4] = 0x40;
+      rx_message_chs.data[5] = 0x00;
+      rx_message_chs.data[6] = 0x01;
+      rx_message_chs.data[7] = 0x08;
+      break;
+    case BRAKES11_ID:
+      rx_message_chs.data[0] = 0x00;
+      rx_message_chs.data[1] = 0xC0;
+      rx_message_chs.data[2] = 0x00;
+      rx_message_chs.data[3] = 0x00;
+      rx_message_chs.data[4] = 0x00;
+      rx_message_chs.data[5] = 0x00;
+      rx_message_chs.data[6] = 0x00;
+      rx_message_chs.data[7] = 0x00;
+      break;
+    case mKombi_2:
+      rx_message_chs.data[0] = 0x4C;
+      rx_message_chs.data[1] = 0x86;
+      rx_message_chs.data[2] = 0x85;
+      rx_message_chs.data[3] = 0x00;
+      rx_message_chs.data[4] = 0x00;
+      rx_message_chs.data[5] = 0x30;
+      rx_message_chs.data[6] = 0xFF;
+      rx_message_chs.data[7] = 0x04;
+      break;
+    case mDiagnose_1:
+      rx_message_chs.data[0] = 0x26;
+      rx_message_chs.data[1] = 0xF2;
+      rx_message_chs.data[2] = 0x03;
+      rx_message_chs.data[3] = 0x12;
+      rx_message_chs.data[4] = 0x70;
+      rx_message_chs.data[5] = 0x19;
+      rx_message_chs.data[6] = 0x25;
+      rx_message_chs.data[7] = mDiagnose_1_counter;
+      mDiagnose_1_counter++;
+      if (mDiagnose_1_counter > 0x1F)
+        mDiagnose_1_counter = 0;
       break;
     }
   }
@@ -557,191 +774,194 @@ void getLockData(twai_message_t &rx_message_chs)
         mLW_1_counter = 0;
       break;
 
-      // ---- Inactive (kept for future use, no lock adjustment in standalone) ---
-      /*
+    // ---- Inactive frames restored (gated off by default via frameEditMask) --
+    case BRAKES1_ID:
+      // PQ Bremse_1 (0x1A0) - ABS/ESP main broadcast.  Static in standalone.
+      rx_message_chs.data[0] = 0x20;
+      rx_message_chs.data[1] = 0x40;
+      rx_message_chs.data[2] = 0xF0;
+      rx_message_chs.data[3] = 0x07;
+      rx_message_chs.data[4] = 0xFE;
+      rx_message_chs.data[5] = 0xFE;
+      rx_message_chs.data[6] = 0x00;
+      rx_message_chs.data[7] = BRAKES1_counter;
+      if (++BRAKES1_counter > 0x1F)
+        BRAKES1_counter = 10;
+      break;
 
-      case BRAKES1_ID:
-        // PQ Bremse_1 (0x1A0) - ABS/ESP main broadcast.  Static in standalone.
-        rx_message_chs.data[0] = 0x20;
-        rx_message_chs.data[1] = 0x40;
-        rx_message_chs.data[2] = 0xF0;
-        rx_message_chs.data[3] = 0x07;
-        rx_message_chs.data[4] = 0xFE;
-        rx_message_chs.data[5] = 0xFE;
-        rx_message_chs.data[6] = 0x00;
-        rx_message_chs.data[7] = BRAKES1_counter;
-        if (++BRAKES1_counter > 0x1F)
-          BRAKES1_counter = 10;
-        break;
+    case mGetriebe_2:
+      // PQ Getriebe_2 (0x540) - transmission status; needed by DTC 17497 but static.
+      rx_message_chs.data[0] = (mGetriebe_2_counter << 4) & 0xF0;
+      rx_message_chs.data[1] = 0x50;
+      rx_message_chs.data[2] = 0xFF;
+      rx_message_chs.data[3] = 0x00;
+      rx_message_chs.data[4] = 0xFF;
+      rx_message_chs.data[5] = 0x00;
+      rx_message_chs.data[6] = 0x00;
+      rx_message_chs.data[7] = 0xFF;
+      mGetriebe_2_counter = (mGetriebe_2_counter + 1) & 0x0F;
+      break;
 
-      case mGetriebe_2:
-        // PQ Getriebe_2 (0x540) - transmission status; needed by DTC 17497 but static.
-        rx_message_chs.data[0] = (mGetriebe_2_counter << 4) & 0xF0;
-        rx_message_chs.data[1] = 0x50;
-        rx_message_chs.data[2] = 0xFF;
-        rx_message_chs.data[3] = 0x00;
-        rx_message_chs.data[4] = 0xFF;
-        rx_message_chs.data[5] = 0x00;
-        rx_message_chs.data[6] = 0x00;
-        rx_message_chs.data[7] = 0xFF;
-        mGetriebe_2_counter = (mGetriebe_2_counter + 1) & 0x0F;
-        break;
+    case BRAKES5_ID:
+      // PQ Bremse_5 (0x4A8) - ESP brake-event broadcast.  Static in standalone.
+      rx_message_chs.data[0] = 0xFE;
+      rx_message_chs.data[1] = 0x7F;
+      rx_message_chs.data[2] = 0x03;
+      rx_message_chs.data[3] = 0x00;
+      rx_message_chs.data[4] = 0x00;
+      rx_message_chs.data[5] = 0x00;
+      rx_message_chs.data[6] = BRAKES5_counter;
+      rx_message_chs.data[7] = BRAKES5_counter2;
+      BRAKES5_counter = BRAKES5_counter + 10;
+      if (BRAKES5_counter > 0xF0)
+        BRAKES5_counter = 0;
+      BRAKES5_counter2 = BRAKES5_counter2 + 10;
+      if (BRAKES5_counter2 > 0xF3)
+        BRAKES5_counter2 = 3;
+      break;
 
-      case BRAKES5_ID:
-        // PQ Bremse_5 (0x4A8) - ESP brake-event broadcast.  Static in standalone.
-        rx_message_chs.data[0] = 0xFE;
-        rx_message_chs.data[1] = 0x7F;
-        rx_message_chs.data[2] = 0x03;
-        rx_message_chs.data[3] = 0x00;
-        rx_message_chs.data[4] = 0x00;
-        rx_message_chs.data[5] = 0x00;
-        rx_message_chs.data[6] = BRAKES5_counter;
-        rx_message_chs.data[7] = BRAKES5_counter2;
-        BRAKES5_counter = BRAKES5_counter + 10;
-        if (BRAKES5_counter > 0xF0) BRAKES5_counter = 0;
-        BRAKES5_counter2 = BRAKES5_counter2 + 10;
-        if (BRAKES5_counter2 > 0xF3) BRAKES5_counter2 = 3;
-        break;
+    case BRAKES8_ID:
+      // PQ Bremse_8 (0x1AC) - ESP supplemental broadcast; dual rolling counters.
+      rx_message_chs.data[0] = BRAKES8_counter;
+      rx_message_chs.data[1] = BRAKES8_counter1;
+      rx_message_chs.data[2] = 0x00;
+      rx_message_chs.data[3] = 0x00;
+      rx_message_chs.data[4] = 0x69;
+      rx_message_chs.data[5] = 0x21;
+      rx_message_chs.data[6] = 0x00;
+      rx_message_chs.data[7] = 0xC1;
+      if (++BRAKES8_counter > 0x8F)
+        BRAKES8_counter = 0x80;
+      if (++BRAKES8_counter1 > 0x0F)
+        BRAKES8_counter1 = 0x00;
+      break;
 
-      case BRAKES8_ID:
-        // PQ Bremse_8 (0x1AC) - ESP supplemental broadcast; dual rolling counters.
-        rx_message_chs.data[0] = BRAKES8_counter;
-        rx_message_chs.data[1] = BRAKES8_counter1;
-        rx_message_chs.data[2] = 0x00;
-        rx_message_chs.data[3] = 0x00;
-        rx_message_chs.data[4] = 0x69;
-        rx_message_chs.data[5] = 0x21;
-        rx_message_chs.data[6] = 0x00;
-        rx_message_chs.data[7] = 0xC1;
-        if (++BRAKES8_counter > 0x8F) BRAKES8_counter = 0x80;
-        if (++BRAKES8_counter1 > 0x0F) BRAKES8_counter1 = 0x00;
-        break;
+    case BRAKES2_ID:
+      // PQ Bremse_2 (0x5A0) - ESP/ABS sensor broadcast.  Now static in standalone
+      // (Querbeschleunigung was lock-adjusted historically; now 0x7F literal).
+      rx_message_chs.data[0] = 0x80;
+      rx_message_chs.data[1] = 0x7A;
+      rx_message_chs.data[2] = 0x05;
+      rx_message_chs.data[3] = BRAKES2_counter;
+      rx_message_chs.data[4] = 0x7F;
+      rx_message_chs.data[5] = 0xCA;
+      rx_message_chs.data[6] = 0x1B;
+      rx_message_chs.data[7] = 0xAB;
+      BRAKES2_counter = BRAKES2_counter + 16;
+      if (BRAKES2_counter > 0xF0)
+        BRAKES2_counter = 0;
+      break;
 
-      case BRAKES2_ID:
-        // PQ Bremse_2 (0x5A0) - ESP/ABS sensor broadcast.  Now static in standalone
-        // (Querbeschleunigung was lock-adjusted historically; now 0x7F literal).
-        rx_message_chs.data[0] = 0x80;
-        rx_message_chs.data[1] = 0x7A;
-        rx_message_chs.data[2] = 0x05;
-        rx_message_chs.data[3] = BRAKES2_counter;
-        rx_message_chs.data[4] = 0x7F;
-        rx_message_chs.data[5] = 0xCA;
-        rx_message_chs.data[6] = 0x1B;
-        rx_message_chs.data[7] = 0xAB;
-        BRAKES2_counter = BRAKES2_counter + 16;
-        if (BRAKES2_counter > 0xF0) BRAKES2_counter = 0;
-        break;
+    case MOTOR2_ID:
+      // PQ Motor_2 (0x288) - secondary engine broadcast.  Static in standalone.
+      rx_message_chs.data[0] = 0x00;
+      rx_message_chs.data[1] = 0x30;
+      rx_message_chs.data[2] = 0x00;
+      rx_message_chs.data[3] = 0x0A;
+      rx_message_chs.data[4] = 0x0A;
+      rx_message_chs.data[5] = 0x10;
+      rx_message_chs.data[6] = 0xFE;
+      rx_message_chs.data[7] = 0xFE;
+      break;
 
-      case MOTOR2_ID:
-        // PQ Motor_2 (0x288) - secondary engine broadcast.  Static in standalone.
-        rx_message_chs.data[0] = 0x00;
-        rx_message_chs.data[1] = 0x30;
-        rx_message_chs.data[2] = 0x00;
-        rx_message_chs.data[3] = 0x0A;
-        rx_message_chs.data[4] = 0x0A;
-        rx_message_chs.data[5] = 0x10;
-        rx_message_chs.data[6] = 0xFE;
-        rx_message_chs.data[7] = 0xFE;
-        break;
+    case MOTOR5_ID:
+      // PQ Motor_5 (0x480) - tertiary engine broadcast.  Static in standalone.
+      rx_message_chs.data[0] = 0xFE;
+      rx_message_chs.data[1] = 0x00;
+      rx_message_chs.data[2] = 0x00;
+      rx_message_chs.data[3] = 0x00;
+      rx_message_chs.data[4] = 0x00;
+      rx_message_chs.data[5] = 0x00;
+      rx_message_chs.data[6] = 0x00;
+      rx_message_chs.data[7] = MOTOR5_counter;
+      break;
 
-      case MOTOR5_ID:
-        // PQ Motor_5 (0x480) - tertiary engine broadcast.  Static in standalone.
-        rx_message_chs.data[0] = 0xFE;
-        rx_message_chs.data[1] = 0x00;
-        rx_message_chs.data[2] = 0x00;
-        rx_message_chs.data[3] = 0x00;
-        rx_message_chs.data[4] = 0x00;
-        rx_message_chs.data[5] = 0x00;
-        rx_message_chs.data[6] = 0x00;
-        rx_message_chs.data[7] = MOTOR5_counter;
-        break;
+    case mKombi_1:
+      // PQ Kombi_1 (0x320) - instrument-cluster broadcast.  Static in standalone.
+      rx_message_chs.data[0] = 0x24;
+      rx_message_chs.data[1] = 0x00;
+      rx_message_chs.data[2] = 0x1D;
+      rx_message_chs.data[3] = 0xB9;
+      rx_message_chs.data[4] = 0x07;
+      rx_message_chs.data[5] = 0x42;
+      rx_message_chs.data[6] = 0x09;
+      rx_message_chs.data[7] = 0x81;
+      break;
 
-      case mKombi_1:
-        // PQ Kombi_1 (0x320) - instrument-cluster broadcast.  Static in standalone.
-        rx_message_chs.data[0] = 0x24;
-        rx_message_chs.data[1] = 0x00;
-        rx_message_chs.data[2] = 0x1D;
-        rx_message_chs.data[3] = 0xB9;
-        rx_message_chs.data[4] = 0x07;
-        rx_message_chs.data[5] = 0x42;
-        rx_message_chs.data[6] = 0x09;
-        rx_message_chs.data[7] = 0x81;
-        break;
+    case mKombi_3:
+      // PQ Kombi_3 (0x520) - cluster odometer/keys.  Static in standalone.
+      rx_message_chs.data[0] = 0x60;
+      rx_message_chs.data[1] = 0x43;
+      rx_message_chs.data[2] = 0x01;
+      rx_message_chs.data[3] = 0x10;
+      rx_message_chs.data[4] = 0x66;
+      rx_message_chs.data[5] = 0xF1;
+      rx_message_chs.data[6] = 0x03;
+      rx_message_chs.data[7] = 0x02;
+      break;
 
-      case mKombi_3:
-        // PQ Kombi_3 (0x520) - cluster odometer/keys.  Static in standalone.
-        rx_message_chs.data[0] = 0x60;
-        rx_message_chs.data[1] = 0x43;
-        rx_message_chs.data[2] = 0x01;
-        rx_message_chs.data[3] = 0x10;
-        rx_message_chs.data[4] = 0x66;
-        rx_message_chs.data[5] = 0xF1;
-        rx_message_chs.data[6] = 0x03;
-        rx_message_chs.data[7] = 0x02;
-        break;
+    case mGate_Komf_1:
+      // PQ Gate_Komf_1 (0x390) - gateway-comfort broadcast.  Static in standalone.
+      rx_message_chs.data[0] = 0x03;
+      rx_message_chs.data[1] = 0x11;
+      rx_message_chs.data[2] = 0x58;
+      rx_message_chs.data[3] = 0x00;
+      rx_message_chs.data[4] = 0x40;
+      rx_message_chs.data[5] = 0x00;
+      rx_message_chs.data[6] = 0x01;
+      rx_message_chs.data[7] = 0x08;
+      break;
 
-      case mGate_Komf_1:
-        // PQ Gate_Komf_1 (0x390) - gateway-comfort broadcast.  Static in standalone.
-        rx_message_chs.data[0] = 0x03;
-        rx_message_chs.data[1] = 0x11;
-        rx_message_chs.data[2] = 0x58;
-        rx_message_chs.data[3] = 0x00;
-        rx_message_chs.data[4] = 0x40;
-        rx_message_chs.data[5] = 0x00;
-        rx_message_chs.data[6] = 0x01;
-        rx_message_chs.data[7] = 0x08;
-        break;
+    case BRAKES11_ID:
+      // PQ Bremse_11 (0x5B7) - extended brake frame.  Static in standalone.
+      rx_message_chs.data[0] = 0x00;
+      rx_message_chs.data[1] = 0xC0;
+      rx_message_chs.data[2] = 0x00;
+      rx_message_chs.data[3] = 0x00;
+      rx_message_chs.data[4] = 0x00;
+      rx_message_chs.data[5] = 0x00;
+      rx_message_chs.data[6] = 0x00;
+      rx_message_chs.data[7] = 0x00;
+      break;
 
-      case BRAKES11_ID:
-        // PQ Bremse_11 (0x5B7) - extended brake frame.  Static in standalone.
-        rx_message_chs.data[0] = 0x00;
-        rx_message_chs.data[1] = 0xC0;
-        rx_message_chs.data[2] = 0x00;
-        rx_message_chs.data[3] = 0x00;
-        rx_message_chs.data[4] = 0x00;
-        rx_message_chs.data[5] = 0x00;
-        rx_message_chs.data[6] = 0x00;
-        rx_message_chs.data[7] = 0x00;
-        break;
+    case mSysteminfo_1:
+      // PQ Systeminfo_1 (0x5D0) - gateway vehicle-identity broadcast.  Static.
+      rx_message_chs.data[0] = 0x00;
+      rx_message_chs.data[1] = 0x24;
+      rx_message_chs.data[2] = 0x35;
+      rx_message_chs.data[3] = 0x0F;
+      rx_message_chs.data[4] = 0x39;
+      rx_message_chs.data[5] = 0x59;
+      rx_message_chs.data[6] = 0x00;
+      rx_message_chs.data[7] = 0x00;
+      break;
 
-      case mSysteminfo_1:
-        // PQ Systeminfo_1 (0x5D0) - gateway vehicle-identity broadcast.  Static.
-        rx_message_chs.data[0] = 0x00;
-        rx_message_chs.data[1] = 0x24;
-        rx_message_chs.data[2] = 0x35;
-        rx_message_chs.data[3] = 0x0F;
-        rx_message_chs.data[4] = 0x39;
-        rx_message_chs.data[5] = 0x59;
-        rx_message_chs.data[6] = 0x00;
-        rx_message_chs.data[7] = 0x00;
-        break;
+    case mKombi_2:
+      // PQ Kombi_2 (0x420) - cluster temps.  Static in standalone.
+      rx_message_chs.data[0] = 0x4C;
+      rx_message_chs.data[1] = 0x86;
+      rx_message_chs.data[2] = 0x85;
+      rx_message_chs.data[3] = 0x00;
+      rx_message_chs.data[4] = 0x00;
+      rx_message_chs.data[5] = 0x30;
+      rx_message_chs.data[6] = 0xFF;
+      rx_message_chs.data[7] = 0x04;
+      break;
 
-      case mKombi_2:
-        // PQ Kombi_2 (0x420) - cluster temps.  Static in standalone.
-        rx_message_chs.data[0] = 0x4C;
-        rx_message_chs.data[1] = 0x86;
-        rx_message_chs.data[2] = 0x85;
-        rx_message_chs.data[3] = 0x00;
-        rx_message_chs.data[4] = 0x00;
-        rx_message_chs.data[5] = 0x30;
-        rx_message_chs.data[6] = 0xFF;
-        rx_message_chs.data[7] = 0x04;
-        break;
-
-      case mDiagnose_1:
-        // PQ Diagnose_1 (0x7D0) - diagnostic timestamp broadcast.  Static.
-        rx_message_chs.data[0] = 0x26;
-        rx_message_chs.data[1] = 0xF2;
-        rx_message_chs.data[2] = 0x03;
-        rx_message_chs.data[3] = 0x12;
-        rx_message_chs.data[4] = 0x70;
-        rx_message_chs.data[5] = 0x19;
-        rx_message_chs.data[6] = 0x25;
-        rx_message_chs.data[7] = mDiagnose_1_counter;
-        mDiagnose_1_counter++;
-        if (mDiagnose_1_counter > 0x1F) mDiagnose_1_counter = 0;
-        break;
-      */
+    case mDiagnose_1:
+      // PQ Diagnose_1 (0x7D0) - diagnostic timestamp broadcast.  Static.
+      rx_message_chs.data[0] = 0x26;
+      rx_message_chs.data[1] = 0xF2;
+      rx_message_chs.data[2] = 0x03;
+      rx_message_chs.data[3] = 0x12;
+      rx_message_chs.data[4] = 0x70;
+      rx_message_chs.data[5] = 0x19;
+      rx_message_chs.data[6] = 0x25;
+      rx_message_chs.data[7] = mDiagnose_1_counter;
+      mDiagnose_1_counter++;
+      if (mDiagnose_1_counter > 0x1F)
+        mDiagnose_1_counter = 0;
+      break;
     }
   }
 
@@ -751,40 +971,35 @@ void getLockData(twai_message_t &rx_message_chs)
   {
     switch (rx_message_chs.identifier)
     {
-      /*
-            twai_message_t frame;
-            frame.identifier = ESP_18; // 0x135.  Fixed response, no changes
-            frame.extd = 0;
-            frame.rtr = 0;
-            frame.data_length_code = 8;
-            frame.data[0] = 0x00; // supposed to have CRC? doesn't affect
-            frame.data[1] = 0xC0; // always 0xC0, never changes
-            frame.data[2] = 0x00; // doesn't affect
-            frame.data[3] = 0x00; // doesn't affect
-            frame.data[4] = 0x00; // doesn't affect
-            frame.data[5] = 0x00; // doesn't affect
-            frame.data[6] = 0x00; // doesn't affect
-            frame.data[7] = 0x00; // doesn't affect
-            twai_transmit_v2(twai_bus_1, &frame, 0);
-      */
+    case ESP_18: // 0x135 - fixed response, static (transferred; gated off by default)
+      rx_message_chs.data[0] = 0x00;
+      rx_message_chs.data[1] = 0xC0;
+      rx_message_chs.data[2] = 0x00;
+      rx_message_chs.data[3] = 0x00;
+      rx_message_chs.data[4] = 0x00;
+      rx_message_chs.data[5] = 0x00;
+      rx_message_chs.data[6] = 0x00;
+      rx_message_chs.data[7] = 0x00;
+      break;
     case ESP_19:
       rx_message_chs.data[0] = get_lock_target_adjusted_value(ESP_19_counter2, false);        // HL - wheel speed
       rx_message_chs.data[1] = get_lock_target_adjusted_value(ESP_19_counter, false);         // HL - wheel speed
       rx_message_chs.data[2] = get_lock_target_adjusted_value(ESP_19_counter2, false);        // HR - wheel speed
       rx_message_chs.data[3] = get_lock_target_adjusted_value(ESP_19_counter, false);         // HR - wheel speed
-      rx_message_chs.data[4] = get_lock_target_adjusted_value(ESP_19_counter2 + 0xCA, false); // VL - wheel speed 0xDB
+      rx_message_chs.data[4] = get_lock_target_adjusted_value(ESP_19_counter2 + 0xBA, false); // VL - wheel speed 0xDB
       rx_message_chs.data[5] = get_lock_target_adjusted_value(ESP_19_counter, false);         // VL - wheel speed -- affects if =0x0B
-      rx_message_chs.data[6] = get_lock_target_adjusted_value(ESP_19_counter2 + 0xCA, false); // VR - wheel speed 0xDB
+      rx_message_chs.data[6] = get_lock_target_adjusted_value(ESP_19_counter2 + 0xBA, false); // VR - wheel speed 0xDB
       rx_message_chs.data[7] = get_lock_target_adjusted_value(ESP_19_counter, false);         // VR - wheel speed -- affects if =0x0B
+
       ESP_19_counter++;
       ESP_19_counter2++;
-      if (ESP_19_counter > 0x1A) // 0x1e
+      if (ESP_19_counter > 0x10) // 0x1A
       {
-        ESP_19_counter = 0x01; // 0x10
+        ESP_19_counter = 0x0A; // 0x10
       }
-      if (ESP_19_counter2 > 0x0E) // 0x0a
+      if (ESP_19_counter2 > 0x2F) // 0x0E
       {
-        ESP_19_counter2 = 0x00; // 0x00
+        ESP_19_counter2 = 0x2E; // 0x00
       }
       break;
 
@@ -920,25 +1135,24 @@ void getLockData(twai_message_t &rx_message_chs)
       }
       break;
 
-      /*case LWI_01:
-        rx_message_chs.data[0] = 0x00;           // checksum placeholder
-        rx_message_chs.data[1] = LWI_01_counter; // rolling - 0x10>0x1F
-        rx_message_chs.data[2] = 0x01;           // LWI_SensorStatus
-        rx_message_chs.data[3] = 0x00;           // LWI_Qbit_sub_daten
-        rx_message_chs.data[4] = 0x00;           // LWI_Qbit_Lendradwiken
-        rx_message_chs.data[5] = 0x00;           // LWI_lendradwinken
-        rx_message_chs.data[6] = 0x00;           // LWI_lendradw_geschw
-        rx_message_chs.data[7] = 0x00;           // LWI_lendradw_geschw Unit Degress of Arc per Second
+    case LWI_01:
+      rx_message_chs.data[0] = 0x00;           // checksum placeholder
+      rx_message_chs.data[1] = LWI_01_counter; // rolling - 0x10>0x1F
+      rx_message_chs.data[2] = 0x01;           // LWI_SensorStatus
+      rx_message_chs.data[3] = 0x00;           // LWI_Qbit_sub_daten
+      rx_message_chs.data[4] = 0x00;           // LWI_Qbit_Lendradwiken
+      rx_message_chs.data[5] = 0x00;           // LWI_lendradwinken
+      rx_message_chs.data[6] = 0x00;           // LWI_lendradw_geschw
+      rx_message_chs.data[7] = 0x00;           // LWI_lendradw_geschw Unit Degress of Arc per Second
 
-        rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_086); // for 0x086
+      rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_086); // for 0x086
 
-        LWI_01_counter++;
-        if (LWI_01_counter > 0x1F)
-        {
-          LWI_01_counter = 0x10;
-        }
-        break;
-
+      LWI_01_counter++;
+      if (LWI_01_counter > 0x1F)
+      {
+        LWI_01_counter = 0x10;
+      }
+      break;
 
     case MOTOR_20:
       rx_message_chs.data[0] = 0x00;             // checksum
@@ -958,7 +1172,6 @@ void getLockData(twai_message_t &rx_message_chs)
         MOTOR_20_counter = 0x00;
       }
       break;
-      */
 
     case ESP_10:
       rx_message_chs.data_length_code = 8;                                    // DLC 8
@@ -1017,107 +1230,103 @@ void getLockData(twai_message_t &rx_message_chs)
       }
       break;
 
-      /*
+    case ESP_02:                                                              // ESP_02 0x10B
+      rx_message_chs.data[0] = 0x00;                                          // checksum
+      rx_message_chs.data[1] = ESP_02_counter;                                // rolling - 0x00>0x1F
+      rx_message_chs.data[2] = 0x7E;                                          // doesn't effect one of these affects, find which one - doesn't affect
+      rx_message_chs.data[3] = 0x0F;                                          // doesn't effect sometimes 0xC0, sometimes 0x00
+      rx_message_chs.data[4] = 0x82;                                          // doesn't effect sometimes 0x3A, somtimes 0x39
+      rx_message_chs.data[5] = 0x0C;                                          // doesn't effect rolling?
+      rx_message_chs.data[6] = 0x40;                                          // doesn't efffect
+      rx_message_chs.data[7] = 0x00;                                          // doesn't effect
+      rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_101); // for 0x101
 
-          case ESP_02:                                                          // ESP_02 0x10B
-        rx_message_chs.data[0] = 0x00;                                          // checksum
-        rx_message_chs.data[1] = ESP_02_counter;                                // rolling - 0x00>0x1F
-        rx_message_chs.data[2] = 0x7E;                                          // doesn't effect one of these affects, find which one - doesn't affect
-        rx_message_chs.data[3] = 0x0F;                                          // doesn't effect sometimes 0xC0, sometimes 0x00
-        rx_message_chs.data[4] = 0x82;                                          // doesn't effect sometimes 0x3A, somtimes 0x39
-        rx_message_chs.data[5] = 0x0C;                                          // doesn't effect rolling?
-        rx_message_chs.data[6] = 0x40;                                          // doesn't efffect
-        rx_message_chs.data[7] = 0x00;                                          // doesn't effect
-        rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_101); // for 0x101
+      ESP_02_counter++;
+      if (ESP_02_counter > 0x1F)
+      {
+        ESP_02_counter = 0x00;
+      }
+      break;
 
-        ESP_02_counter++;
-        if (ESP_02_counter > 0x1F)
-        {
-          ESP_02_counter = 0x00;
-        }
-        break;
+    case ESP_21:
+      rx_message_chs.data[0] = 0x00;           // checksum
+      rx_message_chs.data[1] = ESP_21_counter; // rolling - 0x00>0x1F
+      rx_message_chs.data[2] = 0x1F;           // in diagnosis? none affect
+      rx_message_chs.data[3] = 0x80;           // sometimes 0xC0, sometimes 0x00
+      rx_message_chs.data[4] = 0x00;           // sometimes 0x3A, somtimes 0x39
+      rx_message_chs.data[5] = 0x00;
+      rx_message_chs.data[6] = 0x00;
+      rx_message_chs.data[7] = 0x00;
+      rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_0fd); // for 0x0fd
 
-      case ESP_21:
-        rx_message_chs.data[0] = 0x00;           // checksum
-        rx_message_chs.data[1] = ESP_21_counter; // rolling - 0x00>0x1F
-        rx_message_chs.data[2] = 0x1F;           // in diagnosis? none affect
-        rx_message_chs.data[3] = 0x80;           // sometimes 0xC0, sometimes 0x00
-        rx_message_chs.data[4] = 0x00;           // sometimes 0x3A, somtimes 0x39
-        rx_message_chs.data[5] = 0x00;
-        rx_message_chs.data[6] = 0x00;
-        rx_message_chs.data[7] = 0x00;
-        rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_0fd); // for 0x0fd
+      ESP_21_counter++;
+      if (ESP_21_counter > 0x1F)
+      {
+        ESP_21_counter = 0x00;
+      }
+      break;
 
-        ESP_21_counter++;
-        if (ESP_21_counter > 0x1F)
-        {
-          ESP_21_counter = 0x00;
-        }
-        break;
+    case KOMBI_01:
+      rx_message_chs.data[0] = 0x10; // angle of turn (block 011) low byte
+      rx_message_chs.data[1] = 0x20; // checksum (0x20>0x2F)
+      rx_message_chs.data[2] = 0x02; //
+      rx_message_chs.data[3] = 0x00; //
+      rx_message_chs.data[4] = 0x0C; //
+      rx_message_chs.data[5] = 0x00; //
+      rx_message_chs.data[6] = 0x00; //
+      rx_message_chs.data[7] = 0x24; //
+      break;
 
-      case KOMBI_01:
-        rx_message_chs.data[0] = 0x10; // angle of turn (block 011) low byte
-        rx_message_chs.data[1] = 0x20; // checksum (0x20>0x2F)
-        rx_message_chs.data[2] = 0x02; //
-        rx_message_chs.data[3] = 0x00; //
-        rx_message_chs.data[4] = 0x0C; //
-        rx_message_chs.data[5] = 0x00; //
-        rx_message_chs.data[6] = 0x00; //
-        rx_message_chs.data[7] = 0x24; //
-        break;
+    case ESP_23:
+      rx_message_chs.data[0] = 0x00;                                          // checksum placeholder no effect
+      rx_message_chs.data[1] = ESP_23_counter;                                // ESP_23_counter;           // no effect B high byte
+      rx_message_chs.data[2] = 0xBF;                                          // no effect C
+      rx_message_chs.data[3] = 0x7F;                                          // no effect D
+      rx_message_chs.data[4] = 0x00;                                          // rate of change (block 010)
+      rx_message_chs.data[5] = 0x00;                                          // rate of change (block 010)
+      rx_message_chs.data[6] = 0x7C;                                          // rate of change (block 010)
+      rx_message_chs.data[7] = 0x78;                                          // rate of change (block 010)
+      rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_5be); // for 0x5be
 
-      case ESP_23:
-        rx_message_chs.data[0] = 0x00;                                          // checksum placeholder no effect
-        rx_message_chs.data[1] = ESP_23_counter;                                // ESP_23_counter;           // no effect B high byte
-        rx_message_chs.data[2] = 0xBF;                                          // no effect C
-        rx_message_chs.data[3] = 0x7F;                                          // no effect D
-        rx_message_chs.data[4] = 0x00;                                          // rate of change (block 010)
-        rx_message_chs.data[5] = 0x00;                                          // rate of change (block 010)
-        rx_message_chs.data[6] = 0x7C;                                          // rate of change (block 010)
-        rx_message_chs.data[7] = 0x78;                                          // rate of change (block 010)
-        rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_5be); // for 0x5be
+      ESP_23_counter++;
+      if (ESP_23_counter > 0x1F)
+      {
+        ESP_23_counter = 0x00;
+      }
+      break;
 
-        ESP_23_counter++;
-        if (ESP_23_counter > 0x1F)
-        {
-          ESP_23_counter = 0x00;
-        }
-        break;
+    case Parkhilfe_04:
+      rx_message_chs.data[0] = 0x00; // angle of turn (block 011) low byte
+      rx_message_chs.data[1] = 0x00; // no effect B high byte
+      rx_message_chs.data[2] = 0x00; // no effect C
+      rx_message_chs.data[3] = 0x00; // no effect D
+      rx_message_chs.data[4] = 0x00; // rate of change (block 010)
+      rx_message_chs.data[5] = 0x00; // rate of change (block 010)
+      rx_message_chs.data[6] = 0x00; // rate of change (block 010)
+      rx_message_chs.data[7] = 0x24; // rate of change (block 010)
+      break;
 
-      case Parkhilfe_04:
-        rx_message_chs.data[0] = 0x00; // angle of turn (block 011) low byte
-        rx_message_chs.data[1] = 0x00; // no effect B high byte
-        rx_message_chs.data[2] = 0x00; // no effect C
-        rx_message_chs.data[3] = 0x00; // no effect D
-        rx_message_chs.data[4] = 0x00; // rate of change (block 010)
-        rx_message_chs.data[5] = 0x00; // rate of change (block 010)
-        rx_message_chs.data[6] = 0x00; // rate of change (block 010)
-        rx_message_chs.data[7] = 0x24; // rate of change (block 010)
-        break;
+    case GATEWAY_72:
+      rx_message_chs.data[0] = 0x50; //
+      rx_message_chs.data[1] = 0x80; //
+      rx_message_chs.data[2] = 0x00; //
+      rx_message_chs.data[3] = 0x00; //
+      rx_message_chs.data[4] = 0x05; //
+      rx_message_chs.data[5] = 0x10; //
+      rx_message_chs.data[6] = 0x01; //
+      rx_message_chs.data[7] = 0x78; //
+      break;
 
-      case GATEWAY_72:
-        rx_message_chs.data[0] = 0x50; //
-        rx_message_chs.data[1] = 0x80; //
-        rx_message_chs.data[2] = 0x00; //
-        rx_message_chs.data[3] = 0x00; //
-        rx_message_chs.data[4] = 0x05; //
-        rx_message_chs.data[5] = 0x10; //
-        rx_message_chs.data[6] = 0x01; //
-        rx_message_chs.data[7] = 0x78; //
-        break;
-
-      case GETRIEBE_14:
-        rx_message_chs.data[0] = 0x00; // Maximum possible acceleration (limited by gear/clutch)
-        rx_message_chs.data[1] = 0x00; // Charisma drive programme selected (affects shift mapping)
-        rx_message_chs.data[2] = 0x54; // Charisma system status
-        rx_message_chs.data[3] = 0x24; // Drag/friction loss torque in transmission
-        rx_message_chs.data[4] = 0x00; // Launch control active
-        rx_message_chs.data[5] = 0x60; //
-        rx_message_chs.data[6] = 0x01; //
-        rx_message_chs.data[7] = 0x51; //
-        break;
-
-      */
+    case GETRIEBE_14:
+      rx_message_chs.data[0] = 0x00; // Maximum possible acceleration (limited by gear/clutch)
+      rx_message_chs.data[1] = 0x00; // Charisma drive programme selected (affects shift mapping)
+      rx_message_chs.data[2] = 0x54; // Charisma system status
+      rx_message_chs.data[3] = 0x24; // Drag/friction loss torque in transmission
+      rx_message_chs.data[4] = 0x00; // Launch control active
+      rx_message_chs.data[5] = 0x60; //
+      rx_message_chs.data[6] = 0x01; //
+      rx_message_chs.data[7] = 0x51; //
+      break;
 
     case MOTOR_14:
       rx_message_chs.data[0] = 0x00;                                          // checksum
@@ -1154,7 +1363,6 @@ void getLockData(twai_message_t &rx_message_chs)
         ESP_07_counter = 0x00;
       }
       break;
-      /*
 
     case ESP_29:
       rx_message_chs.data[0] = 0x00; //
@@ -1257,8 +1465,6 @@ void getLockData(twai_message_t &rx_message_chs)
       rx_message_chs.data[6] = 0x00; //
       rx_message_chs.data[7] = 0x78; //
       break;
-      //...
-      */
     }
   }
 }

@@ -5,7 +5,8 @@
 
 #include <cstring>
 
-static int getCPUUsagePercent() // helper function to calculate CPU usage percentage based on FreeRTOS task run time stats
+// helper function to calculate CPU usage percentage based on FreeRTOS task run time stats
+static int getCPUUsagePercent() 
 {
     static configRUN_TIME_COUNTER_TYPE previousTotalRuntime = 0;
     static configRUN_TIME_COUNTER_TYPE previousIdleRuntime = 0;
@@ -207,8 +208,10 @@ static void statusOutgoing(AsyncWebServerRequest *request)
     data["busFailure"] = isBusFailure;
     data["lastChassisMs"] = lastCANChassisTick > 0 ? (millis() - lastCANChassisTick) : 0;
     data["lastHaldexMs"] = lastCANHaldexTick > 0 ? (millis() - lastCANHaldexTick) : 0;
+    data["diagToolActive"] = externalDiagActive(); // external scanner detected -> our live polling auto-paused
 
-    if (haldexOk && udsMQBEnabled)
+    // UDS live data is Gen5 (MQB 0CQ / PQ 0AY) only.
+    if (haldexOk && liveDiagEnabled && (haldexGeneration == 50 || haldexGeneration == 51))
     {
         JsonObject uds = data["uds"].to<JsonObject>();
         uds["terminalVoltage"] = udsTerminalVoltage;
@@ -219,6 +222,26 @@ static void statusOutgoing(AsyncWebServerRequest *request)
         uds["clutchPWM"] = udsClutchPWM;
         uds["clutchVoltage"] = udsClutchVoltage;
         uds["blockagePct"] = udsBlockagePct;
+    }
+
+    // KWP2000/TP2.0 raw measuring-block capture (Gen2/4 PQ Haldex).
+    if (haldexOk && liveDiagEnabled && (haldexGeneration == 2 || haldexGeneration == 4))
+    {
+        JsonObject kwp = data["kwp"].to<JsonObject>();
+        kwp["connected"] = kwpTp20Connected;
+        kwp["raw"] = kwpTp20RawDump;
+
+        // Gen4 (0AY) decoded/scaled measuring values.
+        if (haldexGeneration == 4)
+        {
+            kwp["oilTemp"] = kwpOilTemp;
+            kwp["plateTemp"] = kwpPlateTemp;
+            kwp["supplyVoltage"] = kwpSupplyVoltage;
+            kwp["oilPressure"] = kwpOilPressure;
+            kwp["estTorque"] = kwpEstTorque;
+            kwp["clutchDuty"] = kwpClutchDuty;
+            kwp["clutchValveCurrent"] = kwpClutchValveCurrent;
+        }
     }
 
     data["uptimeMs"] = millis();
@@ -272,7 +295,7 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
 
     data["analyzerMode"] = analyzerMode;
     data["analyzerSerial"] = analyzerSerial;
-    data["udsMQBEnabled"] = udsMQBEnabled;
+    data["liveDiagEnabled"] = liveDiagEnabled;
 
     data["followBrake"] = followBrake;
     data["invertBrake"] = invertBrake;
@@ -309,10 +332,30 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
         }
     }
 
+    // Frame-edit blocks for the current generation (per-CAN-ID passthrough toggles).
+    {
+        int gi = frameEditGenIdx(haldexGeneration);
+        JsonArray fb = data["frameBlocks"].to<JsonArray>();
+        if (gi >= 0)
+        {
+            for (uint16_t i = 0; i < frameEditBlockCount; i++)
+            {
+                if (frameEditBlocks[i].genIdx == (uint8_t)gi)
+                {
+                    JsonObject o = fb.add<JsonObject>();
+                    o["bit"] = frameEditBlocks[i].bit;
+                    o["name"] = frameEditBlocks[i].name;
+                    o["canId"] = frameEditBlocks[i].canId;
+                    o["enabled"] = frameEditEnabled((uint8_t)gi, frameEditBlocks[i].bit);
+                }
+            }
+        }
+    }
+
     sendJSON(request, 200, data);
 }
 
-// manage settings (saved from Web, handled here): ESP sends, this handles
+// manage settings (saved from Web, handled here): WebServer sends, this handles
 static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
 {
     JsonDocument data;
@@ -428,9 +471,9 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
         setAnalyzerSerialMode(data["analyzerSerial"]);
     }
 
-    if (data["udsMQBEnabled"].is<bool>())
+    if (data["liveDiagEnabled"].is<bool>())
     {
-        udsMQBEnabled = data["udsMQBEnabled"];
+        liveDiagEnabled = data["liveDiagEnabled"];
     }
 
     if (data["useCANifAvailable"].is<bool>())
@@ -522,12 +565,32 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
         ledBrightness = (uint8_t)constrain((int)data["ledBrightness"], 0, 255);
     }
 
+    // Frame-edit gating: reset all masks to defaults, or toggle a single block
+    // (bit) for the currently-selected generation.
+    if (data["frameEditReset"].is<bool>() && data["frameEditReset"].as<bool>())
+    {
+        resetFrameEditMask();
+    }
+    if (data["frameEditBit"].is<uint8_t>() && data["frameEditOn"].is<bool>())
+    {
+        int gi = frameEditGenIdx(haldexGeneration);
+        uint8_t bit = data["frameEditBit"];
+        if (gi >= 0 && bit < 64)
+        {
+            // Edit the mask for the mode we're currently in (standalone vs normal).
+            if (data["frameEditOn"].as<bool>())
+                activeFrameEditMask()[gi] |= (1ULL << bit);
+            else
+                activeFrameEditMask()[gi] &= ~(1ULL << bit);
+        }
+    }
+
     JsonDocument resp;
     resp["ok"] = true;
     sendJSON(request, 200, resp);
 }
 
-// manage mode (saved from Web, handled here): ESP sends, this handles
+// manage mode (saved from Web, handled here): WebServer sends, this handles
 static void modeIncoming(AsyncWebServerRequest *request, const String &body)
 {
     JsonDocument data;
@@ -554,7 +617,7 @@ static void modeIncoming(AsyncWebServerRequest *request, const String &body)
     }
 }
 
-// manage tune (saved from Web, handled here): ESP sends, this handles
+// manage tune (saved from Web, handled here): WebServer sends, this handles
 static void tuneIncoming(AsyncWebServerRequest *request, const String &body)
 {
     JsonDocument data;

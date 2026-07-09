@@ -1,6 +1,30 @@
 #include <OpenHaldexC6_StandaloneCAN.h>
 #include <OpenHaldexC6_Calculations.h>
 
+// Standalone frames honour the same frame-edit mask as the passthrough path: a
+// block turned OFF in the UI is simply not generated (mirrors the passthrough
+// "leave the frame untouched" behaviour). Frames that are not listed as editable
+// blocks for the active generation always send. All standalone Haldex-frame
+// transmits go through here instead of calling twai_transmit_v2 directly.
+static inline void standaloneTx(twai_message_t &f)
+{
+  int gi = frameEditGenIdx(haldexGeneration);
+  if (gi >= 0)
+  {
+    for (uint16_t i = 0; i < frameEditBlockCount; i++)
+    {
+      if (frameEditBlocks[i].genIdx == (uint8_t)gi &&
+          frameEditBlocks[i].canId == f.identifier)
+      {
+        if (!frameEditEnabled((uint8_t)gi, frameEditBlocks[i].bit))
+          return; // block disabled -> do not generate this frame
+        break;
+      }
+    }
+  }
+  twai_transmit_v2(twai_bus_1, &f, 0);
+}
+
 // Periodic frame tasks
 void frames10(void *arg)
 {
@@ -290,7 +314,7 @@ void Gen1_frames20()
 
   frame.data[6] = appliedTorque; // mechanisches_Motor_Verlustmoment - openHaldex applied-torque demand
   frame.data[7] = 0x00;          // inneres_Motor_Moment (actual inner torque) - left zero in standalone
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Motor_3 (0x380, DLC 8) - secondary engine ECU broadcast (vw_pq.dbc: Motor_3).
   frame.identifier = MOTOR3_ID;
@@ -303,7 +327,7 @@ void Gen1_frames20()
   frame.data[5] = 0x00; // reserved / Winterprg / Freigabe_Segeln
   frame.data[6] = 0x00; // reserved
   frame.data[7] = 0xFE; // reserved (kept non-zero for haldex sanity)
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Bremse_1 (0x1A0, DLC 8) - ABS/ESP main broadcast.
   // Bremse = brake. vw_pq.dbc signals include BR1_ASR_passiv, BR1_ESPASR_passiv,
@@ -321,7 +345,7 @@ void Gen1_frames20()
   frame.data[7] = BRAKES1_counter;
   if (++BRAKES1_counter > 0xF)
     BRAKES1_counter = 0;
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Bremse_3 (0x4A0, DLC 8) - per-wheel speeds (vw_pq.dbc: Bremse_3, * 0.01 km/h).
   // Lock-adjusted low bytes "fake" wheel slip to nudge haldex engagement.
@@ -335,7 +359,7 @@ void Gen1_frames20()
   frame.data[5] = 0x0A;                                        // Radgeschw_HL high
   frame.data[6] = 0x00;                                        // Radgeschw_HR low (rear-right)
   frame.data[7] = 0x0A;                                        // Radgeschw_HR high
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 }
 
 void Gen1_frames25()
@@ -374,7 +398,7 @@ void Gen2_frames10()
   frame.data[7] = BRAKES1_counter; // BR1_BZ - rolling 4-bit counter
   if (++BRAKES1_counter > 0xF)
     BRAKES1_counter = 0;
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Bremse_2 (0x5A0, DLC 8) - ESP/ABS sensor broadcast (vw_pq.dbc: Bremse_2).
   frame.identifier = BRAKES2_ID;
@@ -390,7 +414,7 @@ void Gen2_frames10()
   BRAKES2_counter = BRAKES2_counter + 10;
   if (BRAKES2_counter > 0xF7)
     BRAKES2_counter = 7;
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Bremse_3 (0x4A0, DLC 8) - per-wheel speeds (see Gen1 for signal layout).
   frame.identifier = BRAKES3_ID;
@@ -403,7 +427,7 @@ void Gen2_frames10()
   frame.data[5] = 0x0A;                                        // Radgeschw_HL high
   frame.data[6] = 0x00;                                        // Radgeschw_HR low
   frame.data[7] = 0x0A;                                        // Radgeschw_HR high
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Bremse_4 (0x2A0, DLC 8 here / 3 per dbc) - ABS coupling-moment broadcast.
   // vw_pq.dbc: ABS_Vorgabewert_hinten_Kupplung (rear coupling % 0..100),
@@ -423,7 +447,7 @@ void Gen2_frames10()
   {
     BRAKES4_counter = 0;
   }
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Bremse_5 (0x4A8, DLC 8) - ESP brake-event broadcast.
   // vw_pq.dbc: BR5_Giergeschw / BR5_Gierrate (yaw rate * 0.01 deg/s),
@@ -449,7 +473,7 @@ void Gen2_frames10()
   {
     BRAKES5_counter2 = 3;
   }
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Bremse_9 (0x0AE, DLC 8) - extended ABS/ESP frame (NOT in vw_pq.dbc).
   // Reverse-engineered: only data[6] really matters (0x02 OK, 0x01 changes haldex behaviour).
@@ -463,7 +487,7 @@ void Gen2_frames10()
   frame.data[5] = 0x00;             // no effect
   frame.data[6] = 0x02;             // 0x01 - mode-control byte (only one that changes haldex behaviour)
   frame.data[7] = 0x00;             // no effect
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
   BRAKES9_counter = BRAKES9_counter + 10;
   if (BRAKES9_counter > 0xF1)
   {
@@ -491,7 +515,7 @@ void Gen2_frames10()
   mLW_1_counter = mLW_1_counter + 16;
   if (mLW_1_counter >= 0xF0)
     mLW_1_counter = 0;
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 }
 
 void Gen2_frames20()
@@ -510,7 +534,7 @@ void Gen2_frames20()
   frame.data[5] = 0xFA;                                        // inneres_Motor_Moment_ohne_extern
   frame.data[6] = get_lock_target_adjusted_value(0x20, false); // mechanisches_Motor_Verlustmoment (lock-biased)
   frame.data[7] = 0xFA;                                        // inneres_Motor_Moment (actual)
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Motor_2 (0x288, DLC 8) - secondary engine broadcast (vw_pq.dbc: Motor_2).
   frame.identifier = MOTOR2_ID;
@@ -523,7 +547,7 @@ void Gen2_frames20()
   frame.data[5] = 0x10; // GRA / cruise status bits
   frame.data[6] = 0xFE; // reserved
   frame.data[7] = 0xFE; // reserved
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Motor_5 (0x480, DLC 8) - tertiary engine broadcast (vw_pq.dbc: Motor_5, multiplexed).
   // NOTE: the if(++BRAKES1_counter > 255) below increments BRAKES1_counter (not MOTOR5_counter)
@@ -542,7 +566,7 @@ void Gen2_frames20()
   {                      // 0xF (NOTE: increments BRAKES1_counter - copy-paste artefact)
     BRAKES1_counter = 0; // 0
   }
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Bremse_10 (0x3A0, DLC 8) - extended ABS/ESP frame (NOT in vw_pq.dbc).
   // Inline notes are pre-existing reverse-engineering observations.
@@ -561,7 +585,7 @@ void Gen2_frames20()
   {
     BRAKES10_counter = 0;
   }
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 }
 
 void Gen2_frames25()
@@ -578,7 +602,7 @@ void Gen2_frames25()
   frame.data[5] = 0x00; // Dynamische_Oeldruckwarnung / status
   frame.data[6] = 0x00; // reserved
   frame.data[7] = 0x00; // reserved
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 }
 
 void Gen2_frames100() {}
@@ -609,7 +633,7 @@ void Gen4_frames10()
   mLW_1_counter++;
   if (mLW_1_counter > 15)
     mLW_1_counter = 0;
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Bremse_1 (0x1A0, DLC 8) - ABS/ESP main broadcast (vw_pq.dbc: Bremse_1).
   frame.identifier = BRAKES1_ID;
@@ -624,7 +648,7 @@ void Gen4_frames10()
   frame.data[7] = BRAKES1_counter;                             // BR1_BZ - rolling 5-bit counter (10..0x1F)
   if (++BRAKES1_counter > 0x1F)
     BRAKES1_counter = 10;
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Bremse_3 (0x4A0, DLC 8) - per-wheel speeds (vw_pq.dbc: Bremse_3).
   frame.identifier = BRAKES3_ID;
@@ -637,13 +661,22 @@ void Gen4_frames10()
   frame.data[5] = 0x07;                                        // Radgeschw_HL high
   frame.data[6] = get_lock_target_adjusted_value(0xD2, false); // Radgeschw_HR low (rear-right)
   frame.data[7] = 0x07;                                        // Radgeschw_HR high
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
+
+  if(haldexLearnActive || state.mode != MODE_5050)
+  {
+    appliedTorque = get_lock_target_adjusted_value(0x7F, false); // regulated clamp
+  }
+  else
+  {
+    appliedTorque = get_lock_target_adjusted_value(0xFE, false); // full clamp (27 bar)
+  }
 
   // PQ Bremse_4 (0x2A0, DLC 8) - ABS coupling moment (vw_pq.dbc: Bremse_4).
   // data[7] = XOR-CRC over data[0..6]; data[6] is rolling counter (steps of 16).
   frame.identifier = BRAKES4_ID;
   frame.data_length_code = 8;
-  frame.data[0] = get_lock_target_adjusted_value(0xFE, false); // ABS_Vorgabewert_hinten_Kupplung (rear-clutch %)
+  frame.data[0] = appliedTorque; // ABS_Vorgabewert_hinten_Kupplung (rear-clutch %)
   frame.data[1] = 0x00;                                        // ABS_Vorgabewert_mitte_Kupplungs low (centre stiffness Nm/min)
   frame.data[2] = 0x00;                                        // ABS_Vorgabewert_mitte_Kupplungs high
   frame.data[3] = 0x64;                                        // status / reserved
@@ -659,7 +692,7 @@ void Gen4_frames10()
   BRAKES4_counter = BRAKES4_counter + 16;
   if (BRAKES4_counter > 0xF0)
     BRAKES4_counter = 0x00;
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Motor_1 (0x280, DLC 8) - engine ECU broadcast (vw_pq.dbc: Motor_1).
   // Every byte except data[0] is lock-target-adjusted to bias the haldex.
@@ -673,7 +706,7 @@ void Gen4_frames10()
   frame.data[5] = get_lock_target_adjusted_value(0xFE, false); // inneres_Motor_Moment_ohne_extern
   frame.data[6] = get_lock_target_adjusted_value(0x16, false); // mechanisches_Motor_Verlustmoment
   frame.data[7] = get_lock_target_adjusted_value(0xFE, false); // inneres_Motor_Moment (actual)
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 }
 
 void Gen4_frames20()
@@ -690,7 +723,7 @@ void Gen4_frames20()
   frame.data[5] = 0xCA;                                        // Zeitstempel low (timestamp)
   frame.data[6] = 0x1B;                                        // Zeitstempel high
   frame.data[7] = 0xAB;                                        // status / reserved
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
   BRAKES2_counter = BRAKES2_counter + 16;
   if (BRAKES2_counter > 0xF0)
     BRAKES2_counter = 0;
@@ -710,7 +743,7 @@ void Gen4_frames25()
   frame.data[5] = 0x42; // Dynamische_Oeldruckwarnung / status
   frame.data[6] = 0x09; // reserved / multiplex
   frame.data[7] = 0x81; // reserved
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Kombi_3 (0x520, DLC 8) - cluster odometer/keys (vw_pq.dbc: Kombi_3).
   frame.identifier = mKombi_3;
@@ -723,7 +756,7 @@ void Gen4_frames25()
   frame.data[5] = 0xF1; // Schluesselinfo (key info)
   frame.data[6] = 0x03; // Kombi_Multiplex_Code
   frame.data[7] = 0x02; // Kombi_Multiplex_Generation
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 }
 
 void Gen4_frames100()
@@ -740,7 +773,7 @@ void Gen4_frames100()
   frame.data[5] = 0x00; // alarm / lock bits
   frame.data[6] = 0x01; // status
   frame.data[7] = 0x08; // status / counter
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Bremse_11 (0x5B7, DLC 8) - extended brake frame (NOT in vw_pq.dbc).
   // Static placeholder; only data[1]=0xC0 is significant for haldex sanity.
@@ -754,7 +787,7 @@ void Gen4_frames100()
   frame.data[5] = 0x00; // no effect
   frame.data[6] = 0x00; // no effect
   frame.data[7] = 0x00; // no effect
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 }
 
 void Gen4_frames200()
@@ -771,7 +804,7 @@ void Gen4_frames200()
   frame.data[5] = 0x30; // status
   frame.data[6] = 0xFF; // reserved
   frame.data[7] = 0x04; // reserved / counter
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 }
 
 void Gen4_frames1000()
@@ -788,7 +821,7 @@ void Gen4_frames1000()
   frame.data[5] = 0x19;                // DI1_Stunde (hour)
   frame.data[6] = 0x25;                // DI1_Minute (minute)
   frame.data[7] = mDiagnose_1_counter; // DI1_Sekunde (sec) / rolling counter
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
   mDiagnose_1_counter++;
   if (mDiagnose_1_counter > 0x1F)
     mDiagnose_1_counter = 0;
@@ -1205,7 +1238,7 @@ void Gen41_frames10()
   gen41_bus0_cache_c1 = frame;
   gen41_bus0_cache_valid_c1 = true;
   taskEXIT_CRITICAL(&gen41_bus0_cache_mux);
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // 0x0C5 - PPEI Non Driven Wheel Rotational Status (10 ms), EBCM TX
   frame.identifier = 0x0C5;
@@ -1222,7 +1255,7 @@ void Gen41_frames10()
   gen41_bus0_cache_c5 = frame;
   gen41_bus0_cache_valid_c5 = true;
   taskEXIT_CRITICAL(&gen41_bus0_cache_mux);
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // 0x0C9 - PPEI Engine General Status 1 (spec 12.5 ms), ECM TX
   frame.identifier = 0x0C9;
@@ -1276,7 +1309,7 @@ void Gen41_frames10()
     {
       frame.data[i] = r130[i];
     }
-    twai_transmit_v2(twai_bus_1, &frame, 0);
+    standaloneTx(frame);
   }
 
   // 0x140 (Bus1) - Chassis Inertial Sensor (Yaw Rate), ~10 ms cadence
@@ -1297,7 +1330,7 @@ void Gen41_frames10()
     frame.data[5] = d5;
     frame.data[6] = 0x01;
     frame.data[7] = d7;
-    twai_transmit_v2(twai_bus_1, &frame, 0);
+    standaloneTx(frame);
     gen41_140_counter = (gen41_140_counter + 1U) & 0x03U;
   }
 }
@@ -1333,7 +1366,7 @@ void Gen41_frames20()
     frame.data[5] = 0x00;
     frame.data[6] = 0x00;
     frame.data[7] = 0x00;
-    twai_transmit_v2(twai_bus_1, &frame, 0);
+    standaloneTx(frame);
   }
 
   // 0x1E9 - PPEI Chassis General Status 1 (20 ms), EBCM TX
@@ -1378,7 +1411,7 @@ void Gen41_frames20()
   {
     Gen41_1CE234_counter = (Gen41_1CE234_counter + 1) & 0x03;
   }
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 }
 
 void Gen41_frames25()
@@ -1466,7 +1499,7 @@ void Gen41_frames25()
     frame.data[5] = 0x00;
     frame.data[6] = 0x00;
     frame.data[7] = 0x00;
-    twai_transmit_v2(twai_bus_1, &frame, 0);
+    standaloneTx(frame);
   }
 }
 
@@ -1654,7 +1687,7 @@ void Gen41_frames13()
 
   // 0x180 (Bus1) - GM SAS, 10 ms cadence
   gen41_build_180(frame);
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   gen41_swa_advance_wobble();
 }
@@ -1722,7 +1755,7 @@ void Gen5_0CQ_frames10()
   frame.data[5] = 0x00; // ESP_18 reserved (doesn't affect)
   frame.data[6] = 0x00; // ESP_18 reserved (doesn't affect)
   frame.data[7] = 0x00; // ESP_18 reserved (doesn't affect)
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // MQB ESP_19 (0x0B2, DLC 8) - wheel speeds (ESP_VL/VR/HL/HR_Radgeschw_02, LE * 1/64 km/h).
   // Wheel speed MUST keep changing or haldex slowly disengages.
@@ -1735,21 +1768,21 @@ void Gen5_0CQ_frames10()
   frame.data[1] = get_lock_target_adjusted_value(ESP_19_counter, false);         // ESP_HL_Radgeschw_02 high (HL - wheel speed)
   frame.data[2] = get_lock_target_adjusted_value(ESP_19_counter2, false);        // ESP_HR_Radgeschw_02 low (HR - wheel speed)
   frame.data[3] = get_lock_target_adjusted_value(ESP_19_counter, false);         // ESP_HR_Radgeschw_02 high (HR - wheel speed)
-  frame.data[4] = get_lock_target_adjusted_value(ESP_19_counter2 + 0xCA, false); // ESP_VL_Radgeschw_02 low (VL - wheel speed 0xCA)
+  frame.data[4] = get_lock_target_adjusted_value(ESP_19_counter2 + 0xBA, false); // ESP_VL_Radgeschw_02 low (VL - wheel speed 0xCA)
   frame.data[5] = get_lock_target_adjusted_value(ESP_19_counter, false);         // ESP_VL_Radgeschw_02 high (VL - wheel speed -- affects if =0x0B)
-  frame.data[6] = get_lock_target_adjusted_value(ESP_19_counter2 + 0xCA, false); // ESP_VR_Radgeschw_02 low (VR - wheel speed 0xCa)
+  frame.data[6] = get_lock_target_adjusted_value(ESP_19_counter2 + 0xBA, false); // ESP_VR_Radgeschw_02 low (VR - wheel speed 0xCa)
   frame.data[7] = get_lock_target_adjusted_value(ESP_19_counter, false);         // ESP_VR_Radgeschw_02 high (VR - wheel speed -- affects if =0x0B)
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   ESP_19_counter++;
   ESP_19_counter2++;
-  if (ESP_19_counter > 0x1A) // 0x1e
+  if (ESP_19_counter > 0x10) // 0x1A
   {
-    ESP_19_counter = 0x01; // 0x10
+    ESP_19_counter = 0x0A; // 0x10
   }
-  if (ESP_19_counter2 > 0x0E) // 0x0a
+  if (ESP_19_counter2 > 0x2F) // 0x0E
   {
-    ESP_19_counter2 = 0x00; // 0x00
+    ESP_19_counter2 = 0x2E; // 0x00
   }
 
   // MQB Getriebe_11 (0x0AD, DLC 8) - transmission ECU broadcast.
@@ -1775,7 +1808,7 @@ void Gen5_0CQ_frames10()
   {
     GETRIEBE_11_counter = 0;
   }
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // MQB Motor_12 (0x0A8, DLC 8) - engine torque limits / RPM (Motor_12).
   // MO_Mom_neg_verfuegbar (max engine braking), Mom_Statisch_Limit (static limit),
@@ -1800,12 +1833,12 @@ void Gen5_0CQ_frames10()
   {
     MOTOR_12_counter = 0x70;
   }
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // MQB Motor_11 (0x0A7, DLC 8) - engine torque demand/output broadcast.
   //
-  // Two options, selected by the "Fix Hunting" toggle (fixHunting):
-  //   fixHunting == false (default): original V3 data, b6/b7 lock-modulated
+  // Two packings, selected by the user-facing "Fix Hunting" toggle (fixHunting):
+  //   fixHunting == false (default): empirical V3 packing, b6/b7 lock-modulated
   //                                  0..0xFA. Confirmed working on 554C, 554D,
   //                                  554H, and 554K @ 100% lock.
   //   fixHunting == true            : DBC-correct bit-packed Soll_Roh/Ist/Solf
@@ -1813,6 +1846,9 @@ void Gen5_0CQ_frames10()
   //                                  at partial lock (60/40, 70/30) where the
   //                                  V3 packing causes the controller to hunt.
   //
+  // The previous auto-detect logic was removed because the engagement-crossing
+  // heuristic falsely flagged 554D as hunting. Mode is now strictly user-set
+  // and persisted to EEPROM.
   frame.identifier = MOTOR_11; // MOTOR_11 0x0A7
   frame.extd = 0;
   frame.rtr = 0;
@@ -1890,7 +1926,7 @@ void Gen5_0CQ_frames10()
     MOTOR_11_counter = 0x40;
   }
 
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
   /*
   0xd2,0x3d,0xcd,0x28,0x4c,0x14,0x22,0x4b,0x24,0xac,0xfa,0x55,0x66,0x80,0x0d,0x6c
   */
@@ -1922,7 +1958,7 @@ void Gen5_0CQ_frames10()
   {
     ESP_14_counter = 0x10;
   }
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   /*
   0xd4,0xd4,0xd4,0xd4,0xd4,0xd4,0xd4,0xd4,0xd4,0xd4,0xd4,0xd4,0xd4,0xd4
@@ -1952,7 +1988,7 @@ void Gen5_0CQ_frames10()
     LWI_01_counter = 0x10;
   }
 
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
   /*
   0x86,0x86,0x86,0x86,0x86,0x86,0x86,0x86,0x86,0x86,0x86,0x86,0x86,0x86
   */
@@ -1982,7 +2018,7 @@ void Gen5_0CQ_frames20()
     MOTOR_20_counter = 0x00;
   }
 
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
   /*
   0xe9,0x65,0xae,0x6b,0x7b,0x35,0xe5,0x5f,0x4e,0xc7,0x86,0xa2,0xbb,0xdd,0xeb,0xb4
   */
@@ -2007,7 +2043,7 @@ void Gen5_0CQ_frames20()
     ESP_10_counter = 0x00;
   }
 
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
   /*
   0xac,0xac,0xac,0xac,0xac,0xac,0xac,0xac,0xac,0xac,0xac,0xac,0xac,0xac,0xac
   */
@@ -2032,7 +2068,7 @@ void Gen5_0CQ_frames20()
     ESP_05_counter = 0x80;
   }
 
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
   /*
   0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x07
   */
@@ -2056,7 +2092,7 @@ void Gen5_0CQ_frames20()
     EPB_01_counter = 0x30;
   }
 
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
   /*
   0x05,0x05,0x05,0x05,0x05,0x05,0x05,0x05,0x05,0x05,0x05,0x05,0x05,0x05
   */
@@ -2080,7 +2116,7 @@ void Gen5_0CQ_frames20()
     ESP_02_counter = 0x00;
   }
 
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
   /*
   0xaa,0xaa,0xaa,0xaa,0xaa,0xaa,0xaa,0xaa,0xaa,0xaa,0xaa,0xaa,0xaa
   */
@@ -2104,7 +2140,7 @@ void Gen5_0CQ_frames20()
     ESP_21_counter = 0x00;
   }
 
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   /*
   0xb4,0xef,0xf8,0x49,0x1e,0xe5,0xc2,0xc0,0x97,0x19,0x3c,0xc9,0xf1,0x98,0xd6,0x61
@@ -2126,7 +2162,7 @@ void Gen5_0CQ_frames25()
   frame.data[5] = 0x00;        // KBI status
   frame.data[6] = 0x00;        // KBI warning lamps
   frame.data[7] = 0x24;        // KBI status reserved
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 }
 
 void Gen5_0CQ_frames100()
@@ -2152,7 +2188,7 @@ void Gen5_0CQ_frames100()
     ESP_23_counter = 0x00;
   }
 
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
   /*
     0xc9,0x21,0x6f,0x63,0xd2,0x42,0x6a,0x77,0x4a,0x3d,0xb0,0x62,0x9f,0x38,0xcd,0x5c
     */
@@ -2168,7 +2204,7 @@ void Gen5_0CQ_frames100()
   frame.data[5] = 0x00;            // PH_Status reserved (rate of change (block 010))
   frame.data[6] = 0x00;            // PH_Status reserved (rate of change (block 010))
   frame.data[7] = 0x24;            // PH_Status reserved (rate of change (block 010))
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // MQB Gateway_72 (0x3DB, DLC 8) - gateway routing/diagnostic broadcast.
   frame.identifier = GATEWAY_72; // gateway 72 0x3db
@@ -2181,7 +2217,7 @@ void Gen5_0CQ_frames100()
   frame.data[5] = 0x10;          // GW_Status reserved
   frame.data[6] = 0x01;          // GW_Status reserved
   frame.data[7] = 0x78;          // GW_Status reserved
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // MQB Getriebe_14 (0x3C8, DLC 8) - transmission slow broadcast (Charisma, drag torque, launch).
   frame.identifier = GETRIEBE_14; // getriebe 14 0x3c8
@@ -2194,7 +2230,7 @@ void Gen5_0CQ_frames100()
   frame.data[5] = 0x60;           // GE_Status reserved
   frame.data[6] = 0x01;           // GE_Status reserved
   frame.data[7] = 0x51;           // GE_Status reserved
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // MQB Motor_14 (0x3BE, DLC 8) - start/stop subsystem state broadcast.
   // MO_StSt_Status (state machine), MO_StSt_Restart (restart event), MO_StSt_Stop (stop event).
@@ -2216,7 +2252,7 @@ void Gen5_0CQ_frames100()
     MOTOR_14_counter = 0x10;
   }
 
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
   /*
   0x1f,0x28,0xc6,0x85,0xe6,0xf8,0xb0,0x19,0x5b,0x64,0x35,0x21,0xe4,0xf7,0x9c,0x24
   */
@@ -2239,7 +2275,7 @@ void Gen5_0CQ_frames100()
   {
     ESP_07_counter = 0x00;
   }
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
   /*
    0x91,0x91,0x91,0x91,0x91,0x91,0x91,0x91,0x91,0x91,0x91,0x91,0x91,0x91
    */
@@ -2255,7 +2291,7 @@ void Gen5_0CQ_frames100()
   frame.data[5] = 0x00;       // ESP_29 status
   frame.data[6] = 0x00;       // ESP_29 status
   frame.data[7] = 0x00;       // ESP_29 status
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 }
 
 void Gen5_0CQ_frames200()
@@ -2273,7 +2309,7 @@ void Gen5_0CQ_frames200()
   frame.data[5] = 0x30;        // EPS reserved (rate of change (block 010))
   frame.data[6] = 0xFF;        // EPS reserved (rate of change (block 010))
   frame.data[7] = 0x04;        // EPS reserved (rate of change (block 010))
-  // twai_transmit_v2(twai_bus_1, &frame, 0);
+  // standaloneTx(frame);
 }
 
 void Gen5_0CQ_frames1000()
@@ -2290,7 +2326,7 @@ void Gen5_0CQ_frames1000()
   frame.data[5] = 0xA0;        // MO_07 diagnostic byte
   frame.data[6] = 0x59;        // MO_07 diagnostic byte
   frame.data[7] = 0x01;        // MO_07 diagnostic byte
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   frame.identifier = CHARISMA_01; // charisma_01 0x385
   frame.data_length_code = 8;     // DLC 8 no effect from any
@@ -2302,7 +2338,7 @@ void Gen5_0CQ_frames1000()
   frame.data[5] = 0x20;           // CHA_Target_Driving_PR_AFS & CHA_Target_Driving_Program_RGS
   frame.data[6] = 0x02;           // CHA_Target_Driving_Price_EPS & CHA_Target_Driving_Principal_ACC
   frame.data[7] = 0x02;           // CHA_Target_Driving_Prior_SAK & CHA_Target_Driving_Program_MO_StSt
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // MQB Systeminfo_01 (0x585, DLC 8) - system identification/info broadcast.
   frame.identifier = SYSTEMINFO_01; // systeminfo_01 0x585
@@ -2315,7 +2351,7 @@ void Gen5_0CQ_frames1000()
   frame.data[5] = 0x00;             // SI info
   frame.data[6] = 0x00;             // SI info
   frame.data[7] = 0x00;             // SI info
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   frame.identifier = MOTOR_CODE_01;      // motor_code_01 0x641
   frame.data_length_code = 8;            // DLC 8 no affect from any
@@ -2339,7 +2375,7 @@ void Gen5_0CQ_frames1000()
     MOTOR_CODE_01_counter = 0x10;
   }
 
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
   /*
   0x47,0x47,0x47,0x47,0x47,0x47,0x47,0x47,0x47,0x47,0x47,0x47,0x47,0x47,0x47
   */
@@ -2363,7 +2399,7 @@ void Gen5_0CQ_frames1000()
     ESP_20_counter = 0x30;
   }
 
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
   /*
   0xac,0xb3,0xab,0xeb,0x7a,0xe1,0x3b,0xf7,0x73,0xba,0x7c,0x9e,0x06,0x5f,0x02,0xd9
   */
@@ -2379,7 +2415,7 @@ void Gen5_0CQ_frames1000()
   frame.data[5] = 0x85;           // DG_Status
   frame.data[6] = 0x3F;           // DG_Status (0x3F OR 0xBF? (3F, then BF, then 3F, then BF...))
   frame.data[7] = 0x30;           // DG_Status (2D, then 2D, then 2E, then 2E, then 2F, then 2F... roll over? When?)
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // MQB Kombi_02 (0x6B7, DLC 8) - instrument cluster slow-rate broadcast.
   frame.identifier = KOMBI_02; // kombi2 0x6b7
@@ -2392,7 +2428,7 @@ void Gen5_0CQ_frames1000()
   frame.data[5] = 0x2B;        // KBI_02 status
   frame.data[6] = 0x00;        // KBI_02 status
   frame.data[7] = 0x78;        // KBI_02 status
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 }
 
 // =============================================================================
@@ -2420,7 +2456,7 @@ void Gen5_0AY_frames10()
   mLW_1_counter++;
   if (mLW_1_counter > 15)
     mLW_1_counter = 0;
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Bremse_1 (0x1A0, DLC 8) - ABS/ESP main broadcast (vw_pq.dbc: Bremse_1).
   frame.identifier = BRAKES1_ID;
@@ -2435,7 +2471,7 @@ void Gen5_0AY_frames10()
   frame.data[7] = BRAKES1_counter; // BR1_BZ - rolling 5-bit counter (10..0x1F)
   if (++BRAKES1_counter > 0x1F)
     BRAKES1_counter = 10;
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Bremse_3 (0x4A0, DLC 8) - per-wheel speeds (vw_pq.dbc: Bremse_3).
   frame.identifier = BRAKES3_ID;
@@ -2448,7 +2484,7 @@ void Gen5_0AY_frames10()
   frame.data[5] = 0x07;                                        // Radgeschw_HL high
   frame.data[6] = get_lock_target_adjusted_value(0xD2, false); // Radgeschw_HR low (rear-right)
   frame.data[7] = 0x07;                                        // Radgeschw_HR high
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Bremse_4 (0x2A0, DLC 8) - ABS coupling moment (vw_pq.dbc: Bremse_4).
   // data[7] = XOR-CRC over data[0..6]; data[6] is rolling counter (steps of 16).
@@ -2470,7 +2506,7 @@ void Gen5_0AY_frames10()
   BRAKES4_counter = BRAKES4_counter + 16;
   if (BRAKES4_counter > 0xF0)
     BRAKES4_counter = 0x00;
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Motor_1 (0x280, DLC 8) - engine ECU broadcast (vw_pq.dbc: Motor_1).
   // Every byte except data[0] is lock-target-adjusted to bias the haldex.
@@ -2484,7 +2520,7 @@ void Gen5_0AY_frames10()
   frame.data[5] = get_lock_target_adjusted_value(0xFE, false); // inneres_Motor_Moment_ohne_extern
   frame.data[6] = get_lock_target_adjusted_value(0x16, false); // mechanisches_Motor_Verlustmoment
   frame.data[7] = get_lock_target_adjusted_value(0xFE, false); // inneres_Motor_Moment (actual)
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // ---------------------------------------------------------------------------
   // PQ Getriebe_2 / mGetriebe_2 (0x540, DLC 8) - transmission status broadcast.
@@ -2514,7 +2550,7 @@ void Gen5_0AY_frames10()
   frame.data[6] = 0x00;                              // all status flags off
   frame.data[7] = 0xFF;                              // gear display = ---, Fahrstufe = N
   mGetriebe_2_counter = (mGetriebe_2_counter + 1) & 0x0F;
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Bremse_5 (0x4A8, DLC 8) - ESP brake-event broadcast.
   // vw_pq.dbc: BR5_Giergeschw / BR5_Gierrate (yaw rate * 0.01 deg/s),
@@ -2540,7 +2576,7 @@ void Gen5_0AY_frames10()
   {
     BRAKES5_counter2 = 3;
   }
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Bremse_8 / mBremse_8 (0x1AC, DLC 8) - ESP supplemental broadcast.
   // data[0] rolls 0x80..0x8F, data[1] rolls 0x00..0x0F (independent counters).
@@ -2554,7 +2590,7 @@ void Gen5_0AY_frames10()
   frame.data[5] = 0x21;             // byte 6
   frame.data[6] = 0x00;             // byte 7
   frame.data[7] = 0xC1;             // byte 8
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
   if (++BRAKES8_counter > 0x8F)
     BRAKES8_counter = 0x80;
   if (++BRAKES8_counter1 > 0x0F)
@@ -2575,7 +2611,7 @@ void Gen5_0AY_frames20()
   frame.data[5] = 0xCA;            // Zeitstempel low (timestamp)
   frame.data[6] = 0x1B;            // Zeitstempel high
   frame.data[7] = 0xAB;            // status / reserved
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
   BRAKES2_counter = BRAKES2_counter + 16;
   if (BRAKES2_counter > 0xF0)
   {
@@ -2593,7 +2629,7 @@ void Gen5_0AY_frames20()
   frame.data[5] = 0x10; // GRA / cruise status bits
   frame.data[6] = 0xFE; // reserved
   frame.data[7] = 0xFE; // reserved
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Motor_5 (0x480, DLC 8) - tertiary engine broadcast (vw_pq.dbc: Motor_5, multiplexed).
   // NOTE: the if(++BRAKES1_counter > 255) below increments BRAKES1_counter (not MOTOR5_counter)
@@ -2612,7 +2648,7 @@ void Gen5_0AY_frames20()
   {                      // 0xF (NOTE: increments BRAKES1_counter - copy-paste artefact)
     BRAKES1_counter = 0; // 0
   }
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 }
 
 void Gen5_0AY_frames25()
@@ -2629,7 +2665,7 @@ void Gen5_0AY_frames25()
   frame.data[5] = 0x42; // Dynamische_Oeldruckwarnung / status
   frame.data[6] = 0x09; // reserved / multiplex
   frame.data[7] = 0x81; // reserved
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Kombi_3 (0x520, DLC 8) - cluster odometer/keys (vw_pq.dbc: Kombi_3).
   frame.identifier = mKombi_3;
@@ -2642,7 +2678,7 @@ void Gen5_0AY_frames25()
   frame.data[5] = 0xF1; // Schluesselinfo (key info)
   frame.data[6] = 0x03; // Kombi_Multiplex_Code
   frame.data[7] = 0x02; // Kombi_Multiplex_Generation
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 }
 
 void Gen5_0AY_frames100()
@@ -2659,7 +2695,7 @@ void Gen5_0AY_frames100()
   frame.data[5] = 0x00; // alarm / lock bits
   frame.data[6] = 0x01; // status
   frame.data[7] = 0x08; // status / counter
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // PQ Bremse_11 (0x5B7, DLC 8) - extended brake frame (NOT in vw_pq.dbc).
   // Static placeholder; only data[1]=0xC0 is significant for haldex sanity.
@@ -2673,7 +2709,7 @@ void Gen5_0AY_frames100()
   frame.data[5] = 0x00; // no effect
   frame.data[6] = 0x00; // no effect
   frame.data[7] = 0x00; // no effect
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // ---------------------------------------------------------------------------
   // PQ Systeminfo_1 / mSysteminfo_1 (0x5D0, DLC 8) - gateway vehicle-identity
@@ -2700,7 +2736,7 @@ void Gen5_0AY_frames100()
   frame.data[5] = 0x59; // Ant_NV=9,  Ant_HV=5 (KMatrix init values)
   frame.data[6] = 0x00; // FAS/ELV/QRS/NWDF flags = 0
   frame.data[7] = 0x00; // Notbrems_Status etc = 0
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 }
 
 void Gen5_0AY_frames200()
@@ -2717,7 +2753,7 @@ void Gen5_0AY_frames200()
   frame.data[5] = 0x30; // status
   frame.data[6] = 0xFF; // reserved
   frame.data[7] = 0x04; // reserved / counter
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 }
 
 void Gen5_0AY_frames1000()
@@ -2734,7 +2770,7 @@ void Gen5_0AY_frames1000()
   frame.data[5] = 0x19;                // DI1_Stunde (hour)
   frame.data[6] = 0x25;                // DI1_Minute (minute)
   frame.data[7] = mDiagnose_1_counter; // DI1_Sekunde (sec) / rolling counter
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
   mDiagnose_1_counter++;
   if (mDiagnose_1_counter > 0x1F)
   {
@@ -2793,7 +2829,7 @@ void Gen42_frames10()
     frame.data[5] = (uint8_t)(rear_spd  & 0xFFU); // RL low byte
     frame.data[6] = (uint8_t)(rear_spd  >> 8);    // RR high byte
     frame.data[7] = (uint8_t)(rear_spd  & 0xFFU); // RR low byte
-    twai_transmit_v2(twai_bus_1, &frame, 0);
+    standaloneTx(frame);
   }
 
   // FORD_GEN42_TORQUE_FLAGS_ID 0x200 (Bus1, 10 ms) — PCM torque and flags.
@@ -2810,7 +2846,7 @@ void Gen42_frames10()
   frame.data[4] = 0x27U + get_lock_target_adjusted_value(0xD8, false); // Tq_Rq high byte: 0x27→0xFF
   frame.data[5] = 0x10;                                                   // Tq_Rq low byte (static)
   frame.data[6] = 0x88; frame.data[7] = 0x00;                           // flags / AC displacement
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // FORD_GEN42_ENG_SPD_THROTTLE_ID 0x201 (Bus1, 10 ms) — PCM engine/vehicle speed.
   // D0:D1 = EngAout_N_Actl (2 rpm/LSB, Motorola b7|13).
@@ -2823,7 +2859,7 @@ void Gen42_frames10()
   frame.data[2] = 0x40; frame.data[3] = 0x00; // Veh_V_ActlEng = 0 kph
   frame.data[4] = 0x00; frame.data[5] = 0x00; // ApedPos = 0 %
   frame.data[6] = 0x00; frame.data[7] = 0x80; // quality flags / static
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // FORD_GEN42_POWERTRAIN_DATA6_ID 0x205 (Bus1, 10 ms) — PCM fuel/torque model data.
   // D4:D5 = provisional fuel-related word (rapidly varying in logs, not a tank sensor).
@@ -2834,7 +2870,7 @@ void Gen42_frames10()
   frame.data[2] = 0x01; frame.data[3] = 0xFF;
   frame.data[4] = 0x02; frame.data[5] = 0x18; // provisional fuel-related word
   frame.data[6] = 0x01; frame.data[7] = 0xFF;
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // FORD_GEN42_TRANS_GEAR_DATA2_ID 0x231 (Bus1, 10 ms) — TCM torque/gear status.
   // byte[0]        = MtrGen1AoutTqRq_No_Cs  (8-bit checksum).  Fixed at 0x01.
@@ -2850,7 +2886,7 @@ void Gen42_frames10()
   frame.data[2] = 0x64; frame.data[3] = 0x00; // MtrGen1Aout_Tq_Rq
   frame.data[4] = 0x01; frame.data[5] = 0x00; // TrnMsgTxt_D_Rq / static
   frame.data[6] = 0x80U | (0x1FU + get_lock_target_adjusted_value(0x20, false)); // MtrGen1Aout_Tq_Rq upper 6 bits: 0x1F (0 Nm) → 0x3F (~+813 Nm)
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // FORD_GEN42_BODY_INFO4_ID 0x240 (Bus1, 10 ms) — BCM body information (2-byte variant).
   // DBC superset (8 B) includes EngOff_T_Actl (seconds), AmbTempImpr (0.25 °C/LSB, −128 °C).
@@ -2859,7 +2895,7 @@ void Gen42_frames10()
   frame.data_length_code = 2;
   frame.data[0] = 0x00;
   frame.data[1] = 0x40;
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 }
 
 void Gen42_frames20()
@@ -2884,7 +2920,7 @@ void Gen42_frames20()
   frame.data[2] = 0x75; frame.data[3] = 0x30; // D3:D4 = 0x7530 (constant)
   frame.data[4] = 0x01; frame.data[5] = 0x30; // D5:D6 = 0x0130 (constant)
   frame.data[6] = gen42_main_counter;           // D7 = 8-bit rolling counter
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // FORD_GEN42_ENGINE_DATA_ID 0x090 (Bus1, 20 ms) — PCM engine speed data.
   // D1 high nibble = 4-bit rolling counter 0x0-0xF (D1 = (counter << 4) | 0x07).
@@ -2901,7 +2937,7 @@ void Gen42_frames20()
     frame.data[5] = (uint8_t)(V_rpm & 0xFFU);                   // D6: lower 8 bits of V
   }
   frame.data[6] = 0x07; frame.data[7] = 0xD0;                  // D7:D8 = 0x07D0 (constant)
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // FORD_GEN42_BRAKE_DATA_ID 0x20F (Bus1, 20 ms) — ABS provisional brake data.
   // D1:D2 = 0x7530 (constant). D3:D4 = 0x2710 (wheel speed reference, constant).
@@ -2917,7 +2953,7 @@ void Gen42_frames20()
   frame.data[5] = gen42_20F_d6;                 // D6: +0x10 per frame, mod 256
   frame.data[6] = (uint8_t)(0xC8U - gen42_20F_d6); // D7: complement (D6 + D7 = 0xC8)
   frame.data[7] = gen42_main_counter;            // D8: shared 8-bit rolling counter
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // FORD_GEN42_DESIRED_TORQ_BRK_ID 0x211 (Bus1, 20 ms) — ABS desired torque/brake.
   // D0:D1 = PrplWhlTot_Tq_RqMx (4 Nm/LSB, offset −131072 Nm, Motorola b7|16).
@@ -2933,7 +2969,7 @@ void Gen42_frames20()
   frame.data[4] = 0x48; frame.data[5] = 0x48; // VehLongOvrGnd_A_Est (static)
   frame.data[6] = 0x00;                         // constant
   frame.data[7] = gen42_main_counter;            // D8: shared 8-bit rolling counter
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // FORD_GEN42_DRIVE_MODE_ID 0x190 (Bus1, 20 ms) — GWM/PCM drive mode status.
   // D3 = drive-mode byte: 0x60 when engagement is requested, 0x20 at idle/off.
@@ -2953,7 +2989,7 @@ void Gen42_frames20()
     frame.data[5] = gen42_190_counter & 0x0FU;   // D6: 4-bit nibble counter 0x00-0x0F
     frame.data[6] = 0x00;                        // D7 (constant)
     frame.data[7] = 0x3C;                        // D8 (constant)
-    twai_transmit_v2(twai_bus_1, &frame, 0);
+    standaloneTx(frame);
   }
 
   // Advance counters after all 20 ms frames are sent.
@@ -2978,7 +3014,7 @@ void Gen42_frames100()
   frame.data[2] = 0x38; frame.data[3] = 0x80; // D3: DSC/TCS candidate, D4: brake/ABS candidates
   frame.data[4] = 0x15; frame.data[5] = 0x00; // D5: TCS candidate
   frame.data[6] = 0x00; frame.data[7] = 0x00;
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // FORD_GEN42_COUNTER_275_ID 0x275 (Bus1, 100 ms) — unknown rolling counter frame.
   // D1 steps +0x20 per 100 ms cycle: 0x80, 0xA0, 0xC0, 0xE0, 0x00, 0x20, 0x40, 0x60, (wrap).
@@ -2988,7 +3024,7 @@ void Gen42_frames100()
   frame.data[0] = gen42_275_counter; // D1: rolling counter (+0x20 per frame)
   frame.data[1] = 0x00;              // D2 (constant)
   frame.data[2] = 0xFF;              // D3 (constant)
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   gen42_275_counter = (uint8_t)((gen42_275_counter + 0x20U) & 0xFFU);
 }
@@ -3008,7 +3044,7 @@ void Gen42_frames200()
   frame.data[2] = 0x00; frame.data[3] = 0x00;
   frame.data[4] = 0x00; frame.data[5] = 0x00;
   frame.data[6] = 0x00; frame.data[7] = 0x00;
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // FORD_GEN42_UNKNOWN_280_ID 0x280 (Bus1, 200 ms) — unknown 200 ms heartbeat.
   // D1:D2 = 0x00 0x00; D3 = 0xB0 (most common observed; varies slowly in log);
@@ -3020,7 +3056,7 @@ void Gen42_frames200()
   frame.data[2] = 0xB0; frame.data[3] = 0x00; // D3: 0xB0 most common; slowly varies
   frame.data[4] = 0x00; frame.data[5] = 0x00;
   frame.data[6] = 0x00; frame.data[7] = 0x00;
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // FORD_GEN42_FOUR_BY_FOUR_SW_ID 0x460 (Bus1, 200 ms) — GWM 4WD switch status.
   // D1=0x00, D2=0x50 (AWD-auto / selector mode), D3-D8=0x00. [FourByFourSwitchData_FD1]
@@ -3031,7 +3067,7 @@ void Gen42_frames200()
   frame.data[2] = 0x00; frame.data[3] = 0x00;
   frame.data[4] = 0x00; frame.data[5] = 0x00;
   frame.data[6] = 0x00; frame.data[7] = 0x00;
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 }
 
 void Gen42_frames1000()
@@ -3055,7 +3091,7 @@ void Gen42_frames1000()
     frame.data[3] = 0x5D; frame.data[4] = 0x43; // TrnTotLss_Tq_Est / static
     frame.data[5] = 0x10; frame.data[6] = 0x00;
     frame.data[7] = 0x00;
-    twai_transmit_v2(twai_bus_1, &frame, 0);
+    standaloneTx(frame);
     gen42_420_toggle++;
   }
 
@@ -3066,7 +3102,7 @@ void Gen42_frames1000()
   frame.data_length_code = 4;
   frame.data[0] = 0xFF; frame.data[1] = 0x7D;
   frame.data[2] = 0x6A; frame.data[3] = 0x31;
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // FORD_GEN42_CLUSTER_INFO_ID 0x430 (Bus1, 1000 ms) — IPC cluster information fragment.
   // DBC 8-byte superset includes OdometerMasterValue D2:D4 (km), DrvSlipCtlMde_D_Rq.
@@ -3074,7 +3110,7 @@ void Gen42_frames1000()
   frame.identifier       = FORD_GEN42_CLUSTER_INFO_ID;
   frame.data_length_code = 2;
   frame.data[0] = 0xBC; frame.data[1] = 0x12;
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // FORD_GEN42_CLUSTER_INFO3_ID 0x433 (Bus1, 1000 ms) — IPC cluster information 3.
   // D0:D1 = FuelLvl_Pc_Dsply b7|10 (0.109 %/LSB, −5.22 % offset).
@@ -3086,7 +3122,7 @@ void Gen42_frames1000()
   frame.data[2] = 0x34; frame.data[3] = 0x01; // FuelLvl_Pc / gear state bits
   frame.data[4] = 0x00; frame.data[5] = 0x20; // HILL_DESC_SW, camera config
   frame.data[6] = 0x00; frame.data[7] = 0x00;
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // FORD_GEN42_UNKNOWN_4F0_ID 0x4F0 (Bus1, 1000 ms) — unknown slow heartbeat.
   // Static content in all logs. Not matched in available DBCs. DLC=6.
@@ -3096,7 +3132,7 @@ void Gen42_frames1000()
   frame.data[0] = 0x19; frame.data[1] = 0x2C;
   frame.data[2] = 0x22; frame.data[3] = 0x50;
   frame.data[4] = 0x23; frame.data[5] = 0x45;
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // FORD_GEN42_UNKNOWN_4F1_ID 0x4F1 (Bus1, 1000 ms) — unknown slow heartbeat.
   // Static content in all logs. Not matched in available DBCs.
@@ -3107,7 +3143,7 @@ void Gen42_frames1000()
   frame.data[2] = 0x90; frame.data[3] = 0x01;
   frame.data[4] = 0x90; frame.data[5] = 0x64;
   frame.data[6] = 0x61; frame.data[7] = 0x61;
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 
   // FORD_GEN42_VIN_ASCII_ID 0x4F3 (Bus1, 1000 ms) — static ASCII build-ID fragment.
   // Content is vehicle-specific (likely a build/part code). Varies between cars.
@@ -3119,5 +3155,5 @@ void Gen42_frames1000()
   frame.data[2] = 0x4D; frame.data[3] = 0x34; // 'M' '4'
   frame.data[4] = 0x32; frame.data[5] = 0x33; // '2' '3'
   frame.data[6] = 0x36; frame.data[7] = 0x35; // '6' '5'
-  twai_transmit_v2(twai_bus_1, &frame, 0);
+  standaloneTx(frame);
 }

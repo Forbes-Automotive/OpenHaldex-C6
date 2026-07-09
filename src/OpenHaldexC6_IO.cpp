@@ -2,9 +2,10 @@
 #include <OpenHaldexC6_can.h>
 #include <OpenHaldexC6_WiFi.h>
 
-// Low-power state machine: WATCHING = WiFi up, normal IO; SLEEPING = WiFi
-// down, LED off, and (if canSleepAggressive) CAN transceivers in standby
-// with GPIO ISR wake on the CAN_RX pins.
+// Low-power state: 
+//   WATCHING = WiFi Active, Normal IO
+//   SLEEPING = WiFi Off, LED off, and (if canSleepAggressive) CAN transceivers in standby
+//   using GPIO ISR Wake on the CAN_RX pins.
 #define LP_WATCHING 0
 #define LP_SLEEPING 1
 
@@ -21,7 +22,12 @@ static bool     lpTransceiversStandby = false; // CAN_RS pins driven high (TCAN1
 static bool     lpWakeIsrAttached     = false; // GPIO ISRs currently armed on CAN_RX
 static bool     lpTasksSuspended      = false; // background periodic tasks parked
 
-// Background tasks paused while LP_SLEEPING + aggressive
+// Background tasks paused while LP_SLEEPING + aggressive. None of these have
+// anything useful to do without bus traffic - frame generators TX into a
+// dead bus, broadcastOpenHaldex sends state nobody is listening to,
+// showHaldexState logs to a serial port that is almost certainly closed.
+// Frame generators are only resumed in standalone mode (they were never
+// running in OEM mode - see setupTasks()).
 struct LpManagedTask { TaskHandle_t *handle; bool standaloneOnly; };
 static const LpManagedTask lpManagedTasks[] = {
   { &handle_broadcastOpenHaldex,   false },
@@ -38,7 +44,12 @@ static const LpManagedTask lpManagedTasks[] = {
   { &handle_gen41_dual_bus_rates,  true  },
 };
 
-// GPIO ISRs - fire on the first falling edge of CAN_RX while the transceivers are in standby
+// GPIO ISRs - fire on the first falling edge of CAN_RX while the
+// transceivers are parked in standby. The TCAN1044 in standby still drives
+// RXD low on any valid bus activity, so this gives us a microsecond-scale
+// wake without ever having to power the transceiver up to look. We flag the
+// request and notify updateTriggers so it can act immediately. This is the
+// only wake path in aggressive mode - there is no periodic probe.
 static void IRAM_ATTR onCanWakeEdge()
 {
   canWakeRequest = true;
@@ -66,8 +77,10 @@ static void lpDetachWakeIsrs()
   lpWakeIsrAttached = false;
 }
 
-// TCAN1044: RS pin HIGH = standby (RXD reflects wake events, very low Iq);
-//           RS pin LOW  = normal operation
+// TCAN1044: RS pin HIGH = standby (RXD reflects wake events, very low current draw);
+//           RS pin LOW  = normal operation. ISRs are armed BEFORE entering
+// standby so we never miss the first SOF edge, and torn down AFTER leaving
+// standby so the TWAI driver has uncontested ownership of the RX pin.
 static void lpSetTransceiverStandby(bool standby)
 {
   if (standby == lpTransceiversStandby) return;
@@ -93,10 +106,10 @@ static void lpSuspendBackgroundTasks()
   if (lpTasksSuspended) return;
   for (uint8_t i = 0; i < sizeof(lpManagedTasks) / sizeof(lpManagedTasks[0]); i++)
   {
-    TaskHandle_t h = *lpManagedTasks[i].handle;
-    if (h && eTaskGetState(h) != eSuspended)
+    TaskHandle_t handle = *lpManagedTasks[i].handle;
+    if (handle && eTaskGetState(handle) != eSuspended)
     {
-      vTaskSuspend(h);
+      vTaskSuspend(handle);
     }
   }
   lpTasksSuspended = true;
@@ -108,10 +121,11 @@ static void lpResumeBackgroundTasks()
   for (uint8_t i = 0; i < sizeof(lpManagedTasks) / sizeof(lpManagedTasks[0]); i++)
   {
     if (lpManagedTasks[i].standaloneOnly && !isStandalone) continue;
-    TaskHandle_t h = *lpManagedTasks[i].handle;
-    if (h && eTaskGetState(h) == eSuspended)
+    
+    TaskHandle_t handle = *lpManagedTasks[i].handle;
+    if (handle && eTaskGetState(handle) == eSuspended)
     {
-      vTaskResume(h);
+      vTaskResume(handle);
     }
   }
   lpTasksSuspended = false;
@@ -146,7 +160,7 @@ void modeChange(void)
 
   if (isStandalone)
   {
-    // In standalone mode, skip MODE_EXPERT when cycling through modes, as it's not used.
+    // In standalone mode, skip MODE_EXPERT when cycling through modes as it's not used.
     if (next_mode == MODE_EXPERT)
     {
       next_mode++;
@@ -258,18 +272,20 @@ void updateTriggers(void *arg)
     hasCANChassis = (lastCANChassisTick > 0) && ((now - (uint32_t)lastCANChassisTick) <= canHealthTimeoutMs); // 1000ms timeout for CAN health - if we haven't received a message in 1000ms, consider the CAN connection unhealthy
     hasCANHaldex = (lastCANHaldexTick > 0) && ((now - (uint32_t)lastCANHaldexTick) <= canHealthTimeoutMs);    // 1000ms timeout for CAN health - if we haven't received a message in 1000ms, consider the CAN connection unhealthy
 
-    // Low-power WiFi management.
+    // Low-power WiFi management
     // Standalone: Haldex bus fps. OEM: chassis bus fps.
     //
     // LP_WATCHING : no clients + canActive false for watchMs -> shut WiFi+LED -> LP_SLEEPING
     // LP_SLEEPING : canActive -> restore WiFi -> LP_WATCHING
     //               CPU auto-sleeps via esp_pm_configure in main.cpp when FreeRTOS is idle.
     //
-    // Aggressive feature (canSleepAggressive=true): while LP_SLEEPING we also
-    // put the CAN transceivers in standby AND suspend the background
-    // periodic tasks. A GPIO ISR on CAN_RX is the only wake up route
+    // Aggressive add-on (canSleepAggressive=true): while LP_SLEEPING we also
+    // put the CAN transceivers in standby and suspend the background
+    // periodic tasks. A GPIO ISR on CAN_RX is the only wake path - the moment
+    // bus activity returns, the falling edge on CAN_RX fires the ISR and brings
+    // everything back.
     {
-      // Calculate fps once per second from the running frame counters.
+      // Compute frames-per-second once per second from the running frame counters.
       if ((now - lpLastFpsCheck) >= 1000UL)
       {
         lpChassisFps = lpChassisFrameCount - lpLastChassisSnap;
@@ -336,7 +352,7 @@ void updateTriggers(void *arg)
         break;
 
       case LP_SLEEPING:
-        // Aggressive: pure ISR-driven wake. The CAN_RX GPIO ISR sets
+        // Aggressive: ISR-driven wake. The CAN_RX GPIO ISR sets
         // canWakeRequest on the first falling edge from the (standby)
         // transceiver; we then bring the transceivers live so the fps path
         // can confirm real traffic and exit to LP_WATCHING.
@@ -376,11 +392,7 @@ void updateTriggers(void *arg)
     // Analyzer mode: keep buttons + CAN recovery, but skip brake/handbrake IO outputs.
     if (analyzerMode)
     {
-      if (isBusFailure)
-      {
-        twai_initiate_recovery_v2(twai_bus_0);
-        twai_initiate_recovery_v2(twai_bus_1);
-      }
+      canBusRecovery();
 
       vTaskDelay(updateTriggersRefresh / portTICK_PERIOD_MS);
       continue;
@@ -416,11 +428,8 @@ void updateTriggers(void *arg)
       brakeActive = false;
     }
 
-    if (isBusFailure)
-    {
-      twai_initiate_recovery_v2(twai_bus_0);
-      twai_initiate_recovery_v2(twai_bus_1);
-    }
+    // Poll both controllers and drive the bus-off recovery state machine.
+    canBusRecovery();
 
     if (!lowPowerMode)
     {
@@ -437,7 +446,7 @@ void updateTriggers(void *arg)
         break;
       case 3:
       {
-        // Neon pink
+        // neon pink
         uint8_t r = (uint8_t)((255 * ledBrightness) / 255); // 255
         uint8_t g = (uint8_t)((16 * ledBrightness) / 255);
         uint8_t b = (uint8_t)((240 * ledBrightness) / 255);
@@ -461,7 +470,7 @@ void updateTriggers(void *arg)
     // (safety-net probe + sanity check).
     if (canSleepAggressive && lowPowerMode)
     {
-      // 2s timeout.
+      // 2s timeout aligns with the safety-net probe cadence.
       ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000));
     }
     else

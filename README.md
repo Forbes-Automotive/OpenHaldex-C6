@@ -21,7 +21,7 @@
 
 </p>
 
-OpenHaldex is a **open-source Haldex AWD controller** for Volkswagen and Audi Group vehicles using Haldex Generation 1, 2, 4 (PQ Chassis) and 5 (MQB) differentials. The full source and hardware files are published under the permissive **MIT License**, so anyone is free to use, modify, and redistribute them, and it incorporates MIT‑licensed upstream work — see [Licensing](#licensing).
+OpenHaldex is an **open-source Haldex AWD controller** for Volkswagen and Audi Group vehicles using Haldex Generation 1, 2, 4 (PQ Chassis) and 5 (MQB) differentials. The full source and hardware files are published under the permissive **MIT License**, so anyone is free to use, modify, and redistribute them, and it incorporates MIT‑licensed upstream work — see [Licensing](#licensing).
 
 Install is easy with the new harnesses for later PQ & MQB chassis:
 
@@ -50,6 +50,8 @@ It can operate using OEM CAN signals or it is also able to run in Standalone mod
 - [Firmware Installation](#firmware-installation-esp-web-tools)
 - [Low Power Mode](#low-power-mode)
 - [CAN Sniffing](#can-sniffing-savvycan--gvret)
+- [Live Diagnostics](#live-diagnostics)
+- [Frame Editing](#frame-editing-addingremoving-can-signals)
 - [PCB & Enclosure](#pcb--enclosure)
 - [Acknowledgements](#acknowledgements)
 - [Licensing](#licensing)
@@ -67,7 +69,8 @@ It can operate using OEM CAN signals or it is also able to run in Standalone mod
 - Wi‑Fi access point password protection, with long-press reset
 - Force mode via CAN using hazard lights or TC button
 - Adjustable LED brightness
-- MQB UDS support (ongoing)
+- Live diagnostics: UDS (Gen5) and KWP2000‑over‑TP2.0 (Gen2/Gen4) with measurement scaling confirmed against VCDS
+- Selectable CAN frames — enable/disable CAN messages per Generation from the Web UI
 
 ![OpenHaldex-C6](/Images/BoardOverview.png)
 
@@ -122,7 +125,7 @@ These two high‑side drivers for brake/handbrake could be repurposed for other 
 
 ## Modes
 
-The controller provides several preset modes along with a fully customisable mode:
+The controller provides several preset modes along with a fully customisable 'Expert' mode':
 
 | Mode | Behaviour | LED Colour |
 |-----|-----------|-----------|
@@ -131,7 +134,7 @@ The controller provides several preset modes along with a fully customisable mod
 | 7525 | 25% lock | Cyan |
 | 6040 | 40% lock | Magenta |
 | 5050 | 100% lock | Blue |
-| Expert | User‑defined lock profile | White |
+| Expert | User‑defined lock | White |
 
 ---
 
@@ -149,11 +152,11 @@ Expert mode allows lock targets to be configured based on **speed and throttle s
 
 Allow the controller to learn *your* Haldex by replacing the original methodology of approximating a lock percentage by cycling through all of the available lock percentages.  
 
-Use the 'Learn Haldex' in the Settings page and within one minute the controller will learn how to get EXACTLY the lock percentage you request.  No more guess-work, just exact values.
+Use the 'Learn Haldex' in the Settings page and within one minute the controller will learn how to get EXACTLY the lock percentage you request.  No more approximations, just exact values.
 
 ### Gen5 'Fix Hunting'
 
-Certain Generation 5 controllers — specifically those running the **554K** variant — use a different torque model to calculate the lock request. On these units, the standard learning process will not produce accurate results. Use the **Fix Hunt** option in the Settings page instead of the standard Learn Haldex.
+Certain Generation 5 controllers — specifically those running the **554K** variant — use a different torque model to calculate the lock request. On these units, the standard learning process will not produce accurate results. Use the **Fix Hunt** option in the Settings page to ensure the correct torque model is used.  
 
 ---
 
@@ -250,7 +253,7 @@ If you are locked out or forget your password, **long-pressing the `Mode` button
 
 If the Wi‑Fi interface becomes unresponsive:
 
-- Long‑press the `Mode` button to clear the WiFi password and restart the AP open.
+- Long‑press the `Mode` button to clear the WiFi password and restart the AP to an open state.
 
 ---
 
@@ -306,27 +309,27 @@ Low Power Mode requires **one short calibration step** the first time, because e
 
 **Step 1 — Measure your Sleeping CAN rate**
 
-1. Park and lock the car. Wait 30 minutes or until the Chassis bus goes fully quiet.
+1. Park and lock the car. Wait 15 minutes or until the Chassis bus goes fully quiet.
 2. Stay connected to the OpenHaldex WiFi AP — the controller will remain awake while a client is connected.
 3. Open the Web UI → **Settings** and watch the **Chassis fps** and **Haldex fps** counters.
-4. Note the highest reading you see while the car is asleep. Most cars show **0 fps**; some show a handful of fps from a periodic gateway heartbeat.
+4. Note the highest reading you see while the car is asleep. Most cars show **800 fps**; some show a handful of fps from a periodic gateway heartbeat.
 
 **Step 2 — Set the wake threshold**
 
-5. Set the **LP Wake Threshold (fps)** slider to a value **above** the parked-bus reading — e.g. if the bus is quiet at 0 fps, set the slider to **5**; if it idles at 8 fps, set the slider to **15**.
+5. Set the **LP Wake Threshold (fps)** slider to a value slightly **above** the parked-bus reading — e.g. if the bus is quiet at 0 fps, set the slider to **5**; if it idles at 8 fps, set the slider to **15**.
 
 **Step 3 — Enable Sleep and Disconnect**
 
 6. Enable **CAN Sleep** (and optionally **CAN Sleep (Aggressive)**) in Settings.
 7. **Disconnect from the WiFi AP** (close the browser / forget the network).
 
-The controller will now sleep, drawing ~14 mA, and **wake automatically whenever the CAN frame rate rises above the threshold** — i.e. when you unlock or start the car.
+The controller will now sleep, drawing ~14 mA, and **wake automatically whenever the CAN frame rate rises above the threshold** — i.e. when you unlock or start the car.  The LED, CAN chips and CPU are all off/reduced.
 
 > [!NOTE]
 > **Standalone mode:** with no chassis bus, the Haldex ECU itself sleeps fully, so any Haldex-bus CAN traffic wakes the module regardless of the slider value.
 
 > [!NOTE]
-> **Switched-ignition installs:** if the module is already powered off with the ignition, Low Power Mode saves little and is optional.
+> **Switched-ignition installs:** if the module is already powered off with the ignition, Low Power Mode saves little and is optional.  
 ---
 
 ## Installation
@@ -335,15 +338,18 @@ The controller will now sleep, drawing ~14 mA, and **wake automatically whenever
 > ### Optional Plug & Play Harness (Recommended)
 >
 > Recommended for quick installation (and removal) — typically **<10 minutes** on Generation 1 Controllers.
-> The latest harnesses for Generation 2, 4 and 5 are even simpler and you'll be experiencing your Haldex controller in less than 30 seconds:
+> The latest harnesses for Generation 5 are even simpler and you'll be experiencing your Haldex controller in less than 30 seconds:
 
 - Lift the rear seat
 - Split the factory 6-pin Haldex connector
 - Install your new harness & OpenHaldexC6 Controller
-- Drive it (you can put the seat back down too, if you want!)
+- Drive it (you could put the seat back down too, if you want!)
 
 > For Generation 1 Controllers:
-Route cables as required and connect harness ends as described in the harness instructions.
+
+- Remove original connector and install the long end of the harness onto the differential.
+- Route the long end along with the original connector back into the boot floor via. the OEM grommet
+- Install and secure the OpenHaldexC6 Controller to the new harness, pairing it with the original plug
 
 For full step‑by‑step instructions see the **[OpenHaldex Installation Guide](https://openhaldex.com/docs/OpenHaldex_Installation_Guide.pdf)**.
 
@@ -364,17 +370,18 @@ Gen4>:
 - Haldex Connector — `VW 1J0‑973‑713`
 - Vehicle Connector — `VW 1J0‑973‑813`
 
-Build this as a **Y-branch** harness between the two VW 6-pin connectors, with a long tail to the MX plug.
+Build this as a **Y-branch** harness between the two VW 8 or 6-pin connectors, with a long tail to the MX plug.
 
 Routing summary:
 
-- Pins 1, 2, 3 are pass-through between Vehicle and Haldex.
-- **Permanent power (Term30) and ground (MALT) must also be branched to the OpenHaldex controller**:
+- **Permanent power (Term30) and ground must also be branched to the OpenHaldex controller**:
   - Term30 -> MX Pin 1
-  - Ground/MALT -> MX Pin 2
+  - Ground -> MX Pin 2
+  
 - Chassis CAN is taken from the Vehicle side and sent to the controller:
   - Vehicle Pin 5 -> MX Pin 3 (Chassis CAN Low)
   - Vehicle Pin 6 -> MX Pin 4 (Chassis CAN High)
+
 - Returned CAN from the controller then goes to the Haldex side:
   - MX Pin 5 -> Haldex Pin 5 (Haldex CAN Low)
   - MX Pin 6 -> Haldex Pin 6 (Haldex CAN High)
@@ -451,10 +458,10 @@ Generation 5:
 
 ## Firmware Installation (ESP Web Tools)
 
-Firmware can be installed directly from your browser using **ESP Web Tools**.  
+Firmware can be installed directly from your browser using **ESP Web-Tools**.  
 This is the recommended method for most users.
 
-1. Connect the OpenHaldex controller to your computer using a **data-capable USB-C cable**.
+1. Connect the OpenHaldex-C6 controller to your computer using a **data-capable USB-C cable**.
 2. Open the firmware installer page: **[Module Software Updater](https://forbes-automotive.com/pages/module-software-updater?utm_source=github&utm_medium=readme&utm_campaign=openhaldex)**
 3. Click **Connect** and select the OpenHaldex serial port.
 4. Click **Install** and follow the prompts.
@@ -470,6 +477,8 @@ This is the recommended method for most users.
 ## CAN Sniffing (SavvyCAN / GVRET)
 
 Adding more functionality couldn't be easier - you just need to know the feature you want and grab some CAN data to help implement it.  Using the SavvyCAN interface, you can listen to the CAN messages to see what the car is talking about...
+
+> [Thanks to Maetro for this feature!]
 
 Enable **Analyzer Mode** in the setup menu to capture CAN frames.
 
@@ -515,6 +524,57 @@ SavvyCAN can also connect directly over USB without needing Wi‑Fi:
 
 ---
 
+## Live Diagnostics
+
+OpenHaldex can request data from the Haldex ECU for **live measurement data** and display it in the Web UI - just like a scan tool would. This occupies the module's diagnostic channel, it is controlled by a single **Enable Live Diagnostics** toggle in Settings that is **off by default** — however if you use VCDS, ODIS or another diagnostic tool, it will automatically turn itself off until the scan tool is removed.
+
+When enabled, the controller automatically uses the correct protocol for the configured generation — there is nothing else to select.
+
+### Gen5 (MQB `0CQ` / PQ `0AY`) — UDS
+
+Gets data from the Haldex ECU over ISO‑TP / UDS and decodes:
+
+- Terminal voltage
+- Control module temperature
+- Clutch temperature
+- Cooling‑fin temperature
+- Clutch current, PWM and voltage
+
+All scaling has been **confirmed against VCDS** by heat‑soaking a bench module and matching the reported values across the full temperature range.  
+
+### Gen2 (`1K0`) / Gen4 (`0AY`) — KWP2000 over VW TP2.0
+
+The PQ‑platform controllers are diagnosed with **KWP2000 tunnelled over VW TP2.0** rather than UDS. OpenHaldex opens the TP2.0 channel, starts a diagnostic session and reads the measuring blocks. Gen4 values are decoded and **confirmed against VCDS**:
+
+- Oil temperature & clutch plate temperature
+- Supply voltage
+- Oil pressure
+- Estimated torque
+- Clutch valve duty (%) and current (A)
+
+Raw measuring‑block bytes are also exposed so any remaining values can be characterised.
+
+> [!NOTE]
+> If VCDS or other scan tools will not connect, turn this setting off as it may not cleanly pick up the VCDS request so it does not block the tool.
+
+---
+
+## Frame Editing (Adding/Removing CAN Signals)
+
+From the **Diagnostics** page you can enable or disable OpenHaldex's editing of **individual CAN frames** for the selected Haldex generation.
+
+- Each editable frame for the current generation is listed as a checkbox.
+- **Unchecking** a frame leaves the car's original message untouched (clean pass‑through); **checking** it lets OpenHaldex modify or generate that frame.
+- Changes apply immediately and are saved per generation.
+- A **Reset to Defaults** button restores the generation's standard set.
+
+This is useful for **understanding** which edited frame upsets a Haldex learn procedure or causes fault codes, for tailoring behaviour on unusual vehicles, or for adding/removing specific signals during development.
+
+> [!NOTE]
+> Frame editing can apply to both 'Normal' and 'Standalone' modes and only to the currently selected generation.
+
+---
+
 ## PCB & Enclosure
 
 Gerber files and enclosure designs are available in the **PCB** folder.  You can use these to get your own units if you wish.
@@ -534,7 +594,6 @@ Pinout and functionality remain consistent across supported enclosure versions.
 
 ## Acknowledgements
 
-- **Forbes Automotive** — Lead development of the OpenHaldex C6 platform, including reverse‑engineering and implementation for **Gen2, Gen4 and Gen5 Haldex systems**, along with ongoing maintenance of the project
 - **A Banging Donk** — [Original OpenHaldex project](https://github.com/ABangingDonk/OpenHaldexT4) for Gen1 vehicles
 - **Chris (meatro) — OpenHaldex‑S3** — [OpenHaldex‑S3](https://github.com/meatro/OpenHaldex-S3) (MIT). Portions of the map editor / Expert Mode, CAN View, web UI, PlatformIO structure and API control derive from this project
 - **Arwid Vasilev** — PCB redesign (V1.02)

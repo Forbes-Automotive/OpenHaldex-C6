@@ -10,19 +10,19 @@ twai_message_t rx_message_chs; // incoming chassis message
 twai_message_t tx_message_hdx; // outgoing haldex message
 twai_message_t tx_message_chs; // outgoing chassis message
 
-TaskHandle_t handle_frames1000;                    // for enabling/disabling 1000ms frames
-TaskHandle_t handle_frames250;                     // for enabling/disabling 250ms frames
-TaskHandle_t handle_frames200;                     // for enabling/disabling 200ms frames
-TaskHandle_t handle_frames100;                     // for enabling/disabling 100ms frames
-TaskHandle_t handle_frames50;                      // for enabling/disabling 50ms frames
-TaskHandle_t handle_frames25;                      // for enabling/disabling 25ms frames
-TaskHandle_t handle_frames20;                      // for enabling/disabling 20ms frames
-TaskHandle_t handle_frames13;                      // for enabling/disabling 13ms frames
-TaskHandle_t handle_frames10;                      // for enabling/disabling 10ms frames
-TaskHandle_t handle_gen41_dual_bus_rates;          // dedicated Gen41 dual-bus cadence task
+TaskHandle_t handle_frames1000; // for enabling/disabling 1000ms frames
+TaskHandle_t handle_frames250;  // for enabling/disabling 250ms frames
+TaskHandle_t handle_frames200;  // for enabling/disabling 200ms frames
+TaskHandle_t handle_frames100;  // for enabling/disabling 100ms frames
+TaskHandle_t handle_frames50;   // for enabling/disabling 50ms frames
+TaskHandle_t handle_frames25;   // for enabling/disabling 25ms frames
+TaskHandle_t handle_frames20;   // for enabling/disabling 20ms frames
+TaskHandle_t handle_frames13;   // for enabling/disabling 13ms frames
+TaskHandle_t handle_frames10;   // for enabling/disabling 10ms frames
+TaskHandle_t handle_gen41_dual_bus_rates; // dedicated Gen41 dual-bus cadence task
 TaskHandle_t handle_broadcastOpenHaldex = nullptr; // OpenHaldex CAN broadcast task (suspended in aggressive sleep)
-TaskHandle_t handle_showHaldexState = nullptr;     // serial state logger (suspended in aggressive sleep)
-TaskHandle_t handle_updateTriggers = nullptr;      // notified by CAN_RX wake ISRs in aggressive sleep
+TaskHandle_t handle_showHaldexState     = nullptr; // serial state logger (suspended in aggressive sleep)
+TaskHandle_t handle_updateTriggers      = nullptr; // notified by CAN_RX wake ISRs in aggressive sleep
 
 // for EEP
 Preferences pref; // for EEPROM / storing settings
@@ -44,19 +44,19 @@ uint8_t received_haldex_engagement = 0;
 uint8_t appliedTorque = 0;
 
 // Gen41 Haldex feedback (FDCM-originated, decoded per GMW8762 PPEI)
-uint8_t received_sec_axle_status_raw = 0;
-uint8_t received_sec_axle_torque_nm = 0;
-uint8_t received_sec_axle_clutch_state = 0;
-bool received_sec_axle_active = false;
-bool received_sec_axle_fdcm_healthy = false;
-uint8_t received_sec_axle_arc = 0;
+uint8_t  received_sec_axle_status_raw = 0;
+uint8_t  received_sec_axle_torque_nm = 0;
+uint8_t  received_sec_axle_clutch_state = 0;
+bool     received_sec_axle_active = false;
+bool     received_sec_axle_fdcm_healthy = false;
+uint8_t  received_sec_axle_arc = 0;
 
-uint8_t received_rear_axle_status_flags = 0;
-uint8_t received_rear_axle_metric_a = 0;
-uint8_t received_rear_axle_metric_b = 0;
+uint8_t  received_rear_axle_status_flags = 0;
+uint8_t  received_rear_axle_metric_a = 0;
+uint8_t  received_rear_axle_metric_b = 0;
 
-bool received_haldex_alive_bus0 = false;
-bool received_drivetrain_state_ok = false;
+bool     received_haldex_alive_bus0 = false;
+bool     received_drivetrain_state_ok = false;
 uint32_t received_haldex_alive_bus0_ms = 0;
 uint32_t received_drivetrain_state_ms = 0;
 
@@ -66,9 +66,9 @@ bool received_report_clutch2;
 bool received_temp_protection;
 bool received_coupling_open;
 bool received_speed_limit;
-bool received_limp_mode;              // Gen1/2/4: Allrad_1 byte 0 bit 4 (Notlauf - limp mode)
-bool received_awd_warning;            // Gen1/2/4: Allrad_1 byte 0 bit 5 (Allrad_Warnlampe - AWD warning lamp)
-uint8_t received_long_lock_state = 0; // Gen5: ALR_Sta_Laengssperre byte 1 bits 4..5
+bool received_limp_mode;                // Gen1/2/4: Allrad_1 byte 0 bit 4 (Notlauf - limp mode)
+bool received_awd_warning;             // Gen1/2/4: Allrad_1 byte 0 bit 5 (Allrad_Warnlampe - AWD warning lamp)
+uint8_t received_long_lock_state = 0;  // Gen5: ALR_Sta_Laengssperre byte 1 bits 4..5
 bool received_kickdown = false;
 
 // values received from Chassis CAN
@@ -77,13 +77,13 @@ uint16_t received_vehicle_speed = 0;
 uint16_t received_vehicle_rpm;
 uint16_t received_vehicle_boost;
 uint8_t haldexGeneration;
-uint8_t tcForceModeValue = 2;     // default 50:50
+uint8_t tcForceModeValue     = 2; // default 50:50
 uint8_t hazardForceModeValue = 2; // default 50:50
 uint8_t extBtnForceModeValue = 2; // default 50:50
 
 uint32_t lastABSResponse = 0; // for tracking ABS responses to determine if ABS is valid
 bool isABSValid = false;      // set to true if valid ABS response received within timeout, otherwise false
-uint32_t absTimeout = 1000;   // timeout in ms for determining if ABS is valid - if no valid ABS response received within this time, isABSValid will be set to false
+uint32_t absTimeout = 1000;    // timeout in ms for determining if ABS is valid - if no valid ABS response received within this time, isABSValid will be set to false
 
 bool isStandalone = false;
 bool useCANifAvailable = false;
@@ -102,8 +102,8 @@ bool rebootWiFi = false;
 bool lowPowerMode = false;
 volatile uint32_t lpChassisFrameCount = 0; // incremented by chassis CAN task; used to measure bus activity during probe window
 volatile uint32_t lpHaldexFrameCount = 0;  // incremented by haldex CAN task; used for standalone probe window
-char wifiPassword[65] = "";                // WiFi AP password - empty string = open network
-char wifiSsid[33] = wifiHostNameDefault;   // runtime AP SSID (factory default, overridden from EEPROM)
+char wifiPassword[65] = ""; // WiFi AP password - empty string = open network
+char wifiSsid[33] = wifiHostNameDefault; // runtime AP SSID (factory default, overridden from EEPROM)
 
 bool hazardForceMode = false;     // setting: use hazard lights to activate force mode
 bool hazardForceModeFlag = false; // runtime: hazard lights are currently on
@@ -122,9 +122,9 @@ bool tcForceModeFlag = false;
 bool asrForceModeFlag = false;
 
 bool paddleTipActive = false;
-bool paddleTipUp = false;
-bool paddleTipDown = false;
-bool paddleTipBoth = false;
+bool paddleTipUp     = false;
+bool paddleTipDown   = false;
+bool paddleTipBoth   = false;
 
 bool extBtnForceMode = false;
 bool extButtonForceModeFlag = false;
@@ -134,10 +134,169 @@ bool disableExternalButton = false;
 
 bool fixHunting = false; // when true, Motor_11 uses BPK packing instead of V3
 
+// ---- Frame-edit gating (per-CAN-ID passthrough toggles) --------------------
+// Bit layout per generation matches the order the cases appear in getLockData().
+// Defaults: currently-active (compiled) frames ON; frames transferred from
+// standalone / previously commented-out are OFF (=> clean passthrough).
+const uint64_t frameEditMaskDefaults[FE_GEN_COUNT] = {
+    0x0000000FULL, // FE_GEN_1 : bits 0-3 on   (4 active frames)
+    0x0000001FULL, // FE_GEN_2 : bits 0-4 on   (5 active), bits 5-9 off (added)
+    0x0000003FULL, // FE_GEN_4 : bits 0-5 on   (6 active), bits 6-11 off (added)
+    0x000003FFULL, // FE_GEN_50: bits 0-9 on   (10 active), bits 10-27 off (added/uncommented)
+    0x0000000FULL, // FE_GEN_51: bits 0-3 on   (4 active), bits 4-17 off (uncommented)
+};
+
+uint64_t frameEditMask[FE_GEN_COUNT] = {
+    0x0000000FULL, 0x0000001FULL, 0x0000003FULL, 0x000003FFULL, 0x0000000FULL};
+
+// Standalone frame-edit defaults: EVERYTHING on. In standalone the module
+// synthesises the whole bus, so all editable frames must be generated by
+// default (the passthrough defaults above only enable the historically-edited
+// subset). A separate mask keeps the two modes fully independent.
+const uint64_t frameEditMaskDefaultsSA[FE_GEN_COUNT] = {
+    0x0000000FULL, // FE_GEN_1 : bits 0-3   (4 blocks)  all on
+    0x00001FFFULL, // FE_GEN_2 : bits 0-12  (13 blocks) all on
+    0x00000FFFULL, // FE_GEN_4 : bits 0-11  (12 blocks) all on
+    0x0FFFFFFFULL, // FE_GEN_50: bits 0-27  (28 blocks) all on
+    0x0003FFFFULL, // FE_GEN_51: bits 0-17  (18 blocks) all on
+};
+
+uint64_t frameEditMaskSA[FE_GEN_COUNT] = {
+    0x0000000FULL, 0x00001FFFULL, 0x00000FFFULL, 0x0FFFFFFFULL, 0x0003FFFFULL};
+
+// Descriptor table used by the API/UI. Order per generation defines the bit index.
+const FrameEditBlock frameEditBlocks[] = {
+    // Gen1
+    {FE_GEN_1, 0, MOTOR1_ID, "Motor_1 (0x280)"},
+    {FE_GEN_1, 1, MOTOR3_ID, "Motor_3 (0x380)"},
+    {FE_GEN_1, 2, BRAKES1_ID, "Bremse_1 (0x1A0)"},
+    {FE_GEN_1, 3, BRAKES3_ID, "Bremse_3 (0x4A0)"},
+    // Gen2
+    {FE_GEN_2, 0, MOTOR1_ID, "Motor_1 (0x280)"},
+    {FE_GEN_2, 1, MOTOR3_ID, "Motor_3 (0x380)"},
+    {FE_GEN_2, 2, BRAKES1_ID, "Bremse_1 (0x1A0)"},
+    {FE_GEN_2, 3, BRAKES2_ID, "Bremse_2 (0x5A0)"},
+    {FE_GEN_2, 4, BRAKES3_ID, "Bremse_3 (0x4A0)"},
+    {FE_GEN_2, 5, BRAKES4_ID, "Bremse_4 (0x2A0)"},
+    {FE_GEN_2, 6, BRAKES5_ID, "Bremse_5 (0x4A8)"},
+    {FE_GEN_2, 7, BRAKES9_ID, "Bremse_9 (0x0AE)"},
+    {FE_GEN_2, 8, BRAKES10_ID, "Bremse_10 (0x3A0)"},
+    {FE_GEN_2, 9, MOTOR5_ID, "Motor_5 (0x480)"},
+    {FE_GEN_2, 10, mLW_1, "LW_1 (0x0C2)"},
+    {FE_GEN_2, 11, MOTOR2_ID, "Motor_2 (0x288)"},
+    {FE_GEN_2, 12, mKombi_1, "Kombi_1 (0x320)"},
+    // Gen4
+    {FE_GEN_4, 0, mLW_1, "LW_1 (0x0C2)"},
+    {FE_GEN_4, 1, MOTOR1_ID, "Motor_1 (0x280)"},
+    {FE_GEN_4, 2, BRAKES1_ID, "Bremse_1 (0x1A0)"},
+    {FE_GEN_4, 3, BRAKES2_ID, "Bremse_2 (0x5A0)"},
+    {FE_GEN_4, 4, BRAKES3_ID, "Bremse_3 (0x4A0)"},
+    {FE_GEN_4, 5, BRAKES4_ID, "Bremse_4 (0x2A0)"},
+    {FE_GEN_4, 6, mKombi_1, "Kombi_1 (0x320)"},
+    {FE_GEN_4, 7, mKombi_3, "Kombi_3 (0x520)"},
+    {FE_GEN_4, 8, mGate_Komf_1, "Gate_Komf_1 (0x390)"},
+    {FE_GEN_4, 9, BRAKES11_ID, "Bremse_11 (0x5B7)"},
+    {FE_GEN_4, 10, mKombi_2, "Kombi_2 (0x420)"},
+    {FE_GEN_4, 11, mDiagnose_1, "Diagnose_1 (0x7D0)"},
+    // Gen50 (0CQ MQB)
+    {FE_GEN_50, 0, ESP_19, "ESP_19 (0x0B2)"},
+    {FE_GEN_50, 1, GETRIEBE_11, "Getriebe_11 (0x0AD)"},
+    {FE_GEN_50, 2, MOTOR_12, "Motor_12 (0x0A8)"},
+    {FE_GEN_50, 3, MOTOR_11, "Motor_11 (0x0A7)"},
+    {FE_GEN_50, 4, ESP_14, "ESP_14 (0x08A)"},
+    {FE_GEN_50, 5, ESP_10, "ESP_10 (0x116)"},
+    {FE_GEN_50, 6, ESP_05, "ESP_05 (0x106)"},
+    {FE_GEN_50, 7, EPB_01, "EPB_01 (0x104)"},
+    {FE_GEN_50, 8, MOTOR_14, "Motor_14 (0x3BE)"},
+    {FE_GEN_50, 9, ESP_07, "ESP_07 (0x392)"},
+    {FE_GEN_50, 10, ESP_18, "ESP_18 (0x135)"},
+    {FE_GEN_50, 11, LWI_01, "LWI_01 (0x086)"},
+    {FE_GEN_50, 12, MOTOR_20, "Motor_20 (0x121)"},
+    {FE_GEN_50, 13, ESP_02, "ESP_02 (0x101)"},
+    {FE_GEN_50, 14, ESP_21, "ESP_21 (0x0FD)"},
+    {FE_GEN_50, 15, KOMBI_01, "Kombi_01 (0x30B)"},
+    {FE_GEN_50, 16, ESP_23, "ESP_23 (0x5BE)"},
+    {FE_GEN_50, 17, Parkhilfe_04, "Parkhilfe_04 (0x54B)"},
+    {FE_GEN_50, 18, GATEWAY_72, "Gateway_72 (0x3DB)"},
+    {FE_GEN_50, 19, GETRIEBE_14, "Getriebe_14 (0x3C8)"},
+    {FE_GEN_50, 20, ESP_29, "ESP_29 (0x18C)"},
+    {FE_GEN_50, 21, MOTOR_07, "Motor_07 (0x640)"},
+    {FE_GEN_50, 22, CHARISMA_01, "Charisma_01 (0x385)"},
+    {FE_GEN_50, 23, SYSTEMINFO_01, "Systeminfo_01 (0x585)"},
+    {FE_GEN_50, 24, MOTOR_CODE_01, "Motor_Code_01 (0x641)"},
+    {FE_GEN_50, 25, ESP_20, "ESP_20 (0x65D)"},
+    {FE_GEN_50, 26, DIAGNOSE_01, "Diagnose_01 (0x6B2)"},
+    {FE_GEN_50, 27, KOMBI_02, "Kombi_02 (0x6B7)"},
+    // Gen51 (0AY MQB)
+    {FE_GEN_51, 0, MOTOR1_ID, "Motor_1 (0x280)"},
+    {FE_GEN_51, 1, BRAKES3_ID, "Bremse_3 (0x4A0)"},
+    {FE_GEN_51, 2, BRAKES4_ID, "Bremse_4 (0x2A0)"},
+    {FE_GEN_51, 3, mLW_1, "LW_1 (0x0C2)"},
+    {FE_GEN_51, 4, BRAKES1_ID, "Bremse_1 (0x1A0)"},
+    {FE_GEN_51, 5, mGetriebe_2, "Getriebe_2 (0x540)"},
+    {FE_GEN_51, 6, BRAKES5_ID, "Bremse_5 (0x4A8)"},
+    {FE_GEN_51, 7, BRAKES8_ID, "Bremse_8 (0x1AC)"},
+    {FE_GEN_51, 8, BRAKES2_ID, "Bremse_2 (0x5A0)"},
+    {FE_GEN_51, 9, MOTOR2_ID, "Motor_2 (0x288)"},
+    {FE_GEN_51, 10, MOTOR5_ID, "Motor_5 (0x480)"},
+    {FE_GEN_51, 11, mKombi_1, "Kombi_1 (0x320)"},
+    {FE_GEN_51, 12, mKombi_3, "Kombi_3 (0x520)"},
+    {FE_GEN_51, 13, mGate_Komf_1, "Gate_Komf_1 (0x390)"},
+    {FE_GEN_51, 14, BRAKES11_ID, "Bremse_11 (0x5B7)"},
+    {FE_GEN_51, 15, mSysteminfo_1, "Systeminfo_1 (0x5D0)"},
+    {FE_GEN_51, 16, mKombi_2, "Kombi_2 (0x420)"},
+    {FE_GEN_51, 17, mDiagnose_1, "Diagnose_1 (0x7D0)"},
+};
+const uint16_t frameEditBlockCount = sizeof(frameEditBlocks) / sizeof(frameEditBlocks[0]);
+
+int frameEditGenIdx(uint8_t generation)
+{
+    switch (generation)
+    {
+    case 1:
+        return FE_GEN_1;
+    case 2:
+        return FE_GEN_2;
+    case 4:
+        return FE_GEN_4;
+    case 50:
+        return FE_GEN_50;
+    case 51:
+        return FE_GEN_51;
+    default:
+        return -1; // not gated (e.g. gen41/42)
+    }
+}
+
+uint64_t *activeFrameEditMask()
+{
+    // Standalone generates the whole bus (frameEditMaskSA, all-on default);
+    // normal mode edits real passthrough frames (frameEditMask). Each consumer
+    // (standaloneTx / passthrough editor / API) runs in the matching mode, so
+    // routing through this keeps every one of them on the correct mask.
+    return isStandalone ? frameEditMaskSA : frameEditMask;
+}
+
+bool frameEditEnabled(uint8_t genIdx, uint8_t bit)
+{
+    if (genIdx >= FE_GEN_COUNT)
+        return true;
+    return (activeFrameEditMask()[genIdx] >> bit) & 0x1ULL;
+}
+
+void resetFrameEditMask()
+{
+    for (uint8_t i = 0; i < FE_GEN_COUNT; i++)
+    {
+        frameEditMask[i]   = frameEditMaskDefaults[i];
+        frameEditMaskSA[i] = frameEditMaskDefaultsSA[i];
+    }
+}
+
 bool canSleepEnabled = true;
-bool canSleepAggressive = false;      // opt-in: transceiver standby + DFS floor 10MHz + low WiFi TX power
+bool canSleepAggressive = false; // opt-in: transceiver standby + DFS floor 10MHz + low WiFi TX power
 volatile bool canWakeRequest = false; // ISR-set wake flag when transceivers in standby see bus activity
-uint16_t lpWakeThresholdFps = 1100;   // wake threshold fps; default 1100 — user adjustable via UI
+uint16_t lpWakeThresholdFps = 1100; // wake threshold fps; default 1100 — user adjustable via UI
 
 bool otaUpdate = false;
 
@@ -146,7 +305,8 @@ bool analyzerMode = false;   // WiFi GVRET/SLCAN (TCP Port 23)
 bool analyzerSerial = false; // Serial GVRET (SavvyCAN Serial Connection)
 
 // UDS MQB diagnostic polling (Gen 5 only)
-bool udsMQBEnabled = false;
+bool liveDiagEnabled = false;             // master live-diagnostics enable; gates UDS (Gen5) + TP2.0 (Gen2/4)
+volatile uint32_t externalDiagLastMs = 0; // last time an external scanner request was seen on Bus 0 (0 = never)
 QueueHandle_t udsRxQueue = nullptr;
 float udsTerminalVoltage = 0.0f;
 float udsModuleTemp = 0.0f;
@@ -156,6 +316,22 @@ float udsClutchCurrent = 0.0f;
 uint8_t udsClutchPWM = 0;
 float udsClutchVoltage = 0.0f;
 uint8_t udsBlockagePct = 0;
+
+// KWP2000 over VW TP2.0 diagnostics (Gen2 / Gen4 PQ Haldex)
+QueueHandle_t tp20RxQueue = nullptr;
+volatile uint32_t kwpTp20EcuTxId = 0;
+bool kwpTp20Connected = false;
+char kwpTp20RawDump[512] = {0};
+
+// Gen4 (0AY) scaled measuring values (see OpenHaldexC6_defs.h for formulas)
+float kwpOilTemp = 0.0f;
+float kwpPlateTemp = 0.0f;
+float kwpSupplyVoltage = 0.0f;
+float kwpOilPressure = 0.0f;
+float kwpEstTorque = 0.0f;
+float kwpClutchDuty = 0.0f;
+float kwpClutchValveCurrent = 0.0f;
+
 
 // LED
 uint8_t ledBrightness = led_brightness_default;
@@ -198,7 +374,7 @@ openhaldex_state_t state;
 float lock_target = 0;
 
 float lockReleaseRatePerSec = 120.0f;
-bool lockReleaseEnabled = true; // when false, lock target changes are instantaneous
+bool lockReleaseEnabled = true;  // when false, lock target changes are instantaneous
 uint8_t forceModesPriority = 0; // 0=Haz>TC>Ext, 1=TC>Haz>Ext, 2=Haz>Ext>TC, 3=TC>Ext>Haz, 4=Ext>TC>Haz, 5=Ext>Haz>TC
 
 // setup - main inputs
@@ -223,8 +399,8 @@ uint8_t haldexLearnTable[101];
 bool haldexLearnTableValid = false;
 volatile bool haldexLearnActive = false;
 volatile bool haldexLearnCancel = false;
-volatile uint8_t haldexLearnStep = 0; // 0-100 = current step, 101 = complete
-volatile uint8_t haldexLearnCF = 0;   // current correction factor override during learn
+volatile uint8_t haldexLearnStep = 0;   // 0-100 = current step, 101 = complete
+volatile uint8_t haldexLearnCF = 0;     // current correction factor override during learn
 uint8_t tempCounter1;
 uint16_t tempCounter2;
 
@@ -299,12 +475,12 @@ const uint8_t lws_2[16][8] = {
     {0x22, 0x00, 0x00, 0x00, 0x80, 0xE0, 0x79, 0xFD},
     {0x22, 0x00, 0x00, 0x00, 0x80, 0xF0, 0x5C, 0xED}};
 
-/*
+    /*
 These are all for Gen5 checksum:
 Calculation see specifications 'Communication Security for FlexRay and CAN'
 From MQB and MLBevo: "Calculation see specifications 'End-to-End Communication Security'"
 Final values see accompanying document "S-PDU Identification Sequences"
-*/
+ */
 // CAN ID 0x0A8 - Motor_12
 const uint8_t ID_SEQ_0A8[16] = {
     0x52, 0x8C, 0x50, 0xEE, 0x4F, 0xA6, 0xCC, 0xCF,
@@ -352,7 +528,7 @@ const uint8_t ID_SEQ_104[16] = {
 
 // CAN ID 0x116 - ESP_10
 const uint8_t ID_SEQ_116[16] = {
-    0xac, 0xac, 0xac, 0xac, 0xac, 0xac, 0xac, 0xac, 
+    0xac, 0xac, 0xac, 0xac, 0xac, 0xac, 0xac, 0xac,
     0xac, 0xac, 0xac, 0xac, 0xac, 0xac, 0xac, 0xac};
 
 // CAN ID 0x101 - ESP_02
@@ -535,11 +711,11 @@ extern uint8_t checksum_392(uint8_t *frame)
 uint8_t Gen41_1CE234_counter = 0;
 
 // Gen42 (Ford) standalone rolling counters
-uint8_t gen42_main_counter = 0x51; // 8-bit: shared by 0x080 D7, 0x20F D8, 0x211 D8
-uint8_t gen42_090_nibble = 0x00;   // 4-bit (0-15): 0x090 D1 high nibble
-uint8_t gen42_20F_d6 = 0x00;       // 0x20F D6 (+0x10 per frame, mod 256)
-uint8_t gen42_190_counter = 0x00;  // 4-bit (0-15): 0x190 D6
-uint8_t gen42_275_counter = 0x80;  // 0x275 D1 (+0x20 per 100 ms, mod 256)
+uint8_t gen42_main_counter  = 0x51; // 8-bit: shared by 0x080 D7, 0x20F D8, 0x211 D8
+uint8_t gen42_090_nibble    = 0x00; // 4-bit (0-15): 0x090 D1 high nibble
+uint8_t gen42_20F_d6        = 0x00; // 0x20F D6 (+0x10 per frame, mod 256)
+uint8_t gen42_190_counter   = 0x00; // 4-bit (0-15): 0x190 D6
+uint8_t gen42_275_counter   = 0x80; // 0x275 D1 (+0x20 per 100 ms, mod 256)
 
 // 0x1CE Secondary Axle Torque Request (Nm). 0.0 = no request (open clutch).
 // Set from the API/mode handler. Encoding: 4 Nm/LSB (empirical; 0xFF = 1020 Nm max).

@@ -9,8 +9,8 @@
 
 void haldexLearnTask(void *arg)
 {
-  const uint32_t settleMs = 300; // time to wait for haldex engagement to settle after changing clutch factor (ms)
-  uint8_t lastValid = 0;
+  const uint32_t settleMs = 300;
+  uint8_t peak = 0; // highest engagement recorded so far (monotonic hold)
 
   for (uint16_t cf = 0; cf <= 100; cf++)
   {
@@ -26,13 +26,18 @@ void haldexLearnTask(void *arg)
 
     uint8_t eng = received_haldex_engagement;
 
-    if (eng == 0 && cf > 0)
+    // Engagement must rise (or plateau) as the requested lock climbs - it can
+    // never physically fall. A reading below the running peak is a data fault
+    // (e.g. a bad byte at the top end that returns 0 or a lower value), so hold
+    // the highest lock achieved so far instead of saving the drop. This keeps
+    // "the last available highest lock" as the learned value for higher requests.
+    if (eng < peak)
     {
-      eng = lastValid; // glaze over zero - keep previous valid reading
+      eng = peak; // last available highest lock remains
     }
     else
     {
-      lastValid = eng;
+      peak = eng;
     }
 
     haldexLearnTable[cf] = eng;
@@ -95,6 +100,7 @@ void setupTasks()
   xTaskCreate(parseCAN_hdx, "parseHaldex", 2048, NULL, 11, NULL);                // create a task for FreeRTOS for incoming haldex CAN - in '_can.ino'
   xTaskCreate(parseCAN_chs, "parseChassis", 2048, NULL, 12, NULL);               // create a task for FreeRTOS for incoming chassis CAN - in '_can.ino'
   xTaskCreate(udsMQBTask, "udsMQBTask", 2048, NULL, 5, NULL);                    // UDS MQB diagnostic polling task (Gen 5 only)
+  xTaskCreate(kwpTp20Task, "kwpTp20Task", 3072, NULL, 5, NULL);                  // KWP2000/TP2.0 diagnostic task (Gen2/4 PQ Haldex)
 }
 
 void showHaldexState(void *arg)
@@ -149,7 +155,9 @@ void showHaldexState(void *arg)
     {
       DEBUG("%d%d%d%d%d%d", throttleArray[0], throttleArray[1], throttleArray[2], throttleArray[3], throttleArray[4], throttleArray[5], throttleArray[6]);
       DEBUG("%d%d%d%d%d%d", speedArray[0], speedArray[1], speedArray[2], speedArray[3], speedArray[4], speedArray[5], speedArray[6]);
-     }
+      // DEBUG("%d", speedArray[j]);
+      // DEBUG("%d%d%d%d%d%d", lockArray[i][0], lockArray[i][1], lockArray[i][2], lockArray[i][3], lockArray[i][4], lockArray[i][5], lockArray[i][6]);
+    }
 
     if (detailedDebugStack)
     {
@@ -183,52 +191,22 @@ void showHaldexState(void *arg)
 
     if (detailedDebugCAN)
     {
-      uint32_t alerts_triggered;
-      twai_read_alerts(&alerts_triggered, pdMS_TO_TICKS(0));
-      twai_status_info_t twaistatus;
-      twai_get_status_info(&twaistatus);
-      DEBUG("");                 // this is the lock %
-      DEBUG("CAN-BUS Details:"); // this is the lock %
-      DEBUG("    RX buffered: %lu\t", twaistatus.msgs_to_rx);
-      DEBUG("    RX missed: %lu\t", twaistatus.rx_missed_count);
-      DEBUG("    RX overrun %lu\n", twaistatus.rx_overrun_count);
-
-      if (alerts_triggered & TWAI_ALERT_ERR_ACTIVE)
-      {
-        isBusFailure = true;
-      }
-      if (alerts_triggered & TWAI_ALERT_RECOVERY_IN_PROGRESS)
-      {
-        isBusFailure = true;
-      }
-      if (alerts_triggered & TWAI_ALERT_ABOVE_ERR_WARN)
-      {
-        isBusFailure = true;
-      }
-      if (alerts_triggered & TWAI_ALERT_BUS_ERROR)
-      {
-        isBusFailure = true;
-      }
-      if (alerts_triggered & TWAI_ALERT_TX_FAILED)
-      {
-        isBusFailure = true;
-      }
-      if (alerts_triggered & TWAI_ALERT_RX_QUEUE_FULL)
-      {
-        isBusFailure = true;
-      }
-      if (alerts_triggered & TWAI_ALERT_ERR_PASS)
-      {
-        isBusFailure = true;
-      }
-      if (alerts_triggered & TWAI_ALERT_BUS_OFF)
-      {
-        isBusFailure = true;
-      }
-      if (alerts_triggered & TWAI_ALERT_RX_FIFO_OVERRUN)
-      {
-        isBusFailure = true;
-      }
+      // Diagnostic reporting only. Fault detection/recovery and ownership of
+      // isBusFailure live in canBusRecovery() - don't read/drain alerts here
+      // (that would consume them before the recovery poll can see them).
+      twai_status_info_t twaistatus0;
+      twai_status_info_t twaistatus1;
+      twai_get_status_info_v2(twai_bus_0, &twaistatus0);
+      twai_get_status_info_v2(twai_bus_1, &twaistatus1);
+      DEBUG("");
+      DEBUG("CAN-BUS Details:");
+      DEBUG("    Bus0 state: %d  RX buffered: %lu  RX missed: %lu  RX overrun: %lu",
+            (int)twaistatus0.state, twaistatus0.msgs_to_rx,
+            twaistatus0.rx_missed_count, twaistatus0.rx_overrun_count);
+      DEBUG("    Bus1 state: %d  RX buffered: %lu  RX missed: %lu  RX overrun: %lu",
+            (int)twaistatus1.state, twaistatus1.msgs_to_rx,
+            twaistatus1.rx_missed_count, twaistatus1.rx_overrun_count);
+      DEBUG("    Bus failure: %s", isBusFailure ? "true" : "false");
     }
 
     vTaskDelay(serialMonitorRefresh / portTICK_PERIOD_MS);

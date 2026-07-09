@@ -79,10 +79,12 @@ void readEEP() // function to read stored preferences into runtime variables
     pref.putBool("learnOK", false);                                                  // learn table not valid on first run
     pref.putString("wifiPwd", wifiPassword);                                         // save WiFi password (empty = open network)
     pref.putString("wifiSsid", wifiSsid);                                            // save WiFi SSID (factory default on first run)
-    pref.putBool("udsMQBEn", udsMQBEnabled);                                         // save UDS MQB polling enable
+    pref.putBool("udsMQBEn", liveDiagEnabled);                                       // save live-diagnostics enable (legacy key)
     pref.putUChar("forceModesPrio", forceModesPriority);                             // save force-modes priority order
     pref.putFloat("lockReleaseRate", lockReleaseRatePerSec);                         // save lock release rate (%/s)
     pref.putBool("lockReleaseEn", lockReleaseEnabled);                               // save lock release enable
+    pref.putBytes("feMask", frameEditMask, sizeof(frameEditMask));                    // save frame-edit masks (defaults)
+    pref.putBytes("feMaskSA", frameEditMaskSA, sizeof(frameEditMaskSA));              // save standalone frame-edit masks (defaults)
   } // end if first run
   else // normal run: load stored values
   {
@@ -130,10 +132,32 @@ void readEEP() // function to read stored preferences into runtime variables
     {
       strncpy(wifiSsid, wifiHostNameDefault, sizeof(wifiSsid) - 1); // restore factory default
     }
-    udsMQBEnabled = pref.getBool("udsMQBEn", false);               // load UDS MQB polling enable
+    liveDiagEnabled = pref.getBool("udsMQBEn", false);             // load live-diagnostics enable (legacy key)
     forceModesPriority = pref.getUChar("forceModesPrio", 0);       // load force-modes priority (0=TC>Haz>Ext)
     lockReleaseRatePerSec = pref.getFloat("lockReleaseRate", 120.0f); // load lock release rate (%/s)
     lockReleaseEnabled = pref.getBool("lockReleaseEn", true);        // load lock release enable
+    bool frameEditMasksChanged = false;
+    if (pref.getBytesLength("feMask") == sizeof(frameEditMask))
+      pref.getBytes("feMask", frameEditMask, sizeof(frameEditMask)); // load frame-edit masks
+    else
+    {
+      for (uint8_t i = 0; i < FE_GEN_COUNT; i++)
+        frameEditMask[i] = frameEditMaskDefaults[i];                 // legacy install: use normal defaults
+      frameEditMasksChanged = true;
+    }
+    if (pref.getBytesLength("feMaskSA") == sizeof(frameEditMaskSA))
+      pref.getBytes("feMaskSA", frameEditMaskSA, sizeof(frameEditMaskSA)); // load standalone frame-edit masks
+    else
+    {
+      for (uint8_t i = 0; i < FE_GEN_COUNT; i++)
+        frameEditMaskSA[i] = frameEditMaskDefaultsSA[i];             // legacy install: use standalone all-on defaults
+      frameEditMasksChanged = true;
+    }
+    if (frameEditMasksChanged)
+    {
+      pref.putBytes("feMask", frameEditMask, sizeof(frameEditMask));       // persist missing normal defaults
+      pref.putBytes("feMaskSA", frameEditMaskSA, sizeof(frameEditMaskSA)); // persist missing standalone defaults
+    }
 
     switch (lastMode) // map stored lastMode to runtime enum
     {
@@ -229,10 +253,12 @@ void writeEEP(void *arg) // task function to periodically write preferences
     }
     pref.putString("wifiSsid", wifiSsid);    // write WiFi AP SSID
     pref.putString("wifiPwd", wifiPassword); // write WiFi AP password
-    pref.putBool("udsMQBEn", udsMQBEnabled); // write UDS MQB polling enable
+    pref.putBool("udsMQBEn", liveDiagEnabled); // write live-diagnostics enable (legacy key)
     pref.putUChar("forceModesPrio", forceModesPriority);      // write force-modes priority order
     pref.putFloat("lockReleaseRate", lockReleaseRatePerSec);  // write lock release rate (%/s)
     pref.putBool("lockReleaseEn", lockReleaseEnabled);        // write lock release enable
+    pref.putBytes("feMask", frameEditMask, sizeof(frameEditMask)); // write frame-edit masks
+    pref.putBytes("feMaskSA", frameEditMaskSA, sizeof(frameEditMaskSA)); // write standalone frame-edit masks
 
 #if detailedDebugEEP
     DEBUG("Written EEPROM with data:");                                                            // debug: print written prefs

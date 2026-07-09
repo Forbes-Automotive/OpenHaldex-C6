@@ -191,8 +191,11 @@ async function initStoredSettings() {
     const analyzerSerialElem = document.getElementById("analyzerSerial");
     if (analyzerSerialElem) analyzerSerialElem.checked = data.analyzerSerial || false;
 
-    const udsMqbElem = document.getElementById("udsMQBEnabled");
-    if (udsMqbElem) udsMqbElem.checked = data.udsMQBEnabled || false;
+    const udsMqbElem = document.getElementById("liveDiagEnabled");
+    if (udsMqbElem) udsMqbElem.checked = data.liveDiagEnabled || false;
+
+    // Frame-edit gating checkboxes (per-generation)
+    renderFrameBlocks(data.frameBlocks);
 
     // cache for banner / legend
     _tcForceModeValue     = data.tcForceModeValue     ?? 2;
@@ -353,8 +356,10 @@ async function refreshStatus() {
     // UDS MQB diagnostic data — replaces the standard Haldex Data card when active
     const haldexDataCard = document.getElementById("haldexDataCard");
     const udsCard = document.getElementById("udsDataCard");
+    const kwpCard = document.getElementById("kwpDataCard");
     if (data.uds) {
       if (haldexDataCard) haldexDataCard.style.display = "none";
+      if (kwpCard) kwpCard.style.display = "none";
       if (udsCard) {
         udsCard.style.display = "";
         document.getElementById("udsTerminalVoltage").textContent = data.uds.terminalVoltage?.toFixed(1) ?? "--";
@@ -365,10 +370,33 @@ async function refreshStatus() {
         document.getElementById("udsClutchPWM").textContent = displayValue(data.uds.clutchPWM);
         document.getElementById("udsClutchVoltage").textContent = data.uds.clutchVoltage?.toFixed(3) ?? "--";
         document.getElementById("udsBlockagePct").textContent = displayValue(data.uds.blockagePct);
+        const udsStatus = document.getElementById("udsStatus");
+        if (udsStatus) udsStatus.textContent = data.diagToolActive ? "Paused — external diagnostic tool detected" : "";
+      }
+    } else if (data.kwp) {
+      // Gen2/Gen4 KWP2000-over-TP2.0 live data.
+      if (haldexDataCard) haldexDataCard.style.display = "none";
+      if (udsCard) udsCard.style.display = "none";
+      if (kwpCard) {
+        kwpCard.style.display = "";
+        document.getElementById("kwpOilTemp").textContent = data.kwp.oilTemp?.toFixed(1) ?? "--";
+        document.getElementById("kwpPlateTemp").textContent = data.kwp.plateTemp?.toFixed(1) ?? "--";
+        document.getElementById("kwpSupplyVoltage").textContent = data.kwp.supplyVoltage?.toFixed(2) ?? "--";
+        document.getElementById("kwpOilPressure").textContent = data.kwp.oilPressure?.toFixed(0) ?? "--";
+        document.getElementById("kwpEstTorque").textContent = data.kwp.estTorque?.toFixed(0) ?? "--";
+        document.getElementById("kwpClutchDuty").textContent = data.kwp.clutchDuty?.toFixed(0) ?? "--";
+        document.getElementById("kwpClutchValveCurrent").textContent = data.kwp.clutchValveCurrent?.toFixed(3) ?? "--";
+        const kwpStatus = document.getElementById("kwpStatus");
+        if (kwpStatus) {
+          kwpStatus.textContent = data.diagToolActive
+            ? "Paused — external diagnostic tool detected"
+            : (data.kwp.connected ? "Connected" : "Connecting…");
+        }
       }
     } else {
       if (haldexDataCard) haldexDataCard.style.display = "";
       if (udsCard) udsCard.style.display = "none";
+      if (kwpCard) kwpCard.style.display = "none";
     }
 
     refreshTrace(data); // update the live trace
@@ -386,7 +414,7 @@ function updateBannerSubtitle(data) {
   const el = document.getElementById("modeStatus");
   if (!el) return;
   const modeName = MODE_NAMES[data.mode] ?? "Unknown";
-  let text = `Mode: ${modeName}`;
+  let text = modeName;
 
   // Surface EVERY active force trigger so a flag can never be silently active.
   // Each trigger must be BOTH enabled and have its live flag asserted - matching
@@ -488,6 +516,61 @@ async function saveSetting(key, value) {
   } catch (error) {
     console.log("Saving setting failed: " + error.message);
     showNotification("Error saving setting", "error");
+  }
+}
+
+// ---- Frame-edit gating (Diagnostics > Frame Editing) ----------------------
+// Render the per-generation editable-frame checkboxes from /api/settings data.
+function renderFrameBlocks(blocks) {
+  const list = document.getElementById("frameEditList");
+  if (!list) return;
+  if (!Array.isArray(blocks) || blocks.length === 0) {
+    list.innerHTML = '<p class="hint">Not available for this generation.</p>';
+    return;
+  }
+  list.innerHTML = "";
+  blocks.forEach((b) => {
+    const row = document.createElement("label");
+    row.className = "toggle";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = !!b.enabled;
+    cb.dataset.bit = b.bit;
+    cb.addEventListener("change", () => saveFrameEdit(b.bit, cb.checked));
+    const slider = document.createElement("span");
+    slider.className = "toggle-slider";
+    const span = document.createElement("span");
+    span.className = "toggle-label";
+    span.textContent = b.name;
+    row.appendChild(cb);
+    row.appendChild(slider);
+    row.appendChild(span);
+    list.appendChild(row);
+  });
+}
+
+// Toggle a single frame-edit block for the current generation.
+async function saveFrameEdit(bit, on) {
+  try {
+    const response = await fetchJson("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ frameEditBit: bit, frameEditOn: on }),
+    });
+    if (!response.ok) showNotification("Failed to save frame setting", "error");
+  } catch (error) {
+    showNotification("Error saving frame setting", "error");
+  }
+}
+
+// Re-fetch settings and re-render the frame checkboxes (e.g. after a generation
+// change or a reset-to-defaults).
+async function refreshFrameBlocks() {
+  try {
+    const data = await fetchJson("/api/settings");
+    renderFrameBlocks(data.frameBlocks);
+  } catch (error) {
+    /* leave existing list in place on error */
   }
 }
 
@@ -621,11 +704,24 @@ function initSettings() {
   selectIds.forEach((id) => {
     const elem = document.getElementById(id);
     if (elem) {
-      elem.addEventListener("change", () => {
-        saveSetting(id, parseInt(elem.value));
+      elem.addEventListener("change", async () => {
+        await saveSetting(id, parseInt(elem.value));
+        // Generation change alters which frames are editable — refresh the list.
+        if (id === "haldexGeneration") refreshFrameBlocks();
       });
     }
   });
+
+  // Frame-edit reset-to-defaults button (Diagnostics > Frame Editing)
+  {
+    const feReset = document.getElementById("frameEditReset");
+    if (feReset) {
+      feReset.addEventListener("click", async () => {
+        await saveSetting("frameEditReset", true);
+        refreshFrameBlocks();
+      });
+    }
+  }
 
   // Range sliders
   const rangeSliders = [
@@ -674,15 +770,16 @@ function initSettings() {
     "fixHunting",
     "canSleepEnabled",
     "canSleepAggressive",
-    "udsMQBEnabled",
+    "liveDiagEnabled",
     "lockReleaseEnabled",
   ];
   checkboxIds.forEach((id) => {
     const elem = document.getElementById(id);
     if (elem) {
-      elem.addEventListener("change", () => {
+      elem.addEventListener("change", async () => {
         if (checkboxCacheMap[id]) checkboxCacheMap[id](elem.checked);
-        saveSetting(id, elem.checked);
+        await saveSetting(id, elem.checked);
+        if (id === "isStandalone") refreshFrameBlocks();
       });
     }
   });

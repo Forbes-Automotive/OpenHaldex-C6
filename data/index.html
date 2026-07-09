@@ -18,7 +18,7 @@
             <h1>OpenHaldex-C6</h1>
             <div class="status-bar">
                 <!--<span class="status-badge" id="wsStatus">Connecting...</span>-->
-                <span class="status-badge" id="modeStatus">Mode: --</span>
+                <span class="status-badge" id="modeStatus">--</span>
                 <span class="status-badge" id="canStatus">CAN: --</span>
             </div>
         </header>
@@ -205,6 +205,49 @@
                         <div class="gauge-unit">%</div>
                     </div>
                 </div>
+                <p class="hint" id="udsStatus"></p>
+            </section>
+
+            <section class="card" id="kwpDataCard" style="display:none;">
+                <h2>Live Data (TP2.0)</h2>
+                <div class="gauge-grid">
+                    <div class="gauge">
+                        <div class="gauge-label">Oil Temp</div>
+                        <div class="gauge-value" id="kwpOilTemp">--</div>
+                        <div class="gauge-unit">°C</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Plate Temp</div>
+                        <div class="gauge-value" id="kwpPlateTemp">--</div>
+                        <div class="gauge-unit">°C</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Supply Volt.</div>
+                        <div class="gauge-value" id="kwpSupplyVoltage">--</div>
+                        <div class="gauge-unit">V</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Oil Pressure</div>
+                        <div class="gauge-value" id="kwpOilPressure">--</div>
+                        <div class="gauge-unit">bar</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Est. Torque</div>
+                        <div class="gauge-value" id="kwpEstTorque">--</div>
+                        <div class="gauge-unit">Nm</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Clutch Duty</div>
+                        <div class="gauge-value" id="kwpClutchDuty">--</div>
+                        <div class="gauge-unit">%</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Valve Current</div>
+                        <div class="gauge-value" id="kwpClutchValveCurrent">--</div>
+                        <div class="gauge-unit">A</div>
+                    </div>
+                </div>
+                <p class="hint" id="kwpStatus">Connecting…</p>
             </section>
         </div>
 
@@ -396,12 +439,12 @@
                         <span class="toggle-label">SavvyCAN via. Serial</span>
                     </label>
                     <label class="toggle">
-                        <input type="checkbox" id="udsMQBEnabled">
+                        <input type="checkbox" id="liveDiagEnabled">
                         <span class="toggle-slider"></span>
-                        <span class="toggle-label">Enable UDS (MQB)</span>
+                        <span class="toggle-label">Enable Live Diagnostics</span>
                     </label>
-                    <p class="hint">Gen 5 (MQB) only. Polls the Haldex ECU directly for live diagnostic data. Requires Haldex CAN healthy.</p>
-                    <p class="hint">Note: Will Disable Diag. Comms, Disable if Diag Req.</p>
+                    <p class="hint">Polls the Haldex ECU for live data using whatever generation is set (Gen5 = UDS; Gen2/4 = KWP2000/TP2.0). Requires Haldex CAN healthy.</p>
+                    <p class="hint">Note: Occupies the diagnostic channel — leave OFF when using VCDS or other diagnostic tools.</p>
                     <label class="toggle">
                         <input type="checkbox" id="disableOnboardButton">
                         <span class="toggle-slider"></span>
@@ -423,7 +466,7 @@
                         <span class="toggle-slider"></span>
                         <span class="toggle-label">Enable CAN Sleep (Aggressive)</span>
                     </label>
-                    <p class="hint">Additionally parks the CAN transceivers in standby while sleeping, drops CPU floor to 10MHz, and lowers WiFi AP TX power. Bus activity wakes the transceivers via GPIO interrupt within microseconds; a 2s safety-net probe runs as backup.</p>
+                    <p class="hint">Additionally parks the CAN transceivers in standby while sleeping, drops CPU freq. to 10MHz, and lowers WiFi AP TX power. Bus activity wakes the transceivers via GPIO interrupt within microseconds; a 2s safety-net probe runs as backup.</p>
                     <div class="brightness-row">
                         <span class="toggle-label">LP Wake Threshold</span>
                         <div class="brightness-controls">
@@ -602,6 +645,17 @@
             </section>
 
             <section class="card">
+                <h2>Frame Editing (Advanced)</h2>
+                <p class="hint">Enable or disable editing of individual CAN frames in normal (non-standalone) mode. Unchecking a frame leaves the car's original frame untouched (clean passthrough). Use this to bisect which edited frame upsets the learn procedure. Changes apply immediately and are saved. Only affects the selected Haldex generation.</p>
+                <div id="frameEditList" class="frame-edit-list">
+                    <p class="hint">Not available for this generation.</p>
+                </div>
+                <div class="wifi-controls">
+                    <button class="btn-secondary" id="frameEditReset">Reset to Defaults</button>
+                </div>
+            </section>
+
+            <section class="card">
                 <h2>WiFi Name (SSID)</h2>
                 <p class="hint">Change the access-point name broadcast by the controller. 1&ndash;32 printable ASCII characters. Saving restarts the AP &mdash; you will need to reconnect.</p>
                 <p class="hint" id="wifiSsidStatus">--</p>
@@ -651,7 +705,7 @@
             </section>
         </div>
 
-        <script src="./app.js?v=8.00.2" type="text/javascript"></script>
+        <script src="./app.js?v=8.00.3" type="text/javascript"></script>
         <!-- add version query param to force cache refresh on updates-->
 </body>
 

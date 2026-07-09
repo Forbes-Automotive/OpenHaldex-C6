@@ -49,7 +49,9 @@ header h1 {
 .status-bar {
     display: flex;
     gap: 0.5rem;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
 }
 
 .status-badge {
@@ -59,6 +61,8 @@ header h1 {
     border-radius: 12px;
     font-size: 0.85rem;
     border: 1px solid var(--border);
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
 .status-badge.connected {
@@ -443,6 +447,18 @@ header h1 {
     border-color: var(--primary);
 }
 
+/* Diagnostics page: compact buttons sized to match the SSID text input height. */
+#diagnostics-page .btn-primary,
+#diagnostics-page .btn-secondary {
+    padding: 0.75rem;
+    font-size: 1rem;
+    border: 1px solid transparent;
+}
+
+#diagnostics-page .btn-secondary {
+    border-color: var(--border);
+}
+
 .map-container {
     display: grid;
     grid-template-columns: auto 1fr;
@@ -745,4 +761,23 @@ header h1 {
     grid-template-columns: 1fr 1fr;
     gap: 0.75rem;
     margin-top: 0.25rem;
+}
+
+.frame-edit-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 1.5rem 2rem;
+    margin: 1rem 0 1.25rem;
+    padding: 0.25rem 0;
+}
+
+.frame-edit-list .toggle-label {
+    font-size: 0.9rem;
+    line-height: 1.2;
+}
+
+@media (max-width: 520px) {
+    .frame-edit-list {
+        grid-template-columns: 1fr;
+    }
 }

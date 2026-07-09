@@ -157,6 +157,7 @@ void showHaldexState(void *arg);
 
 void setupButtons();
 void setupCAN();
+void canBusRecovery();
 void setupTasks();
 
 void updateTriggers(void *arg);
@@ -280,6 +281,47 @@ extern bool disableExternalButton;
 
 extern bool fixHunting; // Motor_11: false=V3 packing, true=BPK packing
 
+// ---- Frame-edit gating (per-CAN-ID passthrough toggles) --------------------
+// In normal (non-standalone) mode getLockData() overwrites specific bytes of
+// selected passthrough frames. Each editable frame ("block") can be enabled or
+// disabled at runtime so users can bisect which edited frame upsets the learn
+// procedure. A disabled block leaves the car's real frame untouched (clean
+// passthrough). Only gens 1/2/4/50/51 are gated (gen41/42 are dual-bus and are
+// not handled in normal mode).
+enum
+{
+    FE_GEN_1 = 0,
+    FE_GEN_2,
+    FE_GEN_4,
+    FE_GEN_50,
+    FE_GEN_51,
+    FE_GEN_COUNT
+};
+
+struct FrameEditBlock
+{
+    uint8_t genIdx;   // FE_GEN_*
+    uint8_t bit;      // bit position within that generation's mask
+    uint16_t canId;   // CAN identifier of the frame
+    const char *name; // human-readable frame name (shown in UI)
+};
+
+// Two independent masks: the passthrough (normal-mode) mask only enables the
+// historically-edited frames by default, while the standalone mask enables ALL
+// frames by default - in standalone the module synthesises the whole bus, so
+// every editable frame must be generated. frameEditEnabled()/activeFrameEditMask()
+// select the correct mask for the current mode via isStandalone.
+extern uint64_t frameEditMask[FE_GEN_COUNT];                 // passthrough (normal-mode) enable bits per generation
+extern uint64_t frameEditMaskSA[FE_GEN_COUNT];               // standalone enable bits per generation
+extern const uint64_t frameEditMaskDefaults[FE_GEN_COUNT];   // normal-mode defaults (historically-edited frames on)
+extern const uint64_t frameEditMaskDefaultsSA[FE_GEN_COUNT]; // standalone defaults (all frames on)
+extern const FrameEditBlock frameEditBlocks[];            // descriptor table for UI/API
+extern const uint16_t frameEditBlockCount;                // number of entries in frameEditBlocks[]
+int frameEditGenIdx(uint8_t generation);                  // haldexGeneration -> FE_GEN_* (-1 if not gated)
+bool frameEditEnabled(uint8_t genIdx, uint8_t bit);       // test a block's enable bit for the active mode
+uint64_t *activeFrameEditMask();                          // mask for the current mode (isStandalone ? SA : normal)
+void resetFrameEditMask();                                // restore defaults for both masks / all generations
+
 extern bool canSleepEnabled;    // runtime toggle for CAN-wake light sleep (UI/EEP)
 extern bool canSleepAggressive; // aggressive add-on: transceiver standby + DFS 10MHz + low WiFi TX power
 extern volatile bool canWakeRequest; // set by CAN_RX GPIO ISR when transceivers in standby see bus activity
@@ -332,7 +374,15 @@ extern uint8_t analyzerProtocol;
 
 // UDS MQB diagnostic polling (Gen 5 only)
 // Requests go to 0x771 on Bus 1; responses come from 0x779 on Bus 1.
-extern bool udsMQBEnabled;       // enable flag (persisted)
+extern bool liveDiagEnabled;     // master live-diagnostics enable (persisted, default off);
+                                 // gates UDS (Gen5) and TP2.0 (Gen2/4) so it never blocks real tools unless opted in
+// Auto-pause: while liveDiagEnabled, if an external scanner (VCDS/ODIS) is seen
+// addressing the Haldex from the chassis side (Bus 0), our polling backs off and
+// resumes once the tool goes quiet. externalDiagLastMs is the last time such a
+// request frame was observed; the persisted liveDiagEnabled setting is untouched.
+#define EXTERNAL_DIAG_TIMEOUT_MS 4000u
+extern volatile uint32_t externalDiagLastMs;
+bool externalDiagActive();
 extern QueueHandle_t udsRxQueue; // parseCAN_hdx pushes 0x779 frames here
 extern float udsTerminalVoltage; // 0x0286: raw × 0.1 V
 extern float udsModuleTemp;      // 0x028D: raw − 55 °C  (1 byte, offset 55)
@@ -342,6 +392,40 @@ extern float udsClutchCurrent;   // 0x2BE6: BE16 × 0.001 A
 extern uint8_t udsClutchPWM;     // 0x2BE7: raw % (1 byte, 0–100)
 extern float udsClutchVoltage;   // 0x2BE9: BE16 × 0.001 V
 extern uint8_t udsBlockagePct;   // unconfirmed DID — always 0
+
+// --- KWP2000 over VW TP2.0 diagnostics: Gen2 / Gen4 (PQ) Haldex ------------
+// The PQ-platform AWD/Haldex controller is diagnosed with KWP2000 tunnelled
+// over VW TP2.0 (not raw UDS/ISO-TP). Channel setup is broadcast to 0x200 with
+// the target logical address in byte0; the module answers on 0x200 + address.
+// Confirmed from a SavvyCAN/VCDS capture of a 1K0 Gen2 Haldex: the module
+// enumerates at logical address 0x0A and answers on 0x20A. (Address 0x22 /
+// "22-AWD" carried over from the S3 sources did NOT respond on this platform —
+// that reference was misleading.) If your module enumerates elsewhere, change
+// KWP_TP20_HALDEX_ADDR (confirm from a VCDS / SavvyCAN capture) and rebuild —
+// every derived ID below tracks it automatically.
+#define KWP_TP20_HALDEX_ADDR   0x0Au                             // logical (diagnostic) address (confirmed 1K0 Gen2)
+#define KWP_TP20_SETUP_TX_ID   0x200u                             // tester -> broadcast channel setup
+#define KWP_TP20_SETUP_RX_ID   (0x200u + KWP_TP20_HALDEX_ADDR)    // ECU setup response (0x20A)
+#define KWP_TP20_TESTER_RX_ID  0x300u                             // ID we ask the ECU to transmit data on
+
+// TP2.0 polling shares the master liveDiagEnabled flag (declared above); it only
+// acts when haldexGeneration == 2 || 4.
+extern QueueHandle_t tp20RxQueue;        // parseCAN_hdx pushes TP2.0 diag frames here
+extern volatile uint32_t kwpTp20EcuTxId; // negotiated ECU->tester data CAN id (0 until channel open)
+extern bool kwpTp20Connected;            // TP2.0 channel + KWP session currently up
+extern char kwpTp20RawDump[512];         // raw measuring-block capture (formula-id + a/b, no scaling yet)
+
+// Gen4 (0AY) scaled measuring values, decoded via VAG formulas confirmed from
+// VCDS captures. Group 0x01 = oil/plate temp + supply voltage; group 0x03 =
+// oil pressure, estimated torque, clutch valve duty and current.
+extern float kwpOilTemp;         // G01[0] formula 0x1A: b - a  (°C)
+extern float kwpPlateTemp;       // G01[1] formula 0x1A: b - a  (°C, heated in capture)
+extern float kwpSupplyVoltage;   // G01[2] formula 0x06: 0.001*a*b  (V)
+extern float kwpOilPressure;     // G03[0] formula 0x0E: 0.01*a*(b-100)  (bar)
+extern float kwpEstTorque;       // G03[1] formula 0x5E: 0.1*a*(b-128)  (Nm)
+extern float kwpClutchDuty;      // G03[2] formula 0x21: 0.01*a*b  (%)
+extern float kwpClutchValveCurrent; // G03[3] formula 0x18: 0.001*a*b  (A)
+
 
 extern uint32_t alerts_to_enable;
 

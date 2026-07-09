@@ -52,3 +52,9 @@ namespace OpenHaldexC6
 // Sends requests to 0x771 on Bus 1; reads responses from udsRxQueue
 // (parseCAN_hdx routes 0x779 frames there when udsRxQueue != nullptr).
 void udsMQBTask(void *arg);
+
+// KWP2000-over-VW-TP2.0 diagnostic task (Gen2 / Gen4 PQ Haldex).
+// Opens a TP2.0 channel to the AWD module (see KWP_TP20_* in defs.h), starts a
+// KWP session and sweeps measuring-block groups, dumping the raw response bytes
+// into kwpTp20RawDump for capture. Frames are routed via tp20RxQueue.
+void kwpTp20Task(void *arg);

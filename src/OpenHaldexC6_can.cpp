@@ -63,8 +63,8 @@ static void applyBrakeHandbrakeCANOverride(twai_message_t &m)
 {
   switch (haldexGeneration)
   {
-  case 2:
-  case 4:
+  case 2: // handbrake via. CAN?, brake still physical
+  case 4: // handbrake and brake via. CAN? 
   case 51:
     if (followBrake && m.identifier == MOTOR2_ID && m.data_length_code >= 3)
     {
@@ -136,9 +136,16 @@ void setupCAN()
   ESP_ERROR_CHECK(twai_start_v2(twai_bus_1));
   DEBUG("CAN - Driver 1 Started");
 
-  // Reconfigure alerts to detect frame receive, Bus-Off error and RX queue full states
-  uint32_t alerts_to_enable = TWAI_ALERT_RX_DATA | TWAI_ALERT_ERR_PASS | TWAI_ALERT_BUS_ERROR | TWAI_ALERT_RX_QUEUE_FULL;
-  if (twai_reconfigure_alerts(alerts_to_enable, NULL) == ESP_OK)
+  // Reconfigure alerts to detect frame receive, error states and the full
+  // bus-off / recovery lifecycle so canBusRecovery() can drive a clean restart.
+  uint32_t alerts_to_enable = TWAI_ALERT_RX_DATA | TWAI_ALERT_ERR_PASS |
+                              TWAI_ALERT_BUS_ERROR | TWAI_ALERT_RX_QUEUE_FULL |
+                              TWAI_ALERT_TX_FAILED | TWAI_ALERT_BUS_OFF |
+                              TWAI_ALERT_BUS_RECOVERED | TWAI_ALERT_RX_FIFO_OVERRUN;
+  // Apply to both controllers explicitly (v2 driver -> per-handle alerts).
+  bool alertsOk = (twai_reconfigure_alerts_v2(twai_bus_0, alerts_to_enable, NULL) == ESP_OK) &&
+                  (twai_reconfigure_alerts_v2(twai_bus_1, alerts_to_enable, NULL) == ESP_OK);
+  if (alertsOk)
   {
     DEBUG("Reconfiguration of CAN alerts");
   }
@@ -147,6 +154,96 @@ void setupCAN()
     DEBUG("Failed to reconfigure CAN alerts!");
     return;
   }
+}
+
+// ============================================================================
+// CAN-bus fault recovery
+// ============================================================================
+// Polls both TWAI controllers and drives the bus-off recovery so
+// the bus comes back cleanly after a fault:
+//   RUNNING     -> normal operation, clear the fault flag.
+//   BUS_OFF     -> hardware went bus-off (TEC >= 256); kick off recovery.
+//   RECOVERING  -> wait for the 128x11-recessive-bit recovery to complete.
+//   STOPPED     -> recovery finished (driver stops here); restart the bus.
+//
+// Only a controller we ourselves put into recovery is auto-restarted from the
+// STOPPED state, so this never fights the intentional stop used for light
+// sleep. `isBusFailure` is owned here: it is set while any bus is unhealthy and
+// cleared once both controllers are running again.
+// ============================================================================
+void canBusRecovery()
+{
+  static bool recovering[2] = {false, false}; // two TWAI controllers, track which ones we put into recovery
+  twai_handle_t buses[2] = {twai_bus_0, twai_bus_1};
+  bool anyFault = false;
+
+  for (int i = 0; i < 2; ++i)
+  {
+    twai_handle_t bus = buses[i];
+
+    // Non-blocking alert read - latch transient error conditions as a fault.
+    uint32_t alerts = 0;
+    if (twai_read_alerts_v2(bus, &alerts, 0) == ESP_OK)
+    {
+      if (alerts & (TWAI_ALERT_BUS_ERROR | TWAI_ALERT_ERR_PASS |
+                    TWAI_ALERT_TX_FAILED | TWAI_ALERT_RX_QUEUE_FULL |
+                    TWAI_ALERT_RX_FIFO_OVERRUN))
+      {
+        anyFault = true;
+      }
+    }
+
+    twai_status_info_t status;
+    if (twai_get_status_info_v2(bus, &status) != ESP_OK)
+      continue;
+
+    switch (status.state)
+    {
+    case TWAI_STATE_BUS_OFF:
+      // Controller is bus-off; begin recovery (moves it to RECOVERING).
+      twai_initiate_recovery_v2(bus);
+      recovering[i] = true;
+      anyFault = true;
+      DEBUG("CAN bus %d: bus-off detected - initiating recovery", i);
+      break;
+
+    case TWAI_STATE_RECOVERING:
+      // Recovery underway; hold the fault flag until it completes.
+      recovering[i] = true;
+      anyFault = true;
+      break;
+
+    case TWAI_STATE_STOPPED:
+      // Restart only if we stopped it via recovery (and NOT a sleep-induced stop).
+      if (recovering[i])
+      {
+        if (twai_start_v2(bus) == ESP_OK)
+        {
+          recovering[i] = false;
+          DEBUG("CAN bus %d: recovered - controller restarted", i);
+        }
+        anyFault = true;
+      }
+      break;
+
+    case TWAI_STATE_RUNNING:
+    default:
+      recovering[i] = false; // not recovering, clear the flag
+      break;
+    }
+  }
+
+  isBusFailure = anyFault;
+}
+
+// True while an external diagnostic tool was recently seen addressing the Haldex
+// on the chassis bus. Used to auto-pause the live-diagnostic so we
+// don't collide with a real scanner (VCDS/ODIS). Resets automatically once the
+// scanner tool goes quiet for EXTERNAL_DIAG_TIMEOUT_MS.
+bool externalDiagActive()
+{
+  const uint32_t t = externalDiagLastMs;
+  return t != 0 && (millis() - t) < EXTERNAL_DIAG_TIMEOUT_MS;
 }
 
 void parseCAN_chs(void *arg)
@@ -175,10 +272,25 @@ void parseCAN_chs(void *arg)
       lastCANChassisTick = millis();
       ++lpChassisFrameCount;
 
+      // External diagnostic-tool detection (auto-pause of live polling).
+      // A scanner addresses the Haldex from the chassis side; these request IDs
+      // never originate from us (our polling transmits on Bus 1), so seeing one on
+      // Bus 0 means a real tool is connected. externalDiagActive() then backs our
+      // UDS/TP2.0 tasks off until it goes quiet - so liveDiagEnabled restores on disconnection.
+      {
+        const uint32_t _did = rx_message_chs.identifier;
+        if (_did == KWP_TP20_SETUP_TX_ID ||         // 0x200 TP2.0 channel setup
+            _did == 0x7DFu ||                       // OBD functional request (scan/clear)
+            (_did >= 0x700u && _did <= 0x71Fu))     // VAG UDS/KWP physical tester requests
+        {
+          externalDiagLastMs = millis();
+        }
+      }
+
       tx_message_hdx.identifier = rx_message_chs.identifier;
 
       // Gen41 Haldex-originated Bus0 heartbeats - capture presence & timestamp.
-      // Done before any mode gating so the API can show liveness even in standalone.
+      // Done before any mode so the API can show liveness even in standalone.
       if (haldexGeneration == 41)
       {
         if (rx_message_chs.identifier == HALDEX_GEN41_SEC_AXLE_GENINFO_ID)
@@ -312,8 +424,9 @@ void parseCAN_chs(void *arg)
         {
           // PQ Gate_Komf_1 (0x390) - gateway body / comfort signals.
           // vw_golf_mk4.dbc:
-          //   SG_ GK1_Warnblk_Status : 55|1@1+ -> byte 6 bit 7, hazard warning lights active
+          // SG_ GK1_Warnblk_Status : 55|1@1+ -> byte 6 bit 7, hazard warning lights active
           // Used to drive hazard-light force-mode when enabled.
+          // MK4 Golf doesn't actually have this on CAN despite DBC saying it does(!)
           hazardForceModeFlag = bitRead(rx_message_chs.data[6], 7);
           break;
         }
@@ -322,8 +435,8 @@ void parseCAN_chs(void *arg)
         {
           // MQB Gateway_72 (0x3DB) - gateway body lighting state.
           // Note: on at least some MQB clusters the gateway frame does NOT
-          // reflect hazard state when active, so we now decode hazard from
-          // Blinkmodi_02 (0x366) below instead. This case is kept as a stub
+          // reflect hazard state when active, so decode hazard from
+          // Blinkmodi_02 (0x366) below instead. This case is kept
           // in case other body signals are needed here later.
           break;
         }
@@ -491,13 +604,13 @@ void parseCAN_chs(void *arg)
       // check to see if we're NOT in standalone - and look to edit the frames if necessary
       if (!isStandalone)
       {
-        if (1) // find out what this does(!) - rx_message_chs.identifier != diagnostics_5_ID
+        if (1) // find out what this does(!) affects MQB: rx_message_chs.identifier != diagnostics_5_ID
         {
           // Controller disabled = HARD passthrough. When disableController is set the
           // unit acts as a transparent bridge: it READS the chassis frame and forwards
           // it to the Haldex completely untouched - no getLockData(), no brake/handbrake
           // override, no force-flag handling, regardless of mode, learn state, or any
-          // enabled/asserted flag. This is the global kill-switch for all frame work.
+          // enabled/asserted flag. Global kill-switch for all frame work!
           if (!disableController)
           {
           // Edit the CAN frame, if not in STOCK mode (or if learn is active - learn must run regardless of mode)
@@ -505,12 +618,13 @@ void parseCAN_chs(void *arg)
           {
             if (haldexGeneration == 1 || haldexGeneration == 2 || haldexGeneration == 4 || haldexGeneration == 50 || haldexGeneration == 51 || haldexGeneration == 41)
             {
-              getLockData(rx_message_chs);
+              // this is the main function that edits the CAN frame to control the Haldex. 
+              // It is called when not in STOCK mode OR when learn is active.
+              getLockData(rx_message_chs); 
             }
           }
           else
           {
-            // in stock mode and not learning
             lock_target = received_haldex_engagement;
 
             /*
@@ -524,7 +638,15 @@ void parseCAN_chs(void *arg)
           }
             */
 
-            // Only force the lock when an *enabled* feature's own flag is active
+            // Only force the lock when an *enabled* feature's own flag is active.
+            // Pair each feature with its matching flag - tcForceModeFlag in
+            // particular is driven straight off the car's ESP/ASR "passive" CAN
+            // bit and can be set even when the TC-force feature is disabled. If
+            // the flags were OR'd independently of their enables, a stray
+            // tcForceModeFlag would keep calling getLockData() after the hazard
+            // switch released, and get_lock_target_adjustment() would fall through
+            // to MODE_STOCK's default (return 0 / FWD) - leaving the unit stuck
+            // open instead of reverting to stock passthrough.
             if ((extBtnForceMode && extButtonForceModeFlag) ||
                 (tcForceMode && tcForceModeFlag) ||
                 (hazardForceMode && hazardForceModeFlag))
@@ -542,7 +664,7 @@ void parseCAN_chs(void *arg)
           {
             // Controller disabled: read-only. Mirror the Haldex's reported
             // engagement for telemetry only; rx_message_chs is left untouched
-            // and forwarded verbatim below.
+            // and forwarded below - purely so that 'Requested' doesn't show 0 (looks unclean IMO)
             lock_target = received_haldex_engagement;
           }
 
@@ -598,18 +720,30 @@ void parseCAN_hdx(void *arg)
 
       case 2:
         // Gen2 Haldex (PQ Allrad_1 / 0x2C0). As per vw_pq.dbc:
-        //   SG_ Kupplungssteifigkeit_Hinten__Ist : 32|8@1+ (0.7874,0) [0|100] "%" -> byte 4
+        // SG_ Kupplungssteifigkeit_Hinten__Ist : 32|8@1+ (0.7874,0) [0|100] "%" -> byte 4
         // Byte 1 is centre-clutch torque-rate (Nm/min), unrelated to engagement.
-        received_haldex_engagement_raw = rx_message_hdx.data[4];
-        received_haldex_engagement = map(received_haldex_engagement_raw, 0, 127, 0, 100);
-        received_haldex_state = rx_message_hdx.data[0];
+        // Only decode the Allrad_1 frame; like Gen4/Gen5 the module broadcasts
+        // other IDs whose byte 4 would otherwise be misread as engagement.
+        if (rx_message_hdx.identifier == HALDEX_ID)
+        {
+          received_haldex_engagement_raw = rx_message_hdx.data[4];
+          received_haldex_engagement = map(received_haldex_engagement_raw, 0, 127, 0, 100);
+          received_haldex_state = rx_message_hdx.data[0];
+        }
         break;
 
       case 4:
-        // Gen4 Haldex (later PQ) / 0x2C). As per vw_pq.dbc: engagement on byte 1, raw 128..255.
-        received_haldex_engagement_raw = rx_message_hdx.data[1];
-        received_haldex_engagement = map(received_haldex_engagement_raw, 128, 255, 0, 100);
-        received_haldex_state = rx_message_hdx.data[0];
+        // Gen4 Haldex (later PQ) Allrad_1 / 0x2C0: engagement on byte 1, raw 128..255.
+        // Like Gen5, the module broadcasts more than one CAN ID; only decode the
+        // engagement frame. Without this guard a stray frame's byte 1 (< 128) makes
+        // map() go negative and wrap in the uint8_t result -> the learn procedure
+        // saw engagement jumping between 0 and >150%.
+        if (rx_message_hdx.identifier == HALDEX_ID)
+        {
+          received_haldex_engagement_raw = rx_message_hdx.data[1];
+          received_haldex_engagement = map(received_haldex_engagement_raw, 128, 255, 0, 100);
+          received_haldex_state = rx_message_hdx.data[0];
+        }
         break;
 
       case 41:
@@ -636,6 +770,7 @@ void parseCAN_hdx(void *arg)
             received_haldex_engagement = (d1 >= 200) ? 100 : (uint8_t)((uint16_t)d1 * 100 / 200);
           }
           break;
+
         case HALDEX_GEN41_REAR_AXLE_STATUS_ID:
           if (rx_message_hdx.data_length_code >= 4)
           {
@@ -650,8 +785,8 @@ void parseCAN_hdx(void *arg)
 
       case 50:
         // Gen5 Haldex (MQB Allrad_03 / 0x118). Per MQB FCAN K-matrix:
-        //   SG_ ALR_Ist_Proz : 16|8@1+ (0.4,0) "%" -> byte 2
-        //   SG_ ALR_Charisma_FahrPr / ALR_Charisma_Status -> byte 3
+        // SG_ ALR_Ist_Proz : 16|8@1+ (0.4,0) "%" -> byte 2
+        // SG_ ALR_Charisma_FahrPr / ALR_Charisma_Status -> byte 3
         // Only update on the actual engagement frame (the ECU sends 2 different IDs).
         if (rx_message_hdx.identifier == HALDEX_ID_GEN5)
         {
@@ -664,8 +799,8 @@ void parseCAN_hdx(void *arg)
       case 51:
         // Gen5 (0AY) Haldex: PQ Allrad_1 (0x2C0) format.
         // Byte 0 = fault/state flags (confirmed per PQ K-matrix DBC: bit0=Fehler_Allrad_Kupplung,
-        //   bit1=Übertemperaturschutz, bit2=Fehlerstatus_Kupplungssteifigkeit, bit3=Kupplung_komplett_offen,
-        //   bit4=Notlauf, bit5=Allrad_Warnlampe, bit6=Geschwindigkeitsbegrenzung).
+        // bit1=Übertemperaturschutz, bit2=Fehlerstatus_Kupplungssteifigkeit, bit3=Kupplung_komplett_offen,
+        // bit4=Notlauf, bit5=Allrad_Warnlampe, bit6=Geschwindigkeitsbegrenzung).
         // Byte 1 = engagement raw (Gen4-empirical; DBC defines byte1 as Kupplungssteifigkeit_Mitte, byte4 as rear).
         if (rx_message_hdx.identifier == HALDEX_ID)
         {
@@ -695,7 +830,7 @@ void parseCAN_hdx(void *arg)
       //   bit 6 = Geschwindigkeitsbegrenzung       (speed limit)             -> speedLimit
       // Gen5 byte 3 holds Charisma_FahrPr/Status, not fault flags - skip for Gen5.
       // Gen41 uses dedicated state vars decoded above - skip for Gen41.
-      if (haldexGeneration != 50 && haldexGeneration != 41)
+      if (haldexGeneration != 50 && haldexGeneration != 41) // PQ (Gen1/2/4/0AY 5)
       {
         received_report_clutch1 = (received_haldex_state & (1 << 0));
         received_temp_protection = (received_haldex_state & (1 << 1));
@@ -706,7 +841,7 @@ void parseCAN_hdx(void *arg)
         received_speed_limit = (received_haldex_state & (1 << 6));
         received_long_lock_state = 0; // not present on PQ Allrad_1
       }
-      else if (haldexGeneration == 50)
+      else if (haldexGeneration == 50) // 0CQ
       {
         received_report_clutch1 = false;
         received_report_clutch2 = false;
@@ -725,9 +860,21 @@ void parseCAN_hdx(void *arg)
 
       // UDS MQB: mirror 0x779 response frames into the UDS task queue when polling is active.
       // Always fall through so the frame is forwarded to Bus 0 (keeps VCDS / passthrough working).
-      if (udsMQBEnabled && udsRxQueue != nullptr && rx_message_hdx.identifier == 0x779)
+      if (liveDiagEnabled && udsRxQueue != nullptr && rx_message_hdx.identifier == 0x779)
       {
         xQueueSend(udsRxQueue, &rx_message_hdx, 0);
+      }
+
+      // KWP2000-over-TP2.0 (Gen2/4): mirror channel-setup + negotiated data-channel
+      // frames into the TP2.0 task queue. Frame is still forwarded to Bus 0 below.
+      if (liveDiagEnabled && tp20RxQueue != nullptr && !rx_message_hdx.extd)
+      {
+        const uint32_t tpId = rx_message_hdx.identifier;
+        if (tpId == KWP_TP20_SETUP_RX_ID || tpId == KWP_TP20_TESTER_RX_ID ||
+            (kwpTp20EcuTxId != 0 && tpId == kwpTp20EcuTxId))
+        {
+          xQueueSend(tp20RxQueue, &rx_message_hdx, 0);
+        }
       }
 
       twai_transmit_v2(twai_bus_0, &rx_message_hdx, (10 / portTICK_PERIOD_MS));

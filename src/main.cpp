@@ -1,6 +1,7 @@
 /*
 OpenHaldex-C6 - Forbes Automotive
-Haldex Controller for Gen1, Gen2, Gen4 and Gen5 Haldex Controllers. Supports WiFi. Version: 3.10 - now ported to PlatformIO.
+Haldex Controller for Gen1, Gen2, Gen4 and Gen5 Haldex Controllers
+Version: 8.00.3
 */
 
 #include <OpenHaldexC6_defs.h>
@@ -37,7 +38,7 @@ void setup()
   {
     esp_pm_config_t pm_cfg = {
         .max_freq_mhz = 160,
-        // Aggressive: drop CPU floor to 10MHz (XTAL/N) for deeper idle.
+        // Aggressive: drop CPU lower limit to 10MHz (XTAL/N) for deeper idle.
         .min_freq_mhz = canSleepAggressive ? 10 : 40,
         .light_sleep_enable = true,
     };
@@ -59,7 +60,7 @@ void setup()
 
 void loop()
 {
-  delay(1); // add a small delay to prevent watchdog resets and allow other tasks to run
+  vTaskDelay(pdMS_TO_TICKS(100)); // yield the Arduino loop task so other FreeRTOS tasks can run
 
   { // temp counters for debugging, just left in because they can be useful for testing timing of various functions/tasks
     tempCounter++;
@@ -103,10 +104,10 @@ void loop()
     {
       strip.setLedColorData(led_channel, ledBrightness, ledBrightness, ledBrightness);
       strip.show();
-      delay(50);
+      vTaskDelay(pdMS_TO_TICKS(50));
       strip.setLedColorData(led_channel, 0, 0, 0);
       strip.show();
-      delay(50);
+      vTaskDelay(pdMS_TO_TICKS(50));
     }
 
     WiFi.disconnect(true, true); // disconnect and erase AP settings to ensure a clean restart
@@ -123,7 +124,7 @@ void loop()
       WiFi.softAP(wifiHostName); // open network
     }
     WiFi.setSleep(false);
-    // Aggressive sleep: trim AP TX power to reduce active-WiFi current.
+    // Aggressive sleep: reduce AP TX power to reduce active-WiFi current.
     if (canSleepAggressive)
     {
       WiFi.setTxPower(WIFI_POWER_8_5dBm);

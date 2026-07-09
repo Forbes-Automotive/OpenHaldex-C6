@@ -1,6 +1,8 @@
 #include <OpenHaldexC6_Analyzer.h>
 #include <OpenHaldexC6_defs.h>
 
+// to Meatro / Chris: thank you for this (and other) contributions!
+
 // Analyzer mode: pure CAN pass-through plus a TCP interface for external tools.
 // - GVRET binary protocol for SavvyCAN
 // - SLCAN (Lawicel) text protocol for CANHacker
