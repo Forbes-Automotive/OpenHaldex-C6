@@ -2271,9 +2271,9 @@ void Gen5_0CQ_frames100()
   frame.data[0] = calcChecksum(frame.data, ID_SEQ_392); // for 0x392
 
   ESP_07_counter++;
-  if (ESP_07_counter > 0x1F)
+  if (ESP_07_counter > 0x20)
   {
-    ESP_07_counter = 0x00;
+    ESP_07_counter = 0x2F;
   }
   standaloneTx(frame);
   /*

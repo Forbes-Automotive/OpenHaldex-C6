@@ -2,7 +2,7 @@
 #include <OpenHaldexC6_defs.h>
 
 // Current firmware version
-#define FW_VERSION "8.00.2" // update this with every firmware release AND change .html version query param to force cache refresh of web UI
+#define FW_VERSION "8.00.3" // update this with every firmware release AND change .html version query param to force cache refresh of web UI
 
 /*
 Version Control:
@@ -53,6 +53,15 @@ V8.00.0 - added support for Ford (based on example CAN data, totally untested!)
 V8.00.1 - added fix for password and SSID change
 
 V8.00.2 - added fix for TC/hazards not re-enabling stock mode
+
+V8.00.3 - added drop-down options for adding/removing CAN signals if learn isn't 'clean'
+        - when this was first developed the frames that 'changed' the Haldex response were ported to the non-standalone version
+        - but there could be room for some 'additional'.  This allows the user to add additional frames to mirror standalone 
+        - fixed bus recovery (would not recover...)
+        - minor UI tweak so that force modes display better (single line)
+        - added TP2.0 (ported from Can2Cluster) / VCDS logged (1K0 554C) - see /Documents/vehicle-logs
+        - added new scaling for UDS - 0CQ 554C/D - heated on bench and logged with VCDS
+        - minor lock tweaks on 0CQ to target 100% cleaner
 */
 
 

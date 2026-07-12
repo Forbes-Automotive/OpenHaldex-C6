@@ -9,6 +9,7 @@ let _extBtnForceModeValue = 2;
 let _tcForceMode = false;
 let _hazardForceMode = false;
 let _extBtnForceMode = false;
+let _forceModesPriority = 0;
 let _haldexGeneration = 1;
 let _isStandalone = false;
 let _useCANifAvailable = false;
@@ -204,6 +205,7 @@ async function initStoredSettings() {
     _tcForceMode = data.tcForceMode || false;
     _hazardForceMode = data.hazardForceMode || false;
     _extBtnForceMode = data.extButtonForceMode || false;
+    _forceModesPriority = data.forceModesPriority ?? 0;
     _haldexGeneration = data.haldexGeneration || 1;
     _isStandalone = data.isStandalone || false;
     _useCANifAvailable = data.useCANifAvailable || false;
@@ -416,21 +418,31 @@ function updateBannerSubtitle(data) {
   const modeName = MODE_NAMES[data.mode] ?? "Unknown";
   let text = modeName;
 
-  // Surface EVERY active force trigger so a flag can never be silently active.
-  // Each trigger must be BOTH enabled and have its live flag asserted - matching
-  // the firmware gate in OpenHaldexC6_can.cpp. tcForceModeFlag/hazardForceModeFlag
-  // are CAN-driven and extButtonActive is button-driven, so any of them can fire
-  // without the user having touched the UI.
-  const active = [];
-  if (_tcForceMode     && data.tcOn === false)            active.push({ trig: "TC",     fmv: _tcForceModeValue });
-  if (_hazardForceMode && data.hazardActive === true)     active.push({ trig: "Hazard", fmv: _hazardForceModeValue });
-  if (_extBtnForceMode && data.extButtonActive === true)  active.push({ trig: "Ext",    fmv: _extBtnForceModeValue });
-
-  if (active.length) {
-    const parts = active.map((a) => `${MODE_NAMES[a.fmv] ?? "Unknown"} (${a.trig})`);
-    text += ` | Force: ${parts.join(", ")}`;
-  }
+  const force = getActiveForceMode(data);
+  if (force) text += ` (${force.source}>${MODE_NAMES[force.mode] ?? "Unknown"})`;
   el.textContent = text;
+}
+
+function getActiveForceMode(data) {
+  const triggers = [
+    { source: "TC",  enabled: _tcForceMode,     active: data.tcOn === false,           mode: _tcForceModeValue },
+    { source: "Haz", enabled: _hazardForceMode, active: data.hazardActive === true,    mode: _hazardForceModeValue },
+    { source: "Ext", enabled: _extBtnForceMode, active: data.extButtonActive === true, mode: _extBtnForceModeValue },
+  ];
+  const priorityOrders = [
+    [1, 0, 2],
+    [0, 1, 2],
+    [1, 2, 0],
+    [0, 2, 1],
+    [2, 0, 1],
+    [2, 1, 0],
+  ];
+  const order = priorityOrders[_forceModesPriority] || priorityOrders[0];
+  for (const index of order) {
+    const trigger = triggers[index];
+    if (trigger.enabled && trigger.active) return trigger;
+  }
+  return null;
 }
 
 // Render a bit-by-bit legend for the Haldex state byte, generation-aware.
@@ -512,11 +524,23 @@ async function saveSetting(key, value) {
 
     if (!response.ok) {
       showNotification("Failed to save setting", "error");
+    } else {
+      updateCachedSetting(key, value);
     }
   } catch (error) {
     console.log("Saving setting failed: " + error.message);
     showNotification("Error saving setting", "error");
   }
+}
+
+function updateCachedSetting(key, value) {
+  if (key === "tcForceModeValue") _tcForceModeValue = value;
+  if (key === "hazardForceModeValue") _hazardForceModeValue = value;
+  if (key === "extBtnForceModeValue") _extBtnForceModeValue = value;
+  if (key === "forceModesPriority") _forceModesPriority = value;
+  if (key === "tcForceMode") _tcForceMode = value;
+  if (key === "hazardForceMode") _hazardForceMode = value;
+  if (key === "extButtonForceMode") _extBtnForceMode = value;
 }
 
 // ---- Frame-edit gating (Diagnostics > Frame Editing) ----------------------

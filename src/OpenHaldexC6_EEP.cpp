@@ -138,7 +138,14 @@ void readEEP() // function to read stored preferences into runtime variables
     lockReleaseEnabled = pref.getBool("lockReleaseEn", true);        // load lock release enable
     bool frameEditMasksChanged = false;
     if (pref.getBytesLength("feMask") == sizeof(frameEditMask))
+    {
       pref.getBytes("feMask", frameEditMask, sizeof(frameEditMask)); // load frame-edit masks
+      if (frameEditMask[FE_GEN_50] == 0x000003FFULL)
+      {
+        frameEditMask[FE_GEN_50] = frameEditMaskDefaults[FE_GEN_50]; // migrate old 0CQ normal default: Motor_14/ESP_07 passthrough
+        frameEditMasksChanged = true;
+      }
+    }
     else
     {
       for (uint8_t i = 0; i < FE_GEN_COUNT; i++)
