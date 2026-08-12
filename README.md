@@ -178,11 +178,11 @@ Use the Web UI at:
 
 **CAN**
 
-Send a CAN message containing the mode number in **Byte 0**.
+See [CAN Broadcast / Change Mode](#can-broadcast--change-mode) for the required **Broadcast over CAN** setting, CAN IDs and mode byte.
 
 **CAN — Force Mode (Hazards / TC Button)**
 
-Two optional force mode triggers are available via CAN signals already present on the bus:
+Two optional force mode triggers are available via. CAN signals already present on the bus:
 
 - **Hazard lights** — activating the hazard switch will trigger a force mode command
 - **TC button** — pressing the traction control button can also trigger force mode
@@ -191,40 +191,49 @@ Both are optional and can be enabled in the Settings page. They allow mode chang
 
 ---
 
-## Mode Numbers (CAN Byte 0)
+## CAN Broadcast / Change Mode
 
-```
-Stock = 0
-FWD = 1
-5050 = 2
-6040 = 3
-7525 = 4
-Expert = 5
-```
+The same **Broadcast over CAN** setting enables both:
 
----
+- OpenHaldex state broadcast from the controller on `0x6B0`
+- External mode-change commands received by the controller on `0x640`
 
-## Broadcasted State
+> [!NOTE]
+> Enabling these features will broadcast NEW CAN IDs the system might already look for(!).  Caution should be exercised when using this feature(!). 
+
+### Change Mode Request
+
+**Broadcast over CAN must be enabled** in Settings, otherwise the controller will ignore the mode-change frame.
+
+Send a standard 11-bit CAN frame to `0x640`. Put the required mode value in **Byte 0 / data[0]**. If sending an 8-byte frame, set unused bytes to `0x00`.
+
+| CAN ID | Byte | Value | Mode |
+|----|----|----|----|
+| `0x640` | `0` / `data[0]` | `0x01` | Stock |
+| `0x640` | `0` / `data[0]` | `0x02` | FWD |
+| `0x640` | `0` / `data[0]` | `0x03` | 50:50 |
+| `0x640` | `0` / `data[0]` | `0x04` | 60:40 |
+| `0x640` | `0` / `data[0]` | `0x05` | 75:25 |
+| `0x640` | `0` / `data[0]` | `0x06` | Expert |
+
+### Broadcasted State
 
 Default CAN ID:
 
 ```
 0x6B0
 ```
-
-> [!NOTE]
-> Broadcasting can conflict with other devices. The CAN ID can be adjusted in code if required.
-
 The module broadcasts its current state on the CAN bus.  This can be used by aftermarket ECUs or FIS displays to show current status
 
 ```
-data[1] = standalone_flags (bitmask for Gen1/Gen2/Gen4/Gen5)
-data[2] = processed_haldex_engagement (requested by firmware)
-data[3] = lock_target_percent (actual lock, returned by differential)
-data[4] = vehicle_speed
-data[5] = mode_override_flag
-data[6] = current_mode_number
-data[7] = pedal_value
+data[0] = reserved 
+data[1] = standalone flags (bitmask for Gen1/Gen2/Gen4/Gen5)
+data[2] = processed haldex engagement (requested by firmware)
+data[3] = lock target percent (actual lock, returned by differential)
+data[4] = vehicle speed (kmh)
+data[5] = mode_override_flag (legacy)
+data[6] = current_mode_number (0...5)
+data[7] = driver's pedal value (percentage: 0...100%)
 ```
 
 ---
@@ -450,7 +459,7 @@ Generation 5:
 | 6 | Haldex CAN High | To Haldex differential |
 | 7 | Switch Mode External | +12 V to activate |
 | 8 | Brake Switch In | +12 V input |
-| 9 | Brake Switch Out | Gen1 differentials only |
+| 9 | Brake Switch Out | Gen1 / 2 differentials only |
 |10 | Handbrake Switch In | +12 V input |
 |11 | Handbrake Switch Out | Gen1 differentials only |
 
@@ -555,7 +564,7 @@ The PQ‑platform controllers are diagnosed with **KWP2000 tunnelled over VW TP2
 Raw measuring‑block bytes are also exposed so any remaining values can be characterised.
 
 > [!NOTE]
-> If VCDS or other scan tools will not connect, turn this setting off as it may not cleanly pick up the VCDS request so it does not block the tool.
+> If VCDS or other scan tools will not connect, turn this setting off as it may not cleanly pick up the VCDS request so it does not block the tool.  Excessive CAN traffic can cause spurious dash errors.
 
 ---
 
