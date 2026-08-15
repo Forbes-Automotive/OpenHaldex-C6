@@ -195,8 +195,8 @@ Both are optional and can be enabled in the Settings page. They allow mode chang
 
 The same **Broadcast over CAN** setting enables both:
 
+- External mode-change commands received by the controller on `0x6A0`
 - OpenHaldex state broadcast from the controller on `0x6B0`
-- External mode-change commands received by the controller on `0x640`
 
 > [!NOTE]
 > Enabling these features will broadcast NEW CAN IDs the system might already look for(!).  Caution should be exercised when using this feature(!). 
@@ -205,16 +205,16 @@ The same **Broadcast over CAN** setting enables both:
 
 **Broadcast over CAN must be enabled** in Settings, otherwise the controller will ignore the mode-change frame.
 
-Send a standard 11-bit CAN frame to `0x640`. Put the required mode value in **Byte 0 / data[0]**. If sending an 8-byte frame, set unused bytes to `0x00`.
+Send a standard 11-bit CAN frame to `0x6A0`. Put the required mode value in **Byte 0 / data[0]**. If sending an 8-byte frame, set unused bytes to `0x00`.
 
 | CAN ID | Byte | Value | Mode |
 |----|----|----|----|
-| `0x640` | `0` / `data[0]` | `0x01` | Stock |
-| `0x640` | `0` / `data[0]` | `0x02` | FWD |
-| `0x640` | `0` / `data[0]` | `0x03` | 50:50 |
-| `0x640` | `0` / `data[0]` | `0x04` | 60:40 |
-| `0x640` | `0` / `data[0]` | `0x05` | 75:25 |
-| `0x640` | `0` / `data[0]` | `0x06` | Expert |
+| `0x6A0` | `0` / `data[0]` | `0x01` | Stock |
+| `0x6A0` | `0` / `data[0]` | `0x02` | FWD |
+| `0x6A0` | `0` / `data[0]` | `0x03` | 50:50 |
+| `0x6A0` | `0` / `data[0]` | `0x04` | 60:40 |
+| `0x6A0` | `0` / `data[0]` | `0x05` | 75:25 |
+| `0x6A0` | `0` / `data[0]` | `0x06` | Expert |
 
 ### Broadcasted State
 
