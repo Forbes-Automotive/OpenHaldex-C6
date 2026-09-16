@@ -8,3 +8,7 @@
 # for Callum lol
 .DS_Store
 .vscode/
+# OpenHaldex config backups (may contain WiFi AP password if saved)
+tools/*backup*.json
+tools/config_*.json
+tools/__pycache__/

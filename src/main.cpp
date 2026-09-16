@@ -113,26 +113,10 @@ void loop()
     WiFi.disconnect(true, true); // disconnect and erase AP settings to ensure a clean restart
     WiFi.mode(WIFI_OFF);         // turn off WiFi to reset the state
 
-    WiFi.mode(WIFI_AP); // restart in AP mode
-    WiFi.softAPConfig(IPAddress(192, 168, 1, 1), IPAddress(192, 168, 1, 1), IPAddress(255, 255, 255, 0));
-    if (strlen(wifiPassword) >= 8)
-    {
-      WiFi.softAP(wifiHostName, wifiPassword); // password-protected network
-    }
-    else
-    {
-      WiFi.softAP(wifiHostName); // open network
-    }
-    WiFi.setSleep(false);
-    // Aggressive sleep: reduce AP TX power to reduce active-WiFi current.
-    if (canSleepAggressive)
-    {
-      WiFi.setTxPower(WIFI_POWER_8_5dBm);
-    }
-    MDNS.end();
-    MDNS.begin("openhaldex"); // restart openhaldex.local
-    MDNS.addService("http", "tcp", 80);
+    applyWifiMode(); // restart AP (+ STA bridge mode, if a home network is configured)
 
     rebootWiFi = false;
   }
+
+  pollWifiSta(); // track home-network (bridge mode) connect/reconnect state, if configured
 }

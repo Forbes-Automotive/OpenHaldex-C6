@@ -103,6 +103,14 @@ extern uint8_t ledBrightness;      // runtime LED brightness (0–255, persisted
 #define wifiHostName wifiSsid              // legacy alias - all call sites now use runtime SSID
 extern char wifiSsid[33];                  // runtime AP SSID (max 32 chars + NUL)
 
+// wifi bridge mode: optional concurrent STA connection to a home/garage network,
+// so the controller (and its AP) stay reachable over the existing LAN without
+// anyone needing to leave their normal WiFi. AP always keeps running regardless.
+extern char wifiStaSsid[33];     // home network SSID to join as a station; empty = bridge mode disabled
+extern char wifiStaPassword[65]; // home network password; empty = open network
+extern bool wifiStaConnected;    // runtime: currently associated + got an IP
+extern char wifiStaIP[16];       // runtime: dotted-quad IP once connected, "" otherwise
+
 extern twai_handle_t twai_bus_0; // for ESP32-C6 CANBUS 0
 extern twai_handle_t twai_bus_1; // for ESP32-C6 CANBUS 1
 

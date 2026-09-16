@@ -1,0 +1,17 @@
+{
+  "_note": "Reconstructed from Luca's phone screenshot of the Expert Editor after the beta update wiped it. Rows = throttle %, columns = speed km/h, values = lock target %.",
+  "_source": "screenshot, 2026-09-16",
+  "settings": {
+    "throttleArray": [0, 15, 30, 45, 60, 75, 90],
+    "speedArray": [0, 30, 60, 90, 120, 160, 180],
+    "lockArray": [
+      [6, 5, 5, 5, 5, 5, 6],
+      [12, 11, 10, 10, 10, 10, 11],
+      [24, 23, 22, 22, 22, 22, 22],
+      [40, 40, 39, 39, 38, 37, 37],
+      [59, 59, 58, 57, 55, 53, 51],
+      [75, 76, 75, 73, 70, 66, 63],
+      [84, 85, 85, 82, 78, 73, 69]
+    ]
+  }
+}

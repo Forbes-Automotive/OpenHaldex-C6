@@ -63,6 +63,8 @@ function initApp() {
   initLearn();
   initWifiSsid();
   initWifi();
+  initWifiSta();
+  initBackupRestore();
   //initOtaPage(); todo - currently just old OTA page, would like to incorporate the styling across
 }
 
@@ -1359,6 +1361,276 @@ function initWifi() {
     status.style.color = "var(--text-dim)";
     showNotification("WiFi reset to open network - reconnect to AP");
   });
+}
+
+// initialise the Home WiFi (Bridge Mode) card
+function initWifiSta() {
+  const ssidInput = document.getElementById("wifiStaSsidInput");
+  const pwInput   = document.getElementById("wifiStaPasswordInput");
+  const pwToggle  = document.getElementById("wifiStaPasswordToggle");
+  const status    = document.getElementById("wifiStaStatus");
+  const btnSave   = document.getElementById("wifiStaSave");
+  const btnReset  = document.getElementById("wifiStaReset");
+  if (!ssidInput || !pwInput || !status || !btnSave || !btnReset) return;
+
+  function renderStatus(data) {
+    if (!data || !data.ssid) {
+      status.textContent = "Disabled - AP only";
+      status.style.color = "var(--text-dim)";
+      return;
+    }
+    if (data.connected) {
+      status.textContent = "✓ Connected to \"" + data.ssid + "\" - reachable at http://" + data.ip + "/";
+      status.style.color = "var(--success)";
+    } else {
+      status.textContent = "Configured for \"" + data.ssid + "\" - not connected yet…";
+      status.style.color = "var(--text-dim)";
+    }
+  }
+
+  function refresh() {
+    fetchJson("/api/wifi/sta").then((data) => {
+      if (!data) return;
+      if (document.activeElement !== ssidInput) ssidInput.value = data.ssid || "";
+      renderStatus(data);
+    });
+  }
+
+  refresh();
+  // bridge-mode connection can take a few seconds after a save/reboot - poll for it
+  setInterval(refresh, 5000);
+
+  pwToggle.addEventListener("click", () => {
+    const isHidden = pwInput.type === "password";
+    pwInput.type = isHidden ? "text" : "password";
+    pwToggle.textContent = isHidden ? "🙈" : "👁";
+  });
+
+  btnSave.addEventListener("click", async () => {
+    const ssid = ssidInput.value.trim();
+    const pwd = pwInput.value.trim();
+    if (ssid.length > 32) { showNotification("SSID too long (max 32)", "error"); return; }
+    if (pwd.length > 0 && pwd.length < 8) { showNotification("Password must be at least 8 characters or empty", "error"); return; }
+    const resp = await fetchJson("/api/wifi/sta", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ssid: ssid, password: pwd }),
+    });
+    if (!resp) { showNotification("Failed to reach device", "error"); return; }
+    if (!resp.ok) { showNotification(resp.error || "Failed to save", "error"); return; }
+    pwInput.value = "";
+    if (ssid.length > 0) {
+      status.textContent = "Connecting to \"" + ssid + "\"…";
+      status.style.color = "var(--text-dim)";
+      showNotification("Home WiFi saved - connecting…");
+    } else {
+      status.textContent = "Disabled - AP only";
+      showNotification("Bridge mode disabled");
+    }
+  });
+
+  btnReset.addEventListener("click", async () => {
+    const resp = await fetchJson("/api/wifi/sta/reset", { method: "POST" });
+    if (!resp || !resp.ok) { showNotification("Failed to disable", "error"); return; }
+    ssidInput.value = "";
+    pwInput.value = "";
+    status.textContent = "Disabled - AP only";
+    status.style.color = "var(--text-dim)";
+    showNotification("Bridge mode disabled");
+  });
+}
+
+// keys from /api/settings that /api/settings accepts back on POST (mirrors settingsIncoming() in OpenHaldexC6_API.cpp)
+const BACKUP_GENERAL_KEYS = [
+  "haldexGeneration", "forceModeValue", "disengageUnderSpeed", "disengageAboveSpeed",
+  "disableThrottle", "disableController", "isStandalone", "tcForceMode",
+  "extButtonForceMode", "disableOnboardButton", "disableExternalButton",
+  "followBrake", "invertBrake", "followHandbrake", "invertHandbrake",
+  "broadcastOpenHaldexOverCAN",
+];
+
+// initialise the Backup & Restore card (export/import full config as a JSON file)
+function initBackupRestore() {
+  const btnExport = document.getElementById("backupExport");
+  const btnImport = document.getElementById("backupImportBtn");
+  const fileInput = document.getElementById("backupImportFile");
+  const status = document.getElementById("backupStatus");
+  const pwSection = document.getElementById("backupPwSection");
+  const pwInput = document.getElementById("backupPwInput");
+  const pwApply = document.getElementById("backupPwApply");
+  const staPwSection = document.getElementById("backupStaPwSection");
+  const staPwInput = document.getElementById("backupStaPwInput");
+  const staPwApply = document.getElementById("backupStaPwApply");
+  if (!btnExport || !btnImport || !fileInput || !status) return;
+
+  function setStatus(msg, ok) {
+    status.textContent = msg;
+    status.style.color = ok ? "var(--success)" : "var(--danger)";
+  }
+
+  btnExport.addEventListener("click", async () => {
+    setStatus("Exporting…", true);
+    const [settings, ssidData, pwData, staData] = await Promise.all([
+      fetchJson("/api/settings"),
+      fetchJson("/api/wifi/ssid"),
+      fetchJson("/api/wifi"),
+      fetchJson("/api/wifi/sta"),
+    ]);
+    if (!settings) { setStatus("Export failed - couldn't reach device", false); return; }
+
+    const stamp = new Date().toISOString();
+    const backup = {
+      _exportedAt: stamp,
+      _fwVersion: settings.FW_VERSION,
+      settings: settings,
+      wifi: {
+        ssid: ssidData ? ssidData.ssid : null,
+        // the password itself is write-only on the device (by design) and is never included here
+        passwordSet: pwData ? !!pwData.passwordSet : false,
+      },
+      wifiSta: {
+        ssid: staData && staData.ssid ? staData.ssid : null,
+        passwordSet: staData ? !!staData.passwordSet : false,
+      },
+    };
+
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "openhaldex-backup-" + stamp.replace(/[:.]/g, "-") + ".json";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    setStatus("Exported ✓ " + stamp, true);
+    showNotification("Config exported");
+  });
+
+  btnImport.addEventListener("click", () => fileInput.click());
+
+  fileInput.addEventListener("change", async () => {
+    const file = fileInput.files[0];
+    if (!file) return;
+    if (pwSection) pwSection.style.display = "none";
+    if (staPwSection) staPwSection.style.display = "none";
+    setStatus("Reading " + file.name + "…", true);
+
+    let backup;
+    try {
+      backup = JSON.parse(await file.text());
+    } catch (e) {
+      setStatus("Invalid backup file (not valid JSON)", false);
+      fileInput.value = "";
+      return;
+    }
+
+    const s = backup.settings || {};
+    if (!Array.isArray(s.throttleArray) || !Array.isArray(s.speedArray) || !Array.isArray(s.lockArray)) {
+      setStatus("Backup file is missing the tune table", false);
+      fileInput.value = "";
+      return;
+    }
+
+    setStatus("Restoring Expert tune table…", true);
+    const tuneResp = await fetchJson("/api/tune", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        throttleArray: s.throttleArray,
+        speedArray: s.speedArray,
+        lockArray: s.lockArray,
+      }),
+    });
+    if (!tuneResp || !tuneResp.ok) {
+      setStatus("Failed to restore tune table - is the device reachable?", false);
+      fileInput.value = "";
+      return;
+    }
+
+    const generalPayload = {};
+    BACKUP_GENERAL_KEYS.forEach((k) => { if (k in s) generalPayload[k] = s[k]; });
+    await fetchJson("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(generalPayload),
+    });
+
+    const wifi = backup.wifi || {};
+    if (wifi.ssid) {
+      await fetchJson("/api/wifi/ssid", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ssid: wifi.ssid }),
+      });
+    }
+
+    const wifiSta = backup.wifiSta || {};
+    if (wifiSta.ssid) {
+      // restores the SSID now (as an open network); the password prompt below fills in the rest
+      await fetchJson("/api/wifi/sta", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ssid: wifiSta.ssid, password: "" }),
+      });
+    }
+
+    const needsApPw = wifi.passwordSet && pwSection;
+    const needsStaPw = wifiSta.passwordSet && staPwSection;
+    if (needsApPw) pwSection.style.display = "";
+    if (needsStaPw) staPwSection.style.display = "";
+
+    if (needsApPw || needsStaPw) {
+      setStatus("Tune + settings restored ✓. Enter the password(s) below to finish.", true);
+    } else {
+      setStatus("Restored ✓ - switch tabs to see the new values.", true);
+      showNotification("Config imported");
+    }
+
+    fileInput.value = "";
+  });
+
+  if (pwApply) {
+    pwApply.addEventListener("click", async () => {
+      const pwd = pwInput.value;
+      if (pwd.length > 0 && pwd.length < 8) {
+        setStatus("Password must be at least 8 characters (or blank for open network)", false);
+        return;
+      }
+      const resp = await fetchJson("/api/wifi", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: pwd }),
+      });
+      if (!resp || !resp.ok) { setStatus("Failed to apply password", false); return; }
+      pwInput.value = "";
+      pwSection.style.display = "none";
+      setStatus("Restored ✓ - AP restarting, reconnect to WiFi…", true);
+      showNotification("Config imported");
+    });
+  }
+
+  if (staPwApply) {
+    staPwApply.addEventListener("click", async () => {
+      const pwd = staPwInput.value;
+      if (pwd.length > 0 && pwd.length < 8) {
+        setStatus("Home WiFi password must be at least 8 characters (or blank for open network)", false);
+        return;
+      }
+      const ssidResp = await fetchJson("/api/wifi/sta");
+      const ssid = ssidResp && ssidResp.ssid ? ssidResp.ssid : "";
+      const resp = await fetchJson("/api/wifi/sta", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ssid: ssid, password: pwd }),
+      });
+      if (!resp || !resp.ok) { setStatus("Failed to apply home WiFi password", false); return; }
+      staPwInput.value = "";
+      staPwSection.style.display = "none";
+      setStatus("Restored ✓ - connecting to home WiFi…", true);
+      showNotification("Config imported");
+    });
+  }
 }
 
 function showNotification(message, type = "success") {

@@ -105,6 +105,11 @@ volatile uint32_t lpHaldexFrameCount = 0;  // incremented by haldex CAN task; us
 char wifiPassword[65] = ""; // WiFi AP password - empty string = open network
 char wifiSsid[33] = wifiHostNameDefault; // runtime AP SSID (factory default, overridden from EEPROM)
 
+char wifiStaSsid[33] = "";     // home-network (bridge mode) SSID - empty = disabled, AP-only
+char wifiStaPassword[65] = ""; // home-network password - empty string = open network
+bool wifiStaConnected = false; // runtime: currently associated to the home network + got an IP
+char wifiStaIP[16] = "";       // runtime: dotted-quad IP once connected, "" otherwise
+
 bool hazardForceMode = false;     // setting: use hazard lights to activate force mode
 bool hazardForceModeFlag = false; // runtime: hazard lights are currently on
 

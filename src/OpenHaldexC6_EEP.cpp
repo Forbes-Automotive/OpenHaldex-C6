@@ -37,6 +37,8 @@ void readEEP() // function to read stored preferences into runtime variables
   pref.begin("lockArray", false);     // stored lock curve bytes
   pref.begin("learnTable", false);    // stored haldex learn table
   pref.begin("wifiPwd", false);       // stored WiFi AP password
+  pref.begin("wifiStaSsid", false);   // stored home-network (bridge mode) SSID
+  pref.begin("wifiStaPwd", false);    // stored home-network (bridge mode) password
   pref.begin("udsMQBEn", false);      // UDS MQB polling enable preference
 
   // first run comes with EEP value of 255, so write actual values
@@ -79,6 +81,8 @@ void readEEP() // function to read stored preferences into runtime variables
     pref.putBool("learnOK", false);                                                  // learn table not valid on first run
     pref.putString("wifiPwd", wifiPassword);                                         // save WiFi password (empty = open network)
     pref.putString("wifiSsid", wifiSsid);                                            // save WiFi SSID (factory default on first run)
+    pref.putString("wifiStaSsid", wifiStaSsid);                                      // save home-network SSID (empty = bridge mode disabled)
+    pref.putString("wifiStaPwd", wifiStaPassword);                                   // save home-network password
     pref.putBool("udsMQBEn", liveDiagEnabled);                                       // save live-diagnostics enable (legacy key)
     pref.putUChar("forceModesPrio", forceModesPriority);                             // save force-modes priority order
     pref.putFloat("lockReleaseRate", lockReleaseRatePerSec);                         // save lock release rate (%/s)
@@ -132,6 +136,8 @@ void readEEP() // function to read stored preferences into runtime variables
     {
       strncpy(wifiSsid, wifiHostNameDefault, sizeof(wifiSsid) - 1); // restore factory default
     }
+    pref.getString("wifiStaSsid", wifiStaSsid, sizeof(wifiStaSsid));    // load home-network SSID (empty = bridge mode disabled)
+    pref.getString("wifiStaPwd", wifiStaPassword, sizeof(wifiStaPassword)); // load home-network password
     liveDiagEnabled = pref.getBool("udsMQBEn", false);             // load live-diagnostics enable (legacy key)
     forceModesPriority = pref.getUChar("forceModesPrio", 0);       // load force-modes priority (0=TC>Haz>Ext)
     lockReleaseRatePerSec = pref.getFloat("lockReleaseRate", 120.0f); // load lock release rate (%/s)
@@ -258,8 +264,10 @@ void writeEEP(void *arg) // task function to periodically write preferences
     {
       pref.putBytes("learnTbl", haldexLearnTable, sizeof(haldexLearnTable)); // write learn table bytes
     }
-    pref.putString("wifiSsid", wifiSsid);    // write WiFi AP SSID
-    pref.putString("wifiPwd", wifiPassword); // write WiFi AP password
+    pref.putString("wifiSsid", wifiSsid);       // write WiFi AP SSID
+    pref.putString("wifiPwd", wifiPassword);    // write WiFi AP password
+    pref.putString("wifiStaSsid", wifiStaSsid); // write home-network (bridge mode) SSID
+    pref.putString("wifiStaPwd", wifiStaPassword); // write home-network password
     pref.putBool("udsMQBEn", liveDiagEnabled); // write live-diagnostics enable (legacy key)
     pref.putUChar("forceModesPrio", forceModesPriority);      // write force-modes priority order
     pref.putFloat("lockReleaseRate", lockReleaseRatePerSec);  // write lock release rate (%/s)

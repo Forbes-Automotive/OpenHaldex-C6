@@ -683,6 +683,42 @@
             </section>
 
             <section class="card">
+                <h2>Home WiFi (Bridge Mode)</h2>
+                <p class="hint">Optional: also join a home/garage WiFi network as a client. The controller's own access point keeps running either way &mdash; this just lets you reach it (and run backups) from a phone or laptop already on that network, without switching networks. Leave blank to disable.</p>
+                <p class="hint" id="wifiStaStatus">--</p>
+                <div class="wifi-password-row">
+                    <input type="text" id="wifiStaSsidInput" placeholder="Home network name" class="input-wifi-password" maxlength="32" autocomplete="off" spellcheck="false">
+                </div>
+                <div class="wifi-password-row" style="margin-top:8px;">
+                    <input type="password" id="wifiStaPasswordInput" placeholder="Home network password" class="input-wifi-password" maxlength="64" autocomplete="new-password">
+                    <button class="btn-icon-eye" id="wifiStaPasswordToggle" title="Show / hide password">&#128065;</button>
+                </div>
+                <div class="wifi-controls">
+                    <button class="btn-secondary" id="wifiStaSave">Save &amp; Apply</button>
+                    <button class="btn-secondary" id="wifiStaReset">Disable</button>
+                </div>
+            </section>
+
+            <section class="card">
+                <h2>Backup &amp; Restore</h2>
+                <p class="hint">Export your Expert tune, settings and WiFi name to a JSON file &mdash; firmware updates can wipe on-device settings, so do this before updating. Import brings them back in one click. The WiFi password is never written to the file; you'll be asked to re-enter it once after importing if one was set.</p>
+                <p class="hint" id="backupStatus">--</p>
+                <div class="wifi-controls">
+                    <button class="btn-secondary" id="backupExport">Export Config</button>
+                    <button class="btn-secondary" id="backupImportBtn">Import Config</button>
+                    <input type="file" id="backupImportFile" accept="application/json" style="display:none;">
+                </div>
+                <div id="backupPwSection" class="wifi-password-row" style="display:none; margin-top:12px;">
+                    <input type="password" id="backupPwInput" placeholder="Re-enter WiFi AP password" class="input-wifi-password" maxlength="64" autocomplete="new-password">
+                    <button class="btn-secondary" id="backupPwApply">Apply Password</button>
+                </div>
+                <div id="backupStaPwSection" class="wifi-password-row" style="display:none; margin-top:12px;">
+                    <input type="password" id="backupStaPwInput" placeholder="Re-enter home WiFi password" class="input-wifi-password" maxlength="64" autocomplete="new-password">
+                    <button class="btn-secondary" id="backupStaPwApply">Apply Home WiFi Password</button>
+                </div>
+            </section>
+
+            <section class="card">
                 <h2>System Info</h2>
                 <div class="diag-grid">
                     <div class="diag-item">

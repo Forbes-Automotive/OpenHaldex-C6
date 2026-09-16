@@ -902,6 +902,83 @@ void setupAPI()
                 sendJSON(req, 200, resp); });
         });
 
+    // POST /api/wifi/sta/reset - disable bridge mode (clear home-network SSID+password) and restart AP-only
+    webServer.on("/api/wifi/sta/reset", HTTP_POST, [](AsyncWebServerRequest *request)
+                 {
+                     resetWifiSta();
+                     JsonDocument resp;
+                     resp["ok"] = true;
+                     sendJSON(request, 200, resp); });
+
+    // GET /api/wifi/sta - return bridge-mode (home network) status; password is write-only, never returned
+    webServer.on("/api/wifi/sta", HTTP_GET, [](AsyncWebServerRequest *request)
+                 {
+                     JsonDocument resp;
+                     resp["ssid"] = wifiStaSsid;
+                     resp["passwordSet"] = (strlen(wifiStaPassword) >= 8);
+                     resp["connected"] = wifiStaConnected;
+                     resp["ip"] = wifiStaIP;
+                     sendJSON(request, 200, resp); });
+
+    // POST /api/wifi/sta - set (or clear) the home-network SSID/password for bridge mode; AP+STA restart immediately
+    webServer.on(
+        "/api/wifi/sta", HTTP_POST, [](AsyncWebServerRequest *request)
+        { (void)request; }, nullptr,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
+        {
+            parseJSON(request, data, len, index, total, [](AsyncWebServerRequest *req, const String &body)
+                      {
+                JsonDocument d;
+                if (deserializeJson(d, body) != DeserializationError::Ok)
+                {
+                    JsonDocument resp; resp["ok"] = false; resp["error"] = "Invalid JSON";
+                    sendJSON(req, 400, resp); return;
+                }
+                if (!d["ssid"].is<const char *>())
+                {
+                    JsonDocument resp; resp["ok"] = false; resp["error"] = "Missing 'ssid' field";
+                    sendJSON(req, 400, resp); return;
+                }
+                const char *newSsid = d["ssid"];
+                const size_t ssidLen = strlen(newSsid);
+                // unlike the AP SSID, an empty string here is valid - it disables bridge mode
+                if (ssidLen > 32)
+                {
+                    JsonDocument resp; resp["ok"] = false; resp["error"] = "SSID too long (max 32)";
+                    sendJSON(req, 400, resp); return;
+                }
+                for (size_t i = 0; i < ssidLen; ++i)
+                {
+                    unsigned char c = (unsigned char)newSsid[i];
+                    if (c < 0x20 || c > 0x7E)
+                    {
+                        JsonDocument resp; resp["ok"] = false; resp["error"] = "SSID must be printable ASCII";
+                        sendJSON(req, 400, resp); return;
+                    }
+                }
+                const char *newPwd = d["password"].is<const char *>() ? d["password"].as<const char *>() : "";
+                const size_t pwdLen = strlen(newPwd);
+                if (pwdLen > 0 && pwdLen < 8)
+                {
+                    JsonDocument resp; resp["ok"] = false; resp["error"] = "Password must be at least 8 characters or empty";
+                    sendJSON(req, 400, resp); return;
+                }
+                if (pwdLen >= 65)
+                {
+                    JsonDocument resp; resp["ok"] = false; resp["error"] = "Password too long (max 64)";
+                    sendJSON(req, 400, resp); return;
+                }
+                memset(wifiStaSsid, 0, sizeof(wifiStaSsid));
+                strncpy(wifiStaSsid, newSsid, sizeof(wifiStaSsid) - 1);
+                memset(wifiStaPassword, 0, sizeof(wifiStaPassword));
+                if (pwdLen > 0) strncpy(wifiStaPassword, newPwd, sizeof(wifiStaPassword) - 1);
+                rebootWiFi = true; // restart AP(+STA) with new bridge-mode credentials
+                JsonDocument resp;
+                resp["ok"] = true;
+                resp["ssid"] = wifiStaSsid;
+                sendJSON(req, 200, resp); });
+        });
+
     // POST /api/wifi/reset - clear password and restart AP as open network
     webServer.on("/api/wifi/reset", HTTP_POST, [](AsyncWebServerRequest *request)
                  {
