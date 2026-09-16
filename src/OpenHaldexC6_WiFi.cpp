@@ -88,9 +88,19 @@ void applyWifiMode()
   }
   DEBUG("AP IP address: 192.168.1.1");
 
-  MDNS.end();
+  // Only tear down mDNS if it was actually running - calling end() on first
+  // boot (before it's ever been started) confuses the underlying ESP-IDF mdns
+  // component into rejecting the addService() that follows ("Service already
+  // exists"), which silently breaks openhaldex.local. Matches the original
+  // code's behavior, which never called end() on the first-boot path either.
+  static bool mdnsStarted = false;
+  if (mdnsStarted)
+  {
+    MDNS.end();
+  }
   MDNS.begin("openhaldex");           // openhaldex.local
   MDNS.addService("http", "tcp", 80); // advertise HTTP
+  mdnsStarted = true;
 }
 
 void setupWiFi()
