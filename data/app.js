@@ -297,6 +297,20 @@ async function refreshStatus() {
     document.getElementById("diagHaldexCAN").textContent = haldexOk
       ? "✓ Healthy"
       : "X Unhealthy";
+
+    // Bench Mode can only be toggled while genuinely off-vehicle (both CAN
+    // buses showing X) - prevents flipping it on by mistake while harnessed
+    // to a live car, on top of the firmware's own auto-clear-on-CAN latch.
+    const benchModeElem = document.getElementById("benchMode");
+    const benchModeStatus = document.getElementById("benchModeStatus");
+    const canDetected = chassisOk || haldexOk;
+    if (benchModeElem) benchModeElem.disabled = canDetected;
+    if (benchModeStatus) {
+      benchModeStatus.textContent = canDetected
+        ? "Disabled - CAN detected, so this unit is harnessed (or was recently)"
+        : "Available - no CAN detected on either bus";
+      benchModeStatus.style.color = canDetected ? "var(--text-dim)" : "var(--success)";
+    }
     document.getElementById("diagThrottle").textContent = displayValue(
       data.throttle,
     );
