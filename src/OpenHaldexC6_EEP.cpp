@@ -22,6 +22,7 @@ void readEEP() // function to read stored preferences into runtime variables
   pref.begin("dsbOnboardBtn", false);   // disable onboard button preference
   pref.begin("dsbExtBtn", false);       // disable external button preference
   pref.begin("canSleepEn", false);      // CAN-wake light sleep enable preference
+  pref.begin("benchMode", false);       // bench-mode (suppress CAN-wake sleep) preference
   pref.begin("ledBrightness", false);   // LED brightness preference
 
   pref.begin("haldexGen", false);       // stored haldex generation
@@ -62,6 +63,7 @@ void readEEP() // function to read stored preferences into runtime variables
     pref.putBool("dsbExtBtn", disableExternalButton);          // save disable external button
     pref.putBool("fixHunting", fixHunting);                    // save Motor_11 BPK-mode toggle
     pref.putBool("canSleepEn", canSleepEnabled);               // save CAN-wake light sleep enable
+    pref.putBool("benchMode", benchMode);                      // save bench-mode preference
     pref.putBool("canSleepAggr", canSleepAggressive);          // save aggressive CAN sleep enable
     pref.putUShort("lpWakeFps", lpWakeThresholdFps);           // save LP wake threshold (fps)
     pref.putUChar("ledBrightness", ledBrightness);             // save LED brightness
@@ -107,6 +109,7 @@ void readEEP() // function to read stored preferences into runtime variables
     disableExternalButton = pref.getBool("dsbExtBtn", false);               // load disable external button
     fixHunting = pref.getBool("fixHunting", false);                         // load Motor_11 BPK-mode toggle
     canSleepEnabled = pref.getBool("canSleepEn", true);                     // load CAN-wake light sleep enable
+    benchMode = pref.getBool("benchMode", false);                          // load bench-mode preference
     canSleepAggressive = pref.getBool("canSleepAggr", false);               // load aggressive CAN sleep enable
     lpWakeThresholdFps = pref.getUShort("lpWakeFps", 1100);                  // load LP wake threshold (fps)
     ledBrightness = pref.getUChar("ledBrightness", led_brightness_default); // load LED brightness
@@ -244,6 +247,7 @@ void writeEEP(void *arg) // task function to periodically write preferences
     pref.putBool("dsbExtBtn", disableExternalButton);          // write disable external button
     pref.putBool("fixHunting", fixHunting);                    // write Motor_11 BPK-mode toggle
     pref.putBool("canSleepEn", canSleepEnabled);               // write CAN-wake light sleep enable
+    pref.putBool("benchMode", benchMode);                      // write bench-mode preference
     pref.putBool("canSleepAggr", canSleepAggressive);          // write aggressive CAN sleep enable
     pref.putUShort("lpWakeFps", lpWakeThresholdFps);           // write LP wake threshold (fps)
     pref.putUChar("ledBrightness", ledBrightness);             // write LED brightness

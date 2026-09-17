@@ -300,6 +300,7 @@ void resetFrameEditMask()
 
 bool canSleepEnabled = true;
 bool canSleepAggressive = false; // opt-in: transceiver standby + DFS floor 10MHz + low WiFi TX power
+bool benchMode = false;          // opt-in: suppress CAN-wake WiFi sleep until real CAN traffic is seen (bench testing)
 volatile bool canWakeRequest = false; // ISR-set wake flag when transceivers in standby see bus activity
 uint16_t lpWakeThresholdFps = 1100; // wake threshold fps; default 1100 — user adjustable via UI
 

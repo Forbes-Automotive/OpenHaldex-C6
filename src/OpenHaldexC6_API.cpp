@@ -291,6 +291,7 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
     data["fixHunting"] = fixHunting;
     data["canSleepEnabled"] = canSleepEnabled;
     data["canSleepAggressive"] = canSleepAggressive;
+    data["benchMode"] = benchMode;
     data["lpWakeThresholdFps"] = lpWakeThresholdFps;
 
     data["analyzerMode"] = analyzerMode;
@@ -530,6 +531,10 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
         // Enabling aggressive implies the base sleep path is on.
         if (canSleepAggressive)
             canSleepEnabled = true;
+    }
+    if (data["benchMode"].is<bool>())
+    {
+        benchMode = data["benchMode"];
     }
     if (data["lpWakeThresholdFps"].is<uint16_t>())
     {

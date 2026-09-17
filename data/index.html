@@ -467,6 +467,12 @@
                         <span class="toggle-label">Enable CAN Sleep (Aggressive)</span>
                     </label>
                     <p class="hint">Additionally parks the CAN transceivers in standby while sleeping, drops CPU freq. to 10MHz, and lowers WiFi AP TX power. Bus activity wakes the transceivers via GPIO interrupt within microseconds; a 2s safety-net probe runs as backup.</p>
+                    <label class="toggle">
+                        <input type="checkbox" id="benchMode">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Bench Mode</span>
+                    </label>
+                    <p class="hint">Keeps the AP awake indefinitely while bench testing over USB with no vehicle harness connected, overriding CAN sleep above. Self-clears the moment real CAN traffic is seen on either bus (i.e. once actually harnessed to a live car) &mdash; safe to leave on, but for a permanent install turn it off once you're done tuning.</p>
                     <div class="brightness-row">
                         <span class="toggle-label">LP Wake Threshold</span>
                         <div class="brightness-controls">

@@ -176,6 +176,9 @@ async function initStoredSettings() {
     const canSleepAggrElem = document.getElementById("canSleepAggressive");
     if (canSleepAggrElem) canSleepAggrElem.checked = data.canSleepAggressive || false;
 
+    const benchModeElem = document.getElementById("benchMode");
+    if (benchModeElem) benchModeElem.checked = data.benchMode || false;
+
     // Aggressive implies basic - lock the basic checkbox while aggressive is on.
     if (canSleepElem && canSleepAggrElem) {
       canSleepElem.disabled = canSleepAggrElem.checked;
@@ -796,6 +799,7 @@ function initSettings() {
     "fixHunting",
     "canSleepEnabled",
     "canSleepAggressive",
+    "benchMode",
     "liveDiagEnabled",
     "lockReleaseEnabled",
   ];

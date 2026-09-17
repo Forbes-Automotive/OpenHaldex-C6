@@ -17,6 +17,13 @@ static uint32_t lpLastHaldexSnap     = 0;
 static uint32_t lpChassisFps         = 0;
 static uint32_t lpHaldexFps          = 0;
 
+// Bench mode support: latches true the first time real CAN traffic is seen on
+// either bus this power cycle. Used to auto-clear benchMode's sleep suppression
+// the moment the unit is demonstrably harnessed to a live bus, so a forgotten
+// bench-mode toggle can't weaken the parked-car battery protection once
+// actually installed. Resets to false on every boot (not persisted).
+static bool everSawCANThisSession = false;
+
 // Aggressive-mode state.
 static bool     lpTransceiversStandby = false; // CAN_RS pins driven high (TCAN1044 standby)
 static bool     lpWakeIsrAttached     = false; // GPIO ISRs currently armed on CAN_RX
@@ -272,6 +279,11 @@ void updateTriggers(void *arg)
     hasCANChassis = (lastCANChassisTick > 0) && ((now - (uint32_t)lastCANChassisTick) <= canHealthTimeoutMs); // 1000ms timeout for CAN health - if we haven't received a message in 1000ms, consider the CAN connection unhealthy
     hasCANHaldex = (lastCANHaldexTick > 0) && ((now - (uint32_t)lastCANHaldexTick) <= canHealthTimeoutMs);    // 1000ms timeout for CAN health - if we haven't received a message in 1000ms, consider the CAN connection unhealthy
 
+    if (hasCANChassis || hasCANHaldex)
+    {
+      everSawCANThisSession = true; // real bus activity seen - bench mode (if on) stops suppressing sleep from here on
+    }
+
     // Low-power WiFi management
     // Standalone: Haldex bus fps. OEM: chassis bus fps.
     //
@@ -315,11 +327,17 @@ void updateTriggers(void *arg)
       // OEM: chassis fps >= lpWakeThresholdFps (UI slider, default 50).
       const bool canActive = isStandalone ? (lpHaldexFps >= 50U)
                                           : (lpChassisFps >= lpWakeThresholdFps);
+      // Bench mode: while enabled AND no real CAN has ever been seen this
+      // session, treat as always "active" so LP_WATCHING never sleeps - keeps
+      // the AP up indefinitely for a bench-only tuning session with no harness
+      // connected. The instant real CAN traffic appears (everSawCANThisSession
+      // latches true), this stops applying and normal sleep behavior resumes.
+      const bool benchModeSuppressing = benchMode && !everSawCANThisSession;
 
       switch (lpState)
       {
       case LP_WATCHING:
-        if (noClients && !canActive)
+        if (noClients && !canActive && !benchModeSuppressing)
         {
           if (lpNoClientsSince == 0)
             lpNoClientsSince = now;

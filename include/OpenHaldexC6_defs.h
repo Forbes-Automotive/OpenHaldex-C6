@@ -332,6 +332,15 @@ void resetFrameEditMask();                                // restore defaults fo
 
 extern bool canSleepEnabled;    // runtime toggle for CAN-wake light sleep (UI/EEP)
 extern bool canSleepAggressive; // aggressive add-on: transceiver standby + DFS 10MHz + low WiFi TX power
+
+// Bench mode: temporarily suppresses the CAN-wake WiFi sleep (above) while bench
+// testing over USB with no vehicle harness connected, so the AP doesn't drop
+// mid-tuning-session. Self-clears: the moment ANY real CAN traffic is seen on
+// either bus this power cycle, the unit is almost certainly harnessed to a live
+// car, and normal sleep behavior resumes immediately regardless of this setting -
+// so it can safely be left on without weakening the parked-car battery protection
+// once actually installed. See everSawCANThisSession in OpenHaldexC6_IO.cpp.
+extern bool benchMode; // persisted (UI/EEP), default off
 extern volatile bool canWakeRequest; // set by CAN_RX GPIO ISR when transceivers in standby see bus activity
 
 extern bool rebootWiFi;
