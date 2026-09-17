@@ -694,7 +694,8 @@
                 <p class="hint">Optional: also join a home/garage WiFi network as a client. The controller's own access point keeps running either way &mdash; this just lets you reach it (and run backups) from a phone or laptop already on that network, without switching networks. Leave blank to disable.</p>
                 <p class="hint" id="wifiStaStatus">--</p>
                 <div class="wifi-password-row">
-                    <input type="text" id="wifiStaSsidInput" placeholder="Home network name" class="input-wifi-password" maxlength="32" autocomplete="off" spellcheck="false">
+                    <input type="text" id="wifiStaSsidInput" placeholder="Home network name" class="input-wifi-password" maxlength="32" autocomplete="off" spellcheck="false" list="wifiStaSsidList">
+                    <datalist id="wifiStaSsidList"></datalist>
                 </div>
                 <div class="wifi-password-row" style="margin-top:8px;">
                     <input type="password" id="wifiStaPasswordInput" placeholder="Home network password" class="input-wifi-password" maxlength="64" autocomplete="new-password">

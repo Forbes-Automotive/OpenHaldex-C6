@@ -4,6 +4,8 @@
 #include <OpenHaldexC6_WiFi.h>
 
 #include <cstring>
+#include <vector>
+#include <algorithm>
 
 // helper function to calculate CPU usage percentage based on FreeRTOS task run time stats
 static int getCPUUsagePercent() 
@@ -906,6 +908,52 @@ void setupAPI()
                 resp["ssid"] = wifiSsid;
                 sendJSON(req, 200, resp); });
         });
+
+    // GET /api/wifi/scan - blocking scan for nearby networks, for the bridge-mode SSID picker.
+    // NOTE: WiFi.scanNetworks() briefly disrupts the AP (this chip has one radio, shared
+    // between AP and STA - a scan channel-hops away from the AP's channel for a couple of
+    // seconds). Acceptable for a manual, occasional user action; not something to call
+    // automatically or on a timer.
+    webServer.on("/api/wifi/scan", HTTP_GET, [](AsyncWebServerRequest *request)
+                 {
+                     struct NetInfo { String ssid; int32_t rssi; bool secure; };
+                     std::vector<NetInfo> nets;
+
+                     int n = WiFi.scanNetworks(false, false);
+                     for (int i = 0; i < n; i++)
+                     {
+                         String ssid = WiFi.SSID(i);
+                         if (ssid.length() == 0) continue; // hidden network - use manual entry instead
+                         int32_t rssi = WiFi.RSSI(i);
+                         bool secure = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
+
+                         bool merged = false;
+                         for (auto &net : nets)
+                         {
+                             if (net.ssid == ssid)
+                             {
+                                 if (rssi > net.rssi) net.rssi = rssi; // keep strongest if seen on multiple channels/BSSIDs
+                                 merged = true;
+                                 break;
+                             }
+                         }
+                         if (!merged) nets.push_back({ssid, rssi, secure});
+                     }
+                     WiFi.scanDelete();
+
+                     std::sort(nets.begin(), nets.end(), [](const NetInfo &a, const NetInfo &b)
+                               { return a.rssi > b.rssi; });
+
+                     JsonDocument resp;
+                     JsonArray networksJSON = resp["networks"].to<JsonArray>();
+                     for (auto &net : nets)
+                     {
+                         JsonObject o = networksJSON.add<JsonObject>();
+                         o["ssid"] = net.ssid;
+                         o["rssi"] = net.rssi;
+                         o["secure"] = net.secure;
+                     }
+                     sendJSON(request, 200, resp); });
 
     // POST /api/wifi/sta/reset - disable bridge mode (clear home-network SSID+password) and restart AP-only
     webServer.on("/api/wifi/sta/reset", HTTP_POST, [](AsyncWebServerRequest *request)

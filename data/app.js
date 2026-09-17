@@ -1384,12 +1384,22 @@ function initWifi() {
 // initialise the Home WiFi (Bridge Mode) card
 function initWifiSta() {
   const ssidInput = document.getElementById("wifiStaSsidInput");
+  const ssidList  = document.getElementById("wifiStaSsidList");
   const pwInput   = document.getElementById("wifiStaPasswordInput");
   const pwToggle  = document.getElementById("wifiStaPasswordToggle");
   const status    = document.getElementById("wifiStaStatus");
   const btnSave   = document.getElementById("wifiStaSave");
   const btnReset  = document.getElementById("wifiStaReset");
   if (!ssidInput || !pwInput || !status || !btnSave || !btnReset) return;
+
+  // Tracks whether the user has unsaved edits (in EITHER field) since the last
+  // load/save, so the periodic status refresh below never clobbers in-progress
+  // typing - even after tabbing from the SSID field into the password field,
+  // which is what broke this before (the old guard only checked whether the
+  // SSID field itself still had focus).
+  let userEditing = false;
+  ssidInput.addEventListener("input", () => { userEditing = true; });
+  pwInput.addEventListener("input", () => { userEditing = true; });
 
   function renderStatus(data) {
     if (!data || !data.ssid) {
@@ -1409,7 +1419,7 @@ function initWifiSta() {
   function refresh() {
     fetchJson("/api/wifi/sta").then((data) => {
       if (!data) return;
-      if (document.activeElement !== ssidInput) ssidInput.value = data.ssid || "";
+      if (!userEditing) ssidInput.value = data.ssid || "";
       renderStatus(data);
     });
   }
@@ -1424,6 +1434,31 @@ function initWifiSta() {
     pwToggle.textContent = isHidden ? "🙈" : "👁";
   });
 
+  // Scan for nearby networks and populate the SSID field's dropdown (<datalist>,
+  // so manual/hidden-network entry still works too). Triggered on focus rather
+  // than automatically, since a scan briefly disrupts the AP - cache for 15s so
+  // tabbing SSID -> password -> back to SSID doesn't re-trigger it needlessly.
+  let lastScanAt = 0;
+  let scanning = false;
+  ssidInput.addEventListener("focus", async () => {
+    if (scanning || Date.now() - lastScanAt < 15000) return;
+    scanning = true;
+    const prevPlaceholder = ssidInput.placeholder;
+    ssidInput.placeholder = "Scanning for networks…";
+    const resp = await fetchJson("/api/wifi/scan");
+    ssidInput.placeholder = prevPlaceholder;
+    scanning = false;
+    lastScanAt = Date.now();
+    if (!resp || !Array.isArray(resp.networks)) return;
+    ssidList.innerHTML = "";
+    resp.networks.forEach((net) => {
+      const opt = document.createElement("option");
+      opt.value = net.ssid;
+      opt.textContent = net.ssid + (net.secure ? " 🔒" : "") + " (" + net.rssi + " dBm)";
+      ssidList.appendChild(opt);
+    });
+  });
+
   btnSave.addEventListener("click", async () => {
     const ssid = ssidInput.value.trim();
     const pwd = pwInput.value.trim();
@@ -1436,6 +1471,7 @@ function initWifiSta() {
     });
     if (!resp) { showNotification("Failed to reach device", "error"); return; }
     if (!resp.ok) { showNotification(resp.error || "Failed to save", "error"); return; }
+    userEditing = false; // saved - safe for the periodic refresh to sync again
     pwInput.value = "";
     if (ssid.length > 0) {
       status.textContent = "Connecting to \"" + ssid + "\"…";
@@ -1450,6 +1486,7 @@ function initWifiSta() {
   btnReset.addEventListener("click", async () => {
     const resp = await fetchJson("/api/wifi/sta/reset", { method: "POST" });
     if (!resp || !resp.ok) { showNotification("Failed to disable", "error"); return; }
+    userEditing = false; // reset applied - safe for the periodic refresh to sync again
     ssidInput.value = "";
     pwInput.value = "";
     status.textContent = "Disabled - AP only";
