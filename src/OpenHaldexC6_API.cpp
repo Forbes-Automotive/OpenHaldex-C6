@@ -696,11 +696,9 @@ void setupWebServer()
     webServer.begin(); // begin the webServer
     DEBUG("Web server started");
 
-    if (MDNS.begin("openhaldex"))
-    {
-        MDNS.addService("http", "tcp", 80);
-        DEBUG("mDNS responder started: openhaldex.local");
-    }
+    // mDNS is already registered by applyWifiMode() (called from setupWiFi(), which always
+    // runs before this) - registering it again here just fails silently ("Service already
+    // exists") since the underlying ESP-IDF mdns component only allows one "http" service.
 }
 
 // setup main section for handling requests
@@ -971,6 +969,14 @@ void setupAPI()
                      resp["passwordSet"] = (strlen(wifiStaPassword) >= 8);
                      resp["connected"] = wifiStaConnected;
                      resp["ip"] = wifiStaIP;
+                     if (wifiStaConnected)
+                     {
+                         resp["rssi"] = WiFi.RSSI();
+                     }
+                     else
+                     {
+                         resp["rssi"] = nullptr;
+                     }
                      sendJSON(request, 200, resp); });
 
     // POST /api/wifi/sta - set (or clear) the home-network SSID/password for bridge mode; AP+STA restart immediately
