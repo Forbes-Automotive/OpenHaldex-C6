@@ -1401,6 +1401,13 @@ function initWifiSta() {
   ssidInput.addEventListener("input", () => { userEditing = true; });
   pwInput.addEventListener("input", () => { userEditing = true; });
 
+  function signalQuality(rssi) {
+    if (rssi >= -50) return "excellent";
+    if (rssi >= -60) return "good";
+    if (rssi >= -70) return "fair";
+    return "weak";
+  }
+
   function renderStatus(data) {
     if (!data || !data.ssid) {
       status.textContent = "Disabled - AP only";
@@ -1408,7 +1415,10 @@ function initWifiSta() {
       return;
     }
     if (data.connected) {
-      status.textContent = "✓ Connected to \"" + data.ssid + "\" - reachable at http://" + data.ip + "/";
+      const signal = typeof data.rssi === "number"
+        ? " (" + signalQuality(data.rssi) + " signal, " + data.rssi + " dBm)"
+        : "";
+      status.textContent = "✓ Connected to \"" + data.ssid + "\"" + signal + " - reachable at http://" + data.ip + "/";
       status.style.color = "var(--success)";
     } else {
       status.textContent = "Configured for \"" + data.ssid + "\" - not connected yet…";
