@@ -284,10 +284,10 @@ void updateTriggers(void *arg)
       everSawCANThisSession = true; // real bus activity seen - bench mode (if on) stops suppressing sleep from here on
     }
 
-    // Low-power WiFi management
+    // Low-power WiFi management (gated on canSleepEnabled - the UI/EEP toggle)
     // Standalone: Haldex bus fps. OEM: chassis bus fps.
     //
-    // LP_WATCHING : no clients + canActive false for watchMs -> shut WiFi+LED -> LP_SLEEPING
+    // LP_WATCHING : canSleepEnabled + no clients + canActive false for watchMs -> shut WiFi+LED -> LP_SLEEPING
     // LP_SLEEPING : canActive -> restore WiFi -> LP_WATCHING
     //               CPU auto-sleeps via esp_pm_configure in main.cpp when FreeRTOS is idle.
     //
@@ -337,7 +337,7 @@ void updateTriggers(void *arg)
       switch (lpState)
       {
       case LP_WATCHING:
-        if (noClients && !canActive && !benchModeSuppressing)
+        if (canSleepEnabled && noClients && !canActive && !benchModeSuppressing)
         {
           if (lpNoClientsSince == 0)
             lpNoClientsSince = now;
