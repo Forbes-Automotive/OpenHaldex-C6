@@ -2,10 +2,7 @@
 #include <OpenHaldexC6_defs.h>
 
 // Current firmware version
-// -custom build suffix uses the compiler's build date/time so it auto-updates every
-// build with no manual upkeep - makes it obvious (in the UI and over the API) that
-// this isn't a stock Forbes-Automotive release, and which exact build is running.
-#define FW_VERSION "8.00.3-custom+" __DATE__ "." __TIME__ // update the base version with every firmware release AND change .html version query param to force cache refresh of web UI
+#define FW_VERSION "8.00.3" // update this with every firmware release AND change .html version query param to force cache refresh of web UI
 
 /*
 Version Control:
@@ -66,14 +63,20 @@ V8.00.3 - added drop-down options for adding/removing CAN signals if learn isn't
         - added new scaling for UDS - 0CQ 554C/D - heated on bench and logged with VCDS
         - minor lock tweaks on 0CQ to target 100% cleaner
 
---- unmerged custom branch (feature/wifi-bridge-mode), based on V8.00.3 ---
+--- this PR (feature/wifi-bridge-mode), based on V8.00.3 - version/changelog entry left for whoever cuts the release ---
         - added Backup & Restore: export/import the Expert tune table, settings and WiFi identity
           as a JSON file (web UI + tools/openhaldex_config.py CLI), since a firmware/LittleFS
           reflash wipes NVS-stored settings
         - added optional WiFi bridge mode: join a home/garage network as a station (WIFI_AP_STA)
           while keeping the AP running, so the controller stays reachable over an existing LAN
           without switching networks. Disabled by default (empty SSID = AP-only, unchanged
-          behavior). New GET/POST /api/wifi/sta + /api/wifi/sta/reset endpoints
+          behavior). New GET/POST /api/wifi/sta + /api/wifi/sta/reset endpoints, plus a
+          GET /api/wifi/scan network picker for the SSID field
+        - added Bench Mode: an opt-in toggle (default off) that suppresses the existing CAN-wake
+          WiFi sleep while bench testing over USB with no vehicle harness connected. Self-clears
+          the moment real CAN traffic is seen on either bus, and the toggle itself is only
+          interactive in the UI while both buses read no CAN - can't be left on by accident once
+          harnessed to a live car
 */
 
 
