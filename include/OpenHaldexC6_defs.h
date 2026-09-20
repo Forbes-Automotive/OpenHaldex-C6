@@ -122,6 +122,15 @@ extern uint8_t ledBrightness;      // runtime LED brightness (0–255, persisted
 #define wifiHostName wifiSsid              // legacy alias - all call sites now use runtime SSID
 extern char wifiSsid[33];                  // runtime AP SSID (max 32 chars + NUL)
 
+// WiFi bridge mode (PR #39, louij2): optionally ALSO join a home/garage network
+// as a station (WIFI_AP_STA) so the controller is reachable over that LAN
+// without anyone leaving their normal WiFi. The AP keeps running regardless.
+// Empty SSID = disabled = the AP-only behaviour every install has today.
+extern char wifiStaSsid[33];     // home network SSID; empty = bridge mode off
+extern char wifiStaPassword[65]; // home network password; empty = open network
+extern bool wifiStaConnected;    // runtime: associated and holding an IP
+extern char wifiStaIP[16];       // runtime: dotted quad once connected, "" otherwise
+
 extern twai_handle_t twai_bus_0; // for ESP32-C6 CANBUS 0
 extern twai_handle_t twai_bus_1; // for ESP32-C6 CANBUS 1
 
@@ -434,6 +443,15 @@ void resetFrameEditMask();                                // restore defaults fo
 
 extern bool canSleepEnabled;    // runtime toggle for CAN-wake light sleep (UI/EEP)
 extern bool canSleepAggressive; // aggressive add-on: transceiver standby + DFS 10MHz + low WiFi TX power
+
+// Bench mode (PR #39, louij2): suppresses the CAN-wake WiFi sleep above while
+// bench testing over USB with no harness, so the AP doesn't drop mid-session.
+// The board can't tell "harnessed to a sleeping car" from "no harness at all"
+// (both are zero CAN traffic), so it's an explicit toggle - but it self-clears
+// the moment either bus shows real traffic this power cycle, so a forgotten
+// toggle can't weaken parked-car battery protection once installed. See
+// everSawCANThisSession in OpenHaldexC6_IO.cpp.
+extern bool benchMode;               // persisted (UI/EEP), default off
 extern volatile bool canWakeRequest; // set by CAN_RX GPIO ISR when transceivers in standby see bus activity
 
 extern bool rebootWiFi;

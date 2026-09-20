@@ -13,4 +13,6 @@ void disconnectWifi();
 void resetWifiPassword(); // clears WiFi password and restarts AP as open network
 void resetWifiSsid();     // restores default SSID and restarts AP
 void resetWifi();         // clears password AND restores default SSID, restarts AP
+void resetWifiSta();      // clears the home-network (bridge mode) credentials and restarts as AP only
+void pollWifiSta();       // call from loop(): tracks the bridge-mode STA connection + retry back-off
 inline void updateLabels(void *arg) {}

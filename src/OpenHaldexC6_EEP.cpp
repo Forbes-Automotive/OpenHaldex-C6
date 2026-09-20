@@ -22,6 +22,7 @@ void readEEP() // function to read stored preferences into runtime variables
   pref.begin("dsbOnboardBtn", false);   // disable onboard button preference
   pref.begin("dsbExtBtn", false);       // disable external button preference
   pref.begin("canSleepEn", false);      // CAN-wake light sleep enable preference
+  pref.begin("benchMode", false);       // bench-mode (hold WiFi up, no harness) preference
   pref.begin("ledBrightness", false);   // LED brightness preference
 
   pref.begin("haldexGen", false);       // stored haldex generation
@@ -39,6 +40,8 @@ void readEEP() // function to read stored preferences into runtime variables
   pref.begin("steerScale", false);    // stored steering-angle lock-scale bytes
   pref.begin("learnTable", false);    // stored haldex learn table
   pref.begin("wifiPwd", false);       // stored WiFi AP password
+  pref.begin("wifiStaSsid", false);   // stored home-network (bridge mode) SSID
+  pref.begin("wifiStaPwd", false);    // stored home-network (bridge mode) password
   pref.begin("udsMQBEn", false);      // UDS MQB polling enable preference
 
   // first run comes with EEP value of 255, so write actual values
@@ -66,6 +69,7 @@ void readEEP() // function to read stored preferences into runtime variables
     pref.putUChar("esp14Floor", esp14MinFloorPct);             // save ESP_14 launch PWM floor (%)
     pref.putString("llNotes", longLearnNotes);                 // save Long Learn notes (empty on first run)
     pref.putBool("canSleepEn", canSleepEnabled);               // save CAN-wake light sleep enable
+    pref.putBool("benchMode", benchMode);                      // save bench mode (off)
     pref.putBool("canSleepAggr", canSleepAggressive);          // save aggressive CAN sleep enable
     pref.putUShort("lpWakeFps", lpWakeThresholdFps);           // save LP wake threshold (fps)
     pref.putUChar("ledBrightness", ledBrightness);             // save LED brightness
@@ -87,6 +91,8 @@ void readEEP() // function to read stored preferences into runtime variables
     pref.putBool("learnOK", false);                                                  // learn table not valid on first run
     pref.putString("wifiPwd", wifiPassword);                                         // save WiFi password (empty = open network)
     pref.putString("wifiSsid", wifiSsid);                                            // save WiFi SSID (factory default on first run)
+    pref.putString("wifiStaSsid", wifiStaSsid);                                      // save home-network SSID (empty = bridge mode off)
+    pref.putString("wifiStaPwd", wifiStaPassword);                                   // save home-network password
     pref.putBool("udsMQBEn", liveDiagEnabled);                                       // save live-diagnostics enable (legacy key)
     pref.putUChar("forceModesPrio", forceModesPriority);                             // save force-modes priority order
     pref.putFloat("lockReleaseRate", lockReleaseRatePerSec);                         // save lock release rate (%/s)
@@ -113,6 +119,7 @@ void readEEP() // function to read stored preferences into runtime variables
     fixHunting = pref.getBool("fixHunting", false);                         // load Motor_11 BPK-mode toggle
     dangerZoneEnabled = pref.getBool("dangerZone", false);      // load Danger Zone (full-duty 50:50)
     canSleepEnabled = pref.getBool("canSleepEn", true);                     // load CAN-wake light sleep enable
+    benchMode = pref.getBool("benchMode", false);                           // load bench mode
     canSleepAggressive = pref.getBool("canSleepAggr", false);               // load aggressive CAN sleep enable
     lpWakeThresholdFps = pref.getUShort("lpWakeFps", 1100);                  // load LP wake threshold (fps)
     ledBrightness = pref.getUChar("ledBrightness", led_brightness_default); // load LED brightness
@@ -147,6 +154,8 @@ void readEEP() // function to read stored preferences into runtime variables
     {
       strncpy(wifiSsid, wifiHostNameDefault, sizeof(wifiSsid) - 1); // restore factory default
     }
+    pref.getString("wifiStaSsid", wifiStaSsid, sizeof(wifiStaSsid));        // load home-network SSID (missing key = "" = bridge mode off)
+    pref.getString("wifiStaPwd", wifiStaPassword, sizeof(wifiStaPassword)); // load home-network password
     liveDiagEnabled = pref.getBool("udsMQBEn", false);             // load live-diagnostics enable (legacy key)
     forceModesPriority = pref.getUChar("forceModesPrio", 0);       // load force-modes priority (0=TC>Haz>Ext)
     lockReleaseRatePerSec = pref.getFloat("lockReleaseRate", 120.0f); // load lock release rate (%/s)
@@ -258,6 +267,7 @@ void writeEEP(void *arg) // task function to periodically write preferences
     pref.putBool("fixHunting", fixHunting);                    // write Motor_11 BPK-mode toggle
     pref.putBool("dangerZone", dangerZoneEnabled);             // write Danger Zone (full-duty 50:50)
     pref.putBool("canSleepEn", canSleepEnabled);               // write CAN-wake light sleep enable
+    pref.putBool("benchMode", benchMode);                      // write bench mode
     pref.putBool("canSleepAggr", canSleepAggressive);          // write aggressive CAN sleep enable
     pref.putUShort("lpWakeFps", lpWakeThresholdFps);           // write LP wake threshold (fps)
     pref.putUChar("ledBrightness", ledBrightness);             // write LED brightness
@@ -282,6 +292,8 @@ void writeEEP(void *arg) // task function to periodically write preferences
     }
     pref.putString("wifiSsid", wifiSsid);    // write WiFi AP SSID
     pref.putString("wifiPwd", wifiPassword); // write WiFi AP password
+    pref.putString("wifiStaSsid", wifiStaSsid);    // write home-network (bridge mode) SSID
+    pref.putString("wifiStaPwd", wifiStaPassword); // write home-network password
     pref.putBool("udsMQBEn", liveDiagEnabled); // write live-diagnostics enable (legacy key)
     pref.putUChar("forceModesPrio", forceModesPriority);      // write force-modes priority order
     pref.putFloat("lockReleaseRate", lockReleaseRatePerSec);  // write lock release rate (%/s)

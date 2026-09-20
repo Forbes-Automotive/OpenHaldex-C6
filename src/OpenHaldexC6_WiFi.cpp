@@ -18,12 +18,99 @@ static void softAPLocalOnly()
   esp_netif_dhcps_start(ap);
 }
 
-// Bring the AP up (or back up) with the current SSID/password. Shared by the
-// boot path and the rebootWiFi restart in loop() so the DHCP behaviour stays
-// identical in both.
+// ---------------------------------------------------------------------------
+// Bridge mode (PR #39): optionally join a home/garage network as a station as
+// well. One radio is shared between AP and STA, and every STA connect attempt
+// scans all channels, pulling the AP off its own channel for a second or two.
+// That is fine when the network is there (one attempt, done), but with the
+// home SSID saved and the car parked anywhere else the core's auto-reconnect
+// would re-scan forever and the AP would stutter for whoever is in the car.
+// So: try hard for a short window after (re)start, then back off to one
+// attempt every few minutes.
+// ---------------------------------------------------------------------------
+static const uint32_t STA_INITIAL_WINDOW_MS = 20000;      // keep the core's auto-reconnect for this long after start
+static const uint32_t STA_RETRY_INTERVAL_MS = 5UL * 60000; // then one fresh attempt this often
+static uint32_t staStartedMs = 0;   // when the current connect window opened
+static uint32_t staLastAttemptMs = 0;
+static bool staBackedOff = false;   // auto-reconnect disabled, we're on the slow retry
+
+static void staBegin()
+{
+  if (strlen(wifiStaPassword) >= 8)
+    WiFi.begin(wifiStaSsid, wifiStaPassword);
+  else
+    WiFi.begin(wifiStaSsid); // open network
+  staLastAttemptMs = millis();
+}
+
+static void staStart()
+{
+  wifiStaConnected = false;
+  wifiStaIP[0] = '\0';
+  staBackedOff = false;
+  if (wifiStaSsid[0] == '\0')
+    return; // bridge mode off - startSoftAP() stays in plain WIFI_AP
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.persistent(false); // credentials live in our EEP, not the core's NVS blob
+  WiFi.setAutoReconnect(true);
+  WiFi.setMinSecurity(strlen(wifiStaPassword) >= 8 ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN); // core default refuses open networks
+  staStartedMs = millis();
+  staBegin();
+  DEBUG("WiFi bridge mode: joining \"%s\"...", wifiStaSsid);
+}
+
+// Called from loop(): tracks the STA connection, picks up its IP, and runs the
+// back-off described above. No-op when bridge mode is off.
+void pollWifiSta()
+{
+  if (wifiStaSsid[0] == '\0')
+    return;
+  const uint32_t now = millis();
+  const bool nowConnected = (WiFi.status() == WL_CONNECTED);
+  if (nowConnected && !wifiStaConnected)
+  {
+    strncpy(wifiStaIP, WiFi.localIP().toString().c_str(), sizeof(wifiStaIP) - 1);
+    wifiStaIP[sizeof(wifiStaIP) - 1] = '\0';
+    DEBUG("WiFi bridge mode: connected to \"%s\" as %s", wifiStaSsid, wifiStaIP);
+    // Connected: let the core handle brief drop-outs again.
+    if (staBackedOff)
+    {
+      WiFi.setAutoReconnect(true);
+      staBackedOff = false;
+    }
+    staStartedMs = now; // a later drop gets a fresh fast window
+  }
+  else if (!nowConnected && wifiStaConnected)
+  {
+    wifiStaIP[0] = '\0';
+    DEBUG("WiFi bridge mode: lost \"%s\"", wifiStaSsid);
+  }
+  wifiStaConnected = nowConnected;
+
+  if (!nowConnected)
+  {
+    if (!staBackedOff && (now - staStartedMs) > STA_INITIAL_WINDOW_MS)
+    {
+      // Not there. Stop the core's continuous re-scan so the AP is left alone.
+      WiFi.setAutoReconnect(false);
+      WiFi.disconnect(false, false);
+      staBackedOff = true;
+      DEBUG("WiFi bridge mode: \"%s\" not found - retrying every %lu min", wifiStaSsid, (unsigned long)(STA_RETRY_INTERVAL_MS / 60000UL));
+    }
+    else if (staBackedOff && (now - staLastAttemptMs) > STA_RETRY_INTERVAL_MS)
+    {
+      staBegin(); // one shot; the core gives up on its own without auto-reconnect
+    }
+  }
+}
+
+// Bring the AP up (or back up) with the current SSID/password, plus the STA
+// side if a home network is configured. Shared by the boot path and the
+// rebootWiFi restart in loop() so the DHCP behaviour stays identical in both.
 void startSoftAP()
 {
   WiFi.mode(WIFI_AP);
+  staStart(); // switches to WIFI_AP_STA and begins connecting when bridge mode is on
   // gateway 0.0.0.0 = local-only network (see softAPLocalOnly). Checked against
   // NetworkInterface::config() in the 3.x core: a gateway outside the AP subnet
   // simply skips the "gateway inside the DHCP range" test, so this is accepted,
@@ -95,4 +182,14 @@ void resetWifiSsid()
   strncpy(wifiSsid, wifiHostNameDefault, sizeof(wifiSsid) - 1); // restore factory default
   rebootWiFi = true;                                            // trigger AP restart
   DEBUG("WiFi SSID reset to default - restarting AP: %s", wifiSsid);
+}
+
+void resetWifiSta()
+{
+  memset(wifiStaSsid, 0, sizeof(wifiStaSsid));         // empty SSID = bridge mode off
+  memset(wifiStaPassword, 0, sizeof(wifiStaPassword));
+  wifiStaConnected = false;
+  wifiStaIP[0] = '\0';
+  rebootWiFi = true; // restart as plain AP
+  DEBUG("WiFi bridge mode disabled - AP only");
 }

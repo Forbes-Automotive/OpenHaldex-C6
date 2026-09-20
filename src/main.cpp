@@ -126,4 +126,6 @@ void loop()
 
     rebootWiFi = false;
   }
+
+  pollWifiSta(); // bridge mode: track the home-network connection (no-op when not configured)
 }

@@ -99,6 +99,27 @@ V8.00.3 - added drop-down options for adding/removing CAN signals if learn isn't
           path: force-mode triggers (TC/hazard/ext button) previously bypassed
           the gate in get_lock_target_adjustment() so lock_target read 100% below
           the cut-off; Expert mode previously bypassed it entirely.
+        - Ported GitHub PR #39 (louij2, "Add WiFi bridge mode, config
+          backup/restore, and bench mode", written against 8.00.3):
+          > Backup & Restore (Diagnostics tab + tools/openhaldex_config.py):
+            export/import the Expert tune, steering scale, frame edits, all
+            settings and the WiFi names as JSON. Passwords are write-only on
+            the device and never in the file; import asks for them once.
+            Key list widened to everything the 9.x /api/settings accepts.
+          > WiFi bridge mode: optionally join a home/garage network as a STA
+            alongside the AP (WIFI_AP_STA) so the controller is reachable on
+            that LAN. GET/POST /api/wifi/sta, /api/wifi/sta/reset, GET
+            /api/wifi/scan. Changed from the PR: the scan is asynchronous
+            (a blocking scan sat inside the async_tcp task), and STA retries
+            back off - 20 s of auto-reconnect after start, then one attempt
+            per 5 min - so a saved home SSID can't keep pulling the single
+            radio off the AP's channel while the car is away from home.
+          > Bench Mode (Settings): holds WiFi up with no harness connected;
+            self-clears the moment either bus shows traffic this power cycle,
+            and the UI locks the toggle while CAN is detected.
+          > Bug fix from the PR: "Enable CAN Sleep" only ever gated the CPU
+            frequency scaling, never the WiFi shutdown in updateTriggers(),
+            so switching it off did nothing visible. Now gates both.
 
 */
 

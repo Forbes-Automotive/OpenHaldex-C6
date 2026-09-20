@@ -4,6 +4,8 @@
 #include <OpenHaldexC6_WiFi.h>
 
 #include <cstring>
+#include <vector>    // /api/wifi/scan de-dup
+#include <algorithm> // std::sort
 
 // helper function to calculate CPU usage percentage based on FreeRTOS task run time stats
 static int getCPUUsagePercent() 
@@ -348,6 +350,7 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
     data["longLearnNotes"] = longLearnNotes;
     data["canSleepEnabled"] = canSleepEnabled;
     data["canSleepAggressive"] = canSleepAggressive;
+    data["benchMode"] = benchMode;
     data["lpWakeThresholdFps"] = lpWakeThresholdFps;
 
     data["analyzerMode"] = analyzerMode;
@@ -621,6 +624,10 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
         // Enabling aggressive implies the base sleep path is on.
         if (canSleepAggressive)
             canSleepEnabled = true;
+    }
+    if (data["benchMode"].is<bool>())
+    {
+        benchMode = data["benchMode"];
     }
     if (data["lpWakeThresholdFps"].is<uint16_t>())
     {
@@ -1140,6 +1147,113 @@ void setupAPI()
     // "/api/wifi/" (see WebHandlerImpl.h canHandle). The more-specific routes
     // must be registered BEFORE "/api/wifi"
     // or POSTs to "/api/wifi/ssid" get missed
+
+    // ---- Bridge mode (PR #39, louij2): home-network STA alongside the AP ----
+
+    // GET /api/wifi/scan - nearby networks for the home-WiFi picker.
+    // The scan is ASYNC: the first call starts it and answers {"scanning":true};
+    // the page polls until the list comes back. A blocking scan here would sit
+    // inside the async_tcp task for 2-3 s, which is exactly the task that has
+    // to keep serving everyone else. One radio is shared between AP and STA,
+    // so the AP drops off-channel for the scan's duration either way - hence
+    // this is a manual action behind the SSID field, never automatic.
+    webServer.on("/api/wifi/scan", HTTP_GET, [](AsyncWebServerRequest *request)
+                 {
+                     JsonDocument resp;
+                     int16_t n = WiFi.scanComplete();
+                     if (n == WIFI_SCAN_RUNNING)
+                     {
+                         resp["scanning"] = true;
+                     }
+                     else if (n == WIFI_SCAN_FAILED || n < 0)
+                     {
+                         // nothing in progress (or a previous one failed): kick one off
+                         WiFi.scanNetworks(true /*async*/, false /*hidden*/);
+                         resp["scanning"] = true;
+                     }
+                     else
+                     {
+                         resp["scanning"] = false;
+                         JsonArray nets = resp["networks"].to<JsonArray>();
+                         // de-duplicate by SSID keeping the strongest, then sort strongest first
+                         struct Net { String ssid; int32_t rssi; bool secure; };
+                         std::vector<Net> list;
+                         for (int16_t i = 0; i < n; i++)
+                         {
+                             String ssid = WiFi.SSID(i);
+                             if (ssid.length() == 0) continue; // hidden - type it in instead
+                             int32_t rssi = WiFi.RSSI(i);
+                             bool merged = false;
+                             for (auto &e : list)
+                                 if (e.ssid == ssid) { if (rssi > e.rssi) e.rssi = rssi; merged = true; break; }
+                             if (!merged) list.push_back({ssid, rssi, WiFi.encryptionType(i) != WIFI_AUTH_OPEN});
+                         }
+                         std::sort(list.begin(), list.end(), [](const Net &a, const Net &b) { return a.rssi > b.rssi; });
+                         for (auto &e : list)
+                         {
+                             JsonObject o = nets.add<JsonObject>();
+                             o["ssid"] = e.ssid;
+                             o["rssi"] = e.rssi;
+                             o["secure"] = e.secure;
+                         }
+                         WiFi.scanDelete(); // next GET starts a fresh scan
+                     }
+                     sendJSON(request, 200, resp); });
+
+    // POST /api/wifi/sta/reset - forget the home network, back to AP only
+    webServer.on("/api/wifi/sta/reset", HTTP_POST, [](AsyncWebServerRequest *request)
+                 {
+                     resetWifiSta();
+                     JsonDocument resp;
+                     resp["ok"] = true;
+                     sendJSON(request, 200, resp); });
+
+    // GET /api/wifi/sta - bridge-mode status. Password is write-only, never returned.
+    webServer.on("/api/wifi/sta", HTTP_GET, [](AsyncWebServerRequest *request)
+                 {
+                     JsonDocument resp;
+                     resp["ssid"] = wifiStaSsid;
+                     resp["passwordSet"] = (strlen(wifiStaPassword) >= 8);
+                     resp["connected"] = wifiStaConnected;
+                     resp["ip"] = wifiStaIP;
+                     if (wifiStaConnected) resp["rssi"] = WiFi.RSSI();
+                     else resp["rssi"] = nullptr;
+                     sendJSON(request, 200, resp); });
+
+    // POST /api/wifi/sta {ssid, password} - set (empty ssid = disable) and restart AP(+STA)
+    webServer.on(
+        "/api/wifi/sta", HTTP_POST, [](AsyncWebServerRequest *request)
+        { (void)request; }, nullptr,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
+        {
+            parseJSON(request, data, len, index, total, [](AsyncWebServerRequest *req, const String &body)
+                      {
+                JsonDocument d;
+                JsonDocument resp;
+                auto fail = [&](const char *why) { resp["ok"] = false; resp["error"] = why; sendJSON(req, 400, resp); };
+                if (deserializeJson(d, body) != DeserializationError::Ok) { fail("Invalid JSON"); return; }
+                if (!d["ssid"].is<const char *>()) { fail("Missing 'ssid' field"); return; }
+                const char *newSsid = d["ssid"];
+                const size_t ssidLen = strlen(newSsid);
+                if (ssidLen > 32) { fail("SSID too long (max 32)"); return; }
+                for (size_t i = 0; i < ssidLen; ++i)
+                {
+                    unsigned char c = (unsigned char)newSsid[i];
+                    if (c < 0x20 || c > 0x7E) { fail("SSID must be printable ASCII"); return; }
+                }
+                const char *newPwd = d["password"].is<const char *>() ? d["password"].as<const char *>() : "";
+                const size_t pwdLen = strlen(newPwd);
+                if (pwdLen > 0 && pwdLen < 8) { fail("Password must be at least 8 characters, or empty for an open network"); return; }
+                if (pwdLen >= 65) { fail("Password too long (max 64)"); return; }
+                memset(wifiStaSsid, 0, sizeof(wifiStaSsid));
+                strncpy(wifiStaSsid, newSsid, sizeof(wifiStaSsid) - 1);
+                memset(wifiStaPassword, 0, sizeof(wifiStaPassword));
+                if (pwdLen > 0) strncpy(wifiStaPassword, newPwd, sizeof(wifiStaPassword) - 1);
+                rebootWiFi = true; // restart AP(+STA) with the new credentials
+                resp["ok"] = true;
+                resp["ssid"] = wifiStaSsid;
+                sendJSON(req, 200, resp); });
+        });
 
     // POST /api/wifi/ssid/reset - restore factory SSID and restart AP
     webServer.on("/api/wifi/ssid/reset", HTTP_POST, [](AsyncWebServerRequest *request)

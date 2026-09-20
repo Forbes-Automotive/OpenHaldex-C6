@@ -120,6 +120,11 @@ volatile uint32_t lpHaldexFrameCount = 0;  // incremented by haldex CAN task; us
 char wifiPassword[65] = ""; // WiFi AP password - empty string = open network
 char wifiSsid[33] = wifiHostNameDefault; // runtime AP SSID (factory default, overridden from EEPROM)
 
+char wifiStaSsid[33] = "";     // bridge mode: home-network SSID - empty = disabled, AP only
+char wifiStaPassword[65] = ""; // bridge mode: home-network password - empty = open network
+bool wifiStaConnected = false; // runtime: associated to the home network with an IP
+char wifiStaIP[16] = "";       // runtime: dotted quad once connected, "" otherwise
+
 bool hazardForceMode = false;     // setting: use hazard lights to activate force mode
 bool hazardForceModeFlag = false; // runtime: hazard lights are currently on
 
@@ -341,6 +346,7 @@ void resetFrameEditMask()
 
 bool canSleepEnabled = true;
 bool canSleepAggressive = false; // opt-in: transceiver standby + DFS floor 10MHz + low WiFi TX power
+bool benchMode = false;          // opt-in: hold WiFi up on the bench until real CAN traffic is seen
 volatile bool canWakeRequest = false; // ISR-set wake flag when transceivers in standby see bus activity
 uint16_t lpWakeThresholdFps = 1100; // wake threshold fps; default 1100 — user adjustable via UI
 

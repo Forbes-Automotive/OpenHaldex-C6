@@ -17,6 +17,12 @@ static uint32_t lpLastHaldexSnap     = 0;
 static uint32_t lpChassisFps         = 0;
 static uint32_t lpHaldexFps          = 0;
 
+// Bench mode support (PR #39): latches true the first time real CAN traffic is
+// seen on either bus this power cycle. Once set, benchMode stops suppressing
+// sleep - the unit is demonstrably harnessed - so a forgotten toggle can't
+// weaken the parked-car battery protection. Not persisted; resets on boot.
+static bool everSawCANThisSession = false;
+
 // Aggressive-mode state.
 static bool     lpTransceiversStandby = false; // CAN_RS pins driven high (TCAN1044 standby)
 static bool     lpWakeIsrAttached     = false; // GPIO ISRs currently armed on CAN_RX
@@ -272,6 +278,9 @@ void updateTriggers(void *arg)
     hasCANChassis = (lastCANChassisTick > 0) && ((now - (uint32_t)lastCANChassisTick) <= canHealthTimeoutMs); // 1000ms timeout for CAN health - if we haven't received a message in 1000ms, consider the CAN connection unhealthy
     hasCANHaldex = (lastCANHaldexTick > 0) && ((now - (uint32_t)lastCANHaldexTick) <= canHealthTimeoutMs);    // 1000ms timeout for CAN health - if we haven't received a message in 1000ms, consider the CAN connection unhealthy
 
+    if (hasCANChassis || hasCANHaldex)
+      everSawCANThisSession = true; // real bus seen: bench mode (if on) stops holding WiFi up from here on
+
     // Low-power WiFi management
     // Standalone: Haldex bus fps. OEM: chassis bus fps.
     //
@@ -315,11 +324,18 @@ void updateTriggers(void *arg)
       // OEM: chassis fps >= lpWakeThresholdFps (UI slider, default 50).
       const bool canActive = isStandalone ? (lpHaldexFps >= 50U)
                                           : (lpChassisFps >= lpWakeThresholdFps);
+      // Bench mode: with no real CAN seen this session, behave as if the bus
+      // were active so LP_WATCHING never sleeps. The instant traffic appears
+      // (everSawCANThisSession latches) this stops applying.
+      const bool benchHold = benchMode && !everSawCANThisSession;
 
       switch (lpState)
       {
       case LP_WATCHING:
-        if (noClients && !canActive)
+        // canSleepEnabled is the UI toggle: it used to gate only the CPU
+        // frequency scaling in main.cpp, never this WiFi shutdown, so turning
+        // it off did nothing visible (PR #39 fix).
+        if (canSleepEnabled && noClients && !canActive && !benchHold)
         {
           if (lpNoClientsSince == 0)
             lpNoClientsSince = now;

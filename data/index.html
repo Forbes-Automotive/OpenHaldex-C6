@@ -637,6 +637,13 @@
                         <span class="toggle-label">Enable CAN Sleep (Aggressive)</span>
                     </label>
                     <p class="hint">Additionally parks the CAN transceivers in standby while sleeping, drops CPU freq. to 10MHz, and lowers WiFi AP TX power. Bus activity wakes the transceivers via GPIO interrupt within microseconds; a 2s safety-net probe runs as backup.</p>
+                    <label class="toggle">
+                        <input type="checkbox" id="benchMode">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Bench Mode</span>
+                    </label>
+                    <p class="hint">Keeps the WiFi up indefinitely while bench testing over USB with no harness connected, overriding CAN sleep above. Self-clears the moment real CAN traffic is seen on either bus (i.e. once actually harnessed to a car), so it is safe to leave on &mdash; but turn it off once you're done tuning a permanent install.</p>
+                    <p class="hint" id="benchModeStatus">--</p>
                     <div class="brightness-row">
                         <span class="toggle-label">LP Wake Threshold</span>
                         <div class="brightness-controls">
@@ -881,6 +888,44 @@
                 <div class="wifi-controls">
                     <button class="btn-secondary" id="wifiPasswordSave">Save &amp; Apply</button>
                     <button class="btn-secondary" id="wifiPasswordReset">Reset to Open</button>
+                </div>
+            </section>
+
+            <section class="card">
+                <h2>Home WiFi (Bridge Mode)</h2>
+                <p class="hint">Optional: also join a home or garage WiFi network as a client. The controller's own access point keeps running either way &mdash; this just makes it reachable (and lets you run backups) from a phone or laptop already on that network, without switching WiFi. Leave blank to disable. The controller still sleeps after 5 minutes without CAN traffic unless Bench Mode is on, and it only looks for the home network for 20&nbsp;s after starting, then once every 5 minutes, so it can't disturb the AP while you're away from home.</p>
+                <p class="hint" id="wifiStaStatus">--</p>
+                <div class="wifi-password-row">
+                    <input type="text" id="wifiStaSsidInput" placeholder="Home network name" class="input-wifi-password" maxlength="32" autocomplete="off" spellcheck="false" list="wifiStaSsidList">
+                    <datalist id="wifiStaSsidList"></datalist>
+                    <button class="btn-icon-eye" id="wifiStaScan" title="Scan for networks">&#128269;</button>
+                </div>
+                <div class="wifi-password-row" style="margin-top:8px;">
+                    <input type="password" id="wifiStaPasswordInput" placeholder="Home network password (blank = open)" class="input-wifi-password" maxlength="64" autocomplete="new-password">
+                    <button class="btn-icon-eye" id="wifiStaPasswordToggle" title="Show / hide password">&#128065;</button>
+                </div>
+                <div class="wifi-controls">
+                    <button class="btn-secondary" id="wifiStaSave">Save &amp; Apply</button>
+                    <button class="btn-secondary" id="wifiStaReset">Disable</button>
+                </div>
+            </section>
+
+            <section class="card">
+                <h2>Backup &amp; Restore</h2>
+                <p class="hint">Export the Expert tune, steering scale, frame edits, settings and WiFi name to a JSON file. Do this before a firmware update &mdash; an update can wipe on-device settings. Import brings everything back in one go. WiFi passwords are never written to the file; you'll be asked to re-enter them once after importing if any were set.</p>
+                <p class="hint" id="backupStatus">--</p>
+                <div class="wifi-controls">
+                    <button class="btn-secondary" id="backupExport">Export Config</button>
+                    <button class="btn-secondary" id="backupImportBtn">Import Config</button>
+                    <input type="file" id="backupImportFile" accept="application/json,.json" style="display:none;">
+                </div>
+                <div id="backupPwSection" class="wifi-password-row" style="display:none; margin-top:12px;">
+                    <input type="password" id="backupPwInput" placeholder="Re-enter WiFi AP password" class="input-wifi-password" maxlength="64" autocomplete="new-password">
+                    <button class="btn-secondary" id="backupPwApply">Apply Password</button>
+                </div>
+                <div id="backupStaPwSection" class="wifi-password-row" style="display:none; margin-top:12px;">
+                    <input type="password" id="backupStaPwInput" placeholder="Re-enter home WiFi password" class="input-wifi-password" maxlength="64" autocomplete="new-password">
+                    <button class="btn-secondary" id="backupStaPwApply">Apply Home WiFi Password</button>
                 </div>
             </section>
 

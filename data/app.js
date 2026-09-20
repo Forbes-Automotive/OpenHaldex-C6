@@ -70,6 +70,8 @@ function initApp() {
   initLongLearn();
   initWifiSsid();
   initWifi();
+  initWifiSta();
+  initBackupRestore();
   initOtaPage();
   initCollapsibleCards();
   initGaugeUI();
@@ -232,6 +234,9 @@ async function initStoredSettings() {
     const canSleepAggrElem = document.getElementById("canSleepAggressive");
     if (canSleepAggrElem) canSleepAggrElem.checked = data.canSleepAggressive || false;
 
+    const benchModeElem = document.getElementById("benchMode");
+    if (benchModeElem) benchModeElem.checked = data.benchMode || false;
+
     // Aggressive implies basic - lock the basic checkbox while aggressive is on.
     if (canSleepElem && canSleepAggrElem) {
       canSleepElem.disabled = canSleepAggrElem.checked;
@@ -384,6 +389,20 @@ async function refreshStatus() {
 
     setStatusPill("diagChassisCAN", chassisOk, "Healthy", "Unhealthy");
     setStatusPill("diagHaldexCAN", haldexOk, "Healthy", "Unhealthy");
+
+    // Bench Mode can only be switched while genuinely off-vehicle (both buses
+    // silent) - on top of the firmware's own clear-on-CAN latch, this stops it
+    // being flipped on by mistake while harnessed to a live car.
+    const benchModeElem = document.getElementById("benchMode");
+    const benchModeStatus = document.getElementById("benchModeStatus");
+    const canDetected = !!(chassisOk || haldexOk);
+    if (benchModeElem) benchModeElem.disabled = canDetected;
+    if (benchModeStatus) {
+      benchModeStatus.textContent = canDetected
+        ? "Locked - CAN traffic seen, so this unit is harnessed (sleep behaves normally)"
+        : "Available - no CAN on either bus";
+      benchModeStatus.style.color = canDetected ? "var(--text-dim)" : "var(--success)";
+    }
     document.getElementById("diagThrottle").textContent = displayValue(
       data.throttle,
     );
@@ -991,6 +1010,7 @@ function initSettings() {
     "dangerZoneEnabled",
     "canSleepEnabled",
     "canSleepAggressive",
+    "benchMode",
     "liveDiagEnabled",
     "lockReleaseEnabled",
     "steeringScaleEnabled",
@@ -2002,6 +2022,278 @@ function initOtaPage() {
   loadInfo();
   loadSafety();
   setInterval(loadSafety, 3000);
+}
+
+// ---------------------------------------------------------------------------
+// Home WiFi (bridge mode) card - PR #39 (louij2), ported. The controller joins
+// a home/garage network as a station alongside its own AP. Status is polled
+// because association takes a few seconds after a save or restart.
+// ---------------------------------------------------------------------------
+function initWifiSta() {
+  const ssidInput = document.getElementById("wifiStaSsidInput");
+  const ssidList = document.getElementById("wifiStaSsidList");
+  const scanBtn = document.getElementById("wifiStaScan");
+  const pwInput = document.getElementById("wifiStaPasswordInput");
+  const pwToggle = document.getElementById("wifiStaPasswordToggle");
+  const status = document.getElementById("wifiStaStatus");
+  const btnSave = document.getElementById("wifiStaSave");
+  const btnReset = document.getElementById("wifiStaReset");
+  if (!ssidInput || !pwInput || !status || !btnSave || !btnReset) return;
+
+  // Unsaved edits in either field hold the periodic refresh off the SSID box,
+  // so typing is never clobbered - including after tabbing into the password.
+  let userEditing = false;
+  ssidInput.addEventListener("input", () => { userEditing = true; });
+  pwInput.addEventListener("input", () => { userEditing = true; });
+
+  const signalQuality = (rssi) => (rssi >= -50 ? "excellent" : rssi >= -60 ? "good" : rssi >= -70 ? "fair" : "weak");
+
+  function renderStatus(d) {
+    if (!d || !d.ssid) {
+      status.textContent = "Disabled - AP only";
+      status.style.color = "var(--text-dim)";
+    } else if (d.connected) {
+      const sig = typeof d.rssi === "number" ? " (" + signalQuality(d.rssi) + " signal, " + d.rssi + " dBm)" : "";
+      status.textContent = "✓ Connected to “" + d.ssid + "”" + sig + " - reachable at http://" + d.ip + "/ and http://openhaldex.local/";
+      status.style.color = "var(--success)";
+    } else {
+      status.textContent = "Configured for “" + d.ssid + "” - not connected (out of range, or still trying)";
+      status.style.color = "var(--text-dim)";
+    }
+  }
+
+  function refresh() {
+    fetchJson("/api/wifi/sta").then((d) => {
+      if (!d) return;
+      if (!userEditing) ssidInput.value = d.ssid || "";
+      renderStatus(d);
+    });
+  }
+  refresh();
+  setInterval(refresh, 5000);
+
+  if (pwToggle) pwToggle.addEventListener("click", () => {
+    const hidden = pwInput.type === "password";
+    pwInput.type = hidden ? "text" : "password";
+    pwToggle.textContent = hidden ? "🙈" : "👁";
+  });
+
+  // Network scan: explicit button, never automatic - the single radio leaves
+  // the AP's channel for the scan. The device runs it asynchronously; poll
+  // until the list is back (a few seconds).
+  if (scanBtn) scanBtn.addEventListener("click", async () => {
+    scanBtn.disabled = true;
+    const prev = ssidInput.placeholder;
+    ssidInput.placeholder = "Scanning…";
+    let resp = null;
+    for (let i = 0; i < 12; i++) {
+      resp = await fetchJson("/api/wifi/scan");
+      if (resp && !resp.scanning) break;
+      await new Promise((r) => setTimeout(r, 700));
+    }
+    ssidInput.placeholder = prev;
+    scanBtn.disabled = false;
+    if (!resp || !Array.isArray(resp.networks)) { showNotification("Scan failed", "error"); return; }
+    if (ssidList) {
+      ssidList.innerHTML = "";
+      resp.networks.forEach((n) => {
+        const o = document.createElement("option");
+        o.value = n.ssid;
+        o.textContent = n.ssid + (n.secure ? " 🔒" : "") + " (" + n.rssi + " dBm)";
+        ssidList.appendChild(o);
+      });
+    }
+    showNotification(resp.networks.length + " network" + (resp.networks.length === 1 ? "" : "s") + " found - pick from the list");
+    ssidInput.focus();
+  });
+
+  btnSave.addEventListener("click", async () => {
+    const ssid = ssidInput.value.trim();
+    const pwd = pwInput.value;
+    if (ssid.length > 32) { showNotification("SSID too long (max 32)", "error"); return; }
+    if (pwd.length > 0 && pwd.length < 8) { showNotification("Password must be at least 8 characters, or blank", "error"); return; }
+    const resp = await fetchJson("/api/wifi/sta", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ssid: ssid, password: pwd }),
+    });
+    if (!resp) { showNotification("Failed to reach device", "error"); return; }
+    if (!resp.ok) { showNotification(resp.error || "Failed to save", "error"); return; }
+    userEditing = false;
+    pwInput.value = "";
+    if (ssid) {
+      status.textContent = "Connecting to “" + ssid + "”… (the AP restarts - reconnect if you drop off)";
+      status.style.color = "var(--text-dim)";
+      showNotification("Home WiFi saved - connecting…");
+    } else {
+      status.textContent = "Disabled - AP only";
+      showNotification("Bridge mode disabled");
+    }
+  });
+
+  btnReset.addEventListener("click", async () => {
+    const resp = await fetchJson("/api/wifi/sta/reset", { method: "POST" });
+    if (!resp || !resp.ok) { showNotification("Failed to disable", "error"); return; }
+    userEditing = false;
+    ssidInput.value = "";
+    pwInput.value = "";
+    status.textContent = "Disabled - AP only";
+    status.style.color = "var(--text-dim)";
+    showNotification("Bridge mode disabled");
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Backup & Restore card - PR #39 (louij2), ported and widened to everything
+// this firmware's /api/settings accepts back. The device already ignores keys
+// it doesn't know, so the list below is only there to keep out the entries
+// that are actions or would change what the controller is doing right now
+// (frame-edit commands, the SavvyCAN analyser toggles).
+// ---------------------------------------------------------------------------
+const BACKUP_GENERAL_KEYS = [
+  "haldexGeneration", "isStandalone", "useCANifAvailable", "broadcastOpenHaldexOverCAN", "disableController",
+  "disengageUnderSpeed", "disengageAboveSpeed", "disableThrottle",
+  "tcForceMode", "tcForceModeValue", "hazardForceMode", "hazardForceModeValue",
+  "extButtonForceMode", "extBtnForceModeValue", "disableOnboardButton", "disableExternalButton",
+  "followBrake", "invertBrake", "followHandbrake", "invertHandbrake",
+  "fixHunting", "dangerZoneEnabled", "esp14MinFloorPct", "bpkCeilingNm",
+  "steeringScaleEnabled", "liveDiagEnabled", "ledBrightness",
+  "canSleepEnabled", "canSleepAggressive", "benchMode", "lpWakeThresholdFps",
+  "longLearnNotes",
+];
+
+function initBackupRestore() {
+  const btnExport = document.getElementById("backupExport");
+  const btnImport = document.getElementById("backupImportBtn");
+  const fileInput = document.getElementById("backupImportFile");
+  const status = document.getElementById("backupStatus");
+  const pwSection = document.getElementById("backupPwSection");
+  const pwInput = document.getElementById("backupPwInput");
+  const pwApply = document.getElementById("backupPwApply");
+  const staPwSection = document.getElementById("backupStaPwSection");
+  const staPwInput = document.getElementById("backupStaPwInput");
+  const staPwApply = document.getElementById("backupStaPwApply");
+  if (!btnExport || !btnImport || !fileInput || !status) return;
+
+  const setStatus = (msg, ok) => { status.textContent = msg; status.style.color = ok ? "var(--success)" : "var(--danger)"; };
+  const post = (url, body) => fetchJson(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+  btnExport.addEventListener("click", async () => {
+    setStatus("Exporting…", true);
+    const [settings, ssidData, pwData, staData] = await Promise.all([
+      fetchJson("/api/settings"), fetchJson("/api/wifi/ssid"), fetchJson("/api/wifi"), fetchJson("/api/wifi/sta"),
+    ]);
+    if (!settings) { setStatus("Export failed - couldn't reach the device", false); return; }
+    const stamp = new Date().toISOString();
+    const backup = {
+      _product: "OpenHaldex-C6",
+      _exportedAt: stamp,
+      _fwVersion: settings.FW_VERSION,
+      settings: settings,
+      wifi: { ssid: ssidData ? ssidData.ssid : null, passwordSet: !!(pwData && pwData.passwordSet) },
+      wifiSta: { ssid: staData && staData.ssid ? staData.ssid : null, passwordSet: !!(staData && staData.passwordSet) },
+    };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "openhaldex-backup-" + stamp.replace(/[:.]/g, "-") + ".json";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    setStatus("Exported ✓ " + stamp, true);
+    showNotification("Config exported");
+  });
+
+  btnImport.addEventListener("click", () => fileInput.click());
+
+  fileInput.addEventListener("change", async () => {
+    const file = fileInput.files[0];
+    if (!file) return;
+    if (pwSection) pwSection.style.display = "none";
+    if (staPwSection) staPwSection.style.display = "none";
+    setStatus("Reading " + file.name + "…", true);
+    let backup;
+    try { backup = JSON.parse(await file.text()); } catch (e) {
+      setStatus("Not a valid backup file (bad JSON)", false); fileInput.value = ""; return;
+    }
+    const s = backup.settings || {};
+    if (!Array.isArray(s.throttleArray) || !Array.isArray(s.speedArray) || !Array.isArray(s.lockArray)) {
+      setStatus("Backup file is missing the tune table", false); fileInput.value = ""; return;
+    }
+    if (!confirm("Restore settings from " + file.name + (backup._fwVersion ? " (exported from v" + backup._fwVersion + ")" : "") +
+      "?\n\nThis replaces the Expert tune, steering scale, frame edits and settings on the controller.")) { fileInput.value = ""; return; }
+
+    // 1. Generation first, so the frame-edit mask below lands on the right table.
+    if (typeof s.haldexGeneration === "number") await post("/api/settings", { haldexGeneration: s.haldexGeneration });
+
+    // 2. Tune table (+ steering scale if the backup has it).
+    setStatus("Restoring Expert tune…", true);
+    const tune = { throttleArray: s.throttleArray, speedArray: s.speedArray, lockArray: s.lockArray };
+    if (Array.isArray(s.steeringArray) && Array.isArray(s.steeringLockScaleArray)) {
+      tune.steeringArray = s.steeringArray;
+      tune.steeringLockScaleArray = s.steeringLockScaleArray;
+    }
+    const tuneResp = await post("/api/tune", tune);
+    if (!tuneResp || !tuneResp.ok) { setStatus("Failed to restore the tune table - is the device reachable?", false); fileInput.value = ""; return; }
+
+    // 3. General settings.
+    setStatus("Restoring settings…", true);
+    const general = {};
+    BACKUP_GENERAL_KEYS.forEach((k) => { if (k in s) general[k] = s[k]; });
+    await post("/api/settings", general);
+
+    // 4. Frame edits for this generation, one bit at a time (that's the API).
+    if (Array.isArray(s.frameBlocks)) {
+      for (const fb of s.frameBlocks) {
+        if (typeof fb.bit === "number" && typeof fb.enabled === "boolean") {
+          await post("/api/settings", { frameEditBit: fb.bit, frameEditOn: fb.enabled });
+        }
+      }
+    }
+
+    // 5. WiFi identity (names only - passwords are never in the file).
+    const wifi = backup.wifi || {};
+    if (wifi.ssid) await post("/api/wifi/ssid", { ssid: wifi.ssid });
+    const wifiSta = backup.wifiSta || {};
+    if (wifiSta.ssid) await post("/api/wifi/sta", { ssid: wifiSta.ssid, password: "" });
+
+    const needsApPw = !!(wifi.passwordSet && pwSection);
+    const needsStaPw = !!(wifiSta.passwordSet && staPwSection);
+    if (needsApPw) pwSection.style.display = "";
+    if (needsStaPw) staPwSection.style.display = "";
+    if (needsApPw || needsStaPw) {
+      setStatus("Tune + settings restored ✓. Enter the password(s) below to finish.", true);
+    } else {
+      setStatus("Restored ✓ - reload the page to see the new values.", true);
+      showNotification("Config imported");
+    }
+    fileInput.value = "";
+  });
+
+  if (pwApply) pwApply.addEventListener("click", async () => {
+    const pwd = pwInput.value;
+    if (pwd.length > 0 && pwd.length < 8) { setStatus("Password must be at least 8 characters (or blank for an open network)", false); return; }
+    const resp = await post("/api/wifi", { password: pwd });
+    if (!resp || !resp.ok) { setStatus("Failed to apply the AP password", false); return; }
+    pwInput.value = "";
+    pwSection.style.display = "none";
+    setStatus("Restored ✓ - the AP is restarting, reconnect to WiFi…", true);
+    showNotification("Config imported");
+  });
+
+  if (staPwApply) staPwApply.addEventListener("click", async () => {
+    const pwd = staPwInput.value;
+    if (pwd.length > 0 && pwd.length < 8) { setStatus("Home WiFi password must be at least 8 characters (or blank for an open network)", false); return; }
+    const cur = await fetchJson("/api/wifi/sta");
+    const ssid = cur && cur.ssid ? cur.ssid : "";
+    const resp = await post("/api/wifi/sta", { ssid: ssid, password: pwd });
+    if (!resp || !resp.ok) { setStatus("Failed to apply the home WiFi password", false); return; }
+    staPwInput.value = "";
+    staPwSection.style.display = "none";
+    setStatus("Restored ✓ - connecting to home WiFi…", true);
+    showNotification("Config imported");
+  });
 }
 
 function showNotification(message, type = "success") {
