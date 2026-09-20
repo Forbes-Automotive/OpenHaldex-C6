@@ -1,0 +1,74 @@
+{
+  "product": "OpenHaldex-C6",
+  "latest": "9.00.0",
+  "releases": [
+    {
+      "version": "9.00.0",
+      "channel": "stable",
+      "date": "2026-09-20",
+      "ota": true,
+      "notes": "Forbes Automotive UI theme, OTA tab, Long Learn, Gen5 (0CQ VAQ) fixes, PQ handbrake from CAN, Home WiFi bridge mode, Backup & Restore, Bench Mode.",
+      "firmware": {
+        "path": "V9.00.0/firmware.bin",
+        "size": 1337600,
+        "sha256": "5c2a728695baed62cb6a5cecb89c7dabb1a243b0ad6b4d7036cfd8a446eee77d"
+      },
+      "filesystem": {
+        "path": "V9.00.0/littlefs.bin",
+        "size": 720896,
+        "sha256": "e5ece1f57b5299a0c0cc748d20ba8c51ffd56f907de26690a3de633293ecfead"
+      }
+    },
+    {
+      "version": "8.00.3",
+      "channel": "stable",
+      "date": "2026-07-09",
+      "ota": true,
+      "notes": "Add/remove CAN signals when the learn isn't clean, bus recovery fix, TP2.0 (1K0 554C) and 0CQ 554C/D UDS scaling, force-mode UI tidy.",
+      "firmware": {
+        "path": "V8.00.3/firmware.bin",
+        "size": 1258688,
+        "sha256": "16c294dc846d74d4e247c4f3110a79725cafd17740cb00f792d05bb6561b58af"
+      },
+      "filesystem": {
+        "path": "V8.00.3/littlefs.bin",
+        "size": 720896,
+        "sha256": "1f577c386cf1d96effbb52a4fd8d80089df364921d9241323746cea1f90f80b8"
+      }
+    },
+    {
+      "version": "8.00.2",
+      "channel": "stable",
+      "date": "2026-06-30",
+      "ota": true,
+      "notes": "Fix TC / hazards not re-enabling stock mode.",
+      "firmware": {
+        "path": "V8.00.2/firmware.bin",
+        "size": 1248064,
+        "sha256": "33d6c7958c42010d627d128b66abd4cff9c1006b58b1773a3167c287b54404de"
+      },
+      "filesystem": {
+        "path": "V8.00.2/littlefs.bin",
+        "size": 720896,
+        "sha256": "29424343a4ea0ce749186f26c528fc03f99309de14b2586dc51944f9928f9cea"
+      }
+    },
+    {
+      "version": "8.00.1",
+      "channel": "stable",
+      "date": "2026-06-13",
+      "ota": true,
+      "notes": "Fix password and SSID change.",
+      "firmware": {
+        "path": "V8.00.1/firmware.bin",
+        "size": 1248064,
+        "sha256": "ffc7d4310fb747c4a47acf1213cd348dcc7dbdd4f2a8bebf41579d4af37d20bf"
+      },
+      "filesystem": {
+        "path": "V8.00.1/littlefs.bin",
+        "size": 720896,
+        "sha256": "3855ea567436b38a53720b9d81d806f7ac4eb2f5a4f6b5ec6fe51c917929dcdd"
+      }
+    }
+  ]
+}
