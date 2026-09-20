@@ -42,6 +42,21 @@ static bool rollbackPending = false;
 static bool webServedOk = false;
 #define OTA_CONFIRM_UPTIME_MS 60000UL // confirm after 60s of uptime even if no client connected
 
+// Last time any polled UI endpoint was hit (see otaWebClientActive). The
+// dashboard polls every 500 ms and the OTA page every 3 s, so 30 s of silence
+// means the browser really has gone away, not just paused between polls.
+static volatile uint32_t lastWebActivityMs = 0;
+#define OTA_WEB_ACTIVE_WINDOW_MS 30000UL
+
+void otaNoteWebActivity() {
+  lastWebActivityMs = millis();
+}
+
+bool otaWebClientActive() {
+  if (otaUpdateInProgress) return true;
+  return lastWebActivityMs != 0 && (millis() - lastWebActivityMs) < OTA_WEB_ACTIVE_WINDOW_MS;
+}
+
 // Optional integrity check: the uploader (guided OTA) passes the expected
 // SHA-256 as ?sha256=<64 hex>; the handler hashes chunks as they arrive and
 // refuses to activate the image on mismatch. Manual uploads with no hash are
@@ -202,6 +217,7 @@ bool needsFirmwareConfirmation() {
 //        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
 
 void handleOTAUpdate(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
+  otaNoteWebActivity();
   // SAFETY CHECK: Block update if system is not safe
   if (!isSystemSafeForOTA()) {
     if (index == 0) {
@@ -312,6 +328,7 @@ void handleOTAUpdate(AsyncWebServerRequest *request, String filename, size_t ind
 // as the firmware path. Used by the OTA page "Filesystem (web UI)" option.
 // ============================================================================
 void handleFSUpdate(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
+  otaNoteWebActivity();
   // SAFETY CHECK: Block update if system is not safe
   if (!isSystemSafeForOTA()) {
     if (index == 0) {
@@ -409,6 +426,7 @@ void setupOTA() {
     }
 
     webServedOk = true; // a client reached the UI on this image - see otaRollbackTick()
+    otaNoteWebActivity();
 
     String json = "{";
     json += "\"version\":\"" + String(FW_VERSION) + "\",";
@@ -432,6 +450,7 @@ void setupOTA() {
   // now contains. The guided OTA calls this after the filesystem upload and
   // only proceeds to the firmware step if the version matches the release.
   webServer.on("/ota/fsinfo", HTTP_GET, [](AsyncWebServerRequest *request) {
+    otaNoteWebActivity();
     if (otaUpdateInProgress) {
       request->send(409, "application/json", "{\"ok\":false,\"error\":\"update in progress\"}");
       return;
@@ -457,6 +476,7 @@ void setupOTA() {
   // SAFETY-CRITICAL: Safety check endpoint
   webServer.on("/ota/check", HTTP_GET, [](AsyncWebServerRequest *request) {
     // Status only - never force the mode just because the page polled us.
+    otaNoteWebActivity();
     bool safe = isSystemSafeForOTA(false);
     String json = "{";
     json += "\"allowed\":" + String(safe ? "true" : "false") + ",";

@@ -2,7 +2,7 @@
 #include <OpenHaldexC6_defs.h>
 
 // Current firmware version
-#define FW_VERSION "9.00.0" // web UI now auto cache-busts via %FW_VERSION% (no manual .html edit needed)
+#define FW_VERSION "9.00.0" // also bump data/version.json ("fs") and the ?v= cache-busters in data/index.html
 
 /*
 Version Control:
@@ -63,10 +63,9 @@ V8.00.3 - added drop-down options for adding/removing CAN signals if learn isn't
         - added new scaling for UDS - 0CQ 554C/D - proven on bench and logged with VCDS
         - minor lock tweaks on 0CQ to target 100% cleaner
 
-        V8.00.4 - shared Forbes Automotive UI theme; added an OTA tab (safety-gated
-          /ota endpoints kept); automatic product web-asset cache-nosave.
-
-        V8.00.5 - Long Learn (Settings): automated frame-block learning:
+V9.00.0 - shared Forbes Automotive UI theme; automatic product web-asset
+          cache-nosave; OTA tab (see below).
+        - Long Learn (Settings): automated frame-block learning:
           all blocks on, (Gen5) Launch PWM Floor stepped until the learn is smooth, then each
           additional block removed one at a time (any effect = kept on, else off),
           confirmation learn on the final set, live tracker, chassis notes and a
@@ -75,13 +74,6 @@ V8.00.3 - added drop-down options for adding/removing CAN signals if learn isn't
           skipped by the normal-mode frame editor (frames never ran for VAQ).
         - Reset-to-Defaults confirmed (0CQ default keeps the
           8.00.3 Motor_14/ESP_07 opt-in, not the V7 10-block set).
-        - OTA tab: the GitHub "Check for Updates" flow was tried and dropped.
-          Phones won't reliably keep mobile data while joined to a WiFi with no
-          internet, so a page-driven download from GitHub can't be relied on.
-          OTA is the plain Can2Cluster-style card: user downloads littlefs.bin +
-          firmware.bin from Releases/ themselves, uploads filesystem then
-          firmware. Releases/releases.json and the index half of
-          tools/make_release.py removed; /ota endpoints unchanged.
         - AP no longer hands out a default gateway/DNS (local-only network).
         - startSoftAP() now reports the address the AP actually came up on
           instead of a hardcoded "192.168.1.1", and logs a rejected softAPConfig.
@@ -120,6 +112,30 @@ V8.00.3 - added drop-down options for adding/removing CAN signals if learn isn't
           > Bug fix from the PR: "Enable CAN Sleep" only ever gated the CPU
             frequency scaling, never the WiFi shutdown in updateTriggers(),
             so switching it off did nothing visible. Now gates both.
+        - OTA tab (safety-gated /ota endpoints kept): "Check for updates" from
+          GitHub. An earlier attempt was dropped because phones won't keep
+          mobile data on a WiFi with no internet; bridge mode fixes that by
+          giving the phone a route to the internet AND the controller at the
+          same time (controller on the home router, phone on the same network).
+          Every check pings /ota/info first - no GitHub fetch unless the
+          controller is reachable - and a no-internet result reads
+          /api/wifi/sta to say exactly what to do: join the network the
+          controller is already on (with its address), fix a configured-but-
+          dropped link, or set one up in the Home WiFi card, which is
+          duplicated on the OTA tab (initWifiSta() takes an id prefix). Retry
+          button + "Set up Home WiFi" jump.
+        - Release list = Releases/releases.json 
+        - Rollback allowed (tick "Show
+          beta / older versions"); the confirm warns that older releases may
+          not have this page. Option 2 (install from files already on the
+          phone, content-sniffed) kept for no-internet installs; the manual
+          single-file upload card stays as "Manual Upload".
+        - Low-power AP shutdown now also holds off while a browser is polling
+          the UI (otaWebClientActive(): /api/dashboard, /api/wifi/sta, /ota/*
+          within 30 s, or an upload in progress). Before, only stations joined
+          to our own AP counted, so a phone working through the home router on
+          the bench (Bench Mode off) could have WiFi cut from under it mid-OTA.
+        - both ?v= cache-busters in index.html track FW_VERSION (style.css's was stuck at 8.00.5).
 
 */
 

@@ -1,6 +1,7 @@
 #include <OpenHaldexC6_IO.h>
 #include <OpenHaldexC6_can.h>
 #include <OpenHaldexC6_WiFi.h>
+#include <OpenHaldexC6_OTA.h> // otaWebClientActive(): bridge-mode browsers hold WiFi up
 
 // Low-power state: 
 //   WATCHING = WiFi Active, Normal IO
@@ -319,7 +320,12 @@ void updateTriggers(void *arg)
         }
       }
 
-      const bool noClients = (WiFi.softAPgetStationNum() == 0) && (WiFi.getMode() != WIFI_OFF);
+      // "No clients" = nobody joined to our AP AND no browser polling the UI.
+      // The second half covers a phone/laptop reaching us through the home
+      // router (bridge mode), which softAPgetStationNum() can't see - without
+      // it the controller could switch WiFi off in the middle of an OTA update
+      // done over the bridge on the bench. An upload in progress always holds.
+      const bool noClients = (WiFi.softAPgetStationNum() == 0) && (WiFi.getMode() != WIFI_OFF) && !otaWebClientActive();
       // Standalone: Haldex fps >= fixed 50 fps threshold.
       // OEM: chassis fps >= lpWakeThresholdFps (UI slider, default 50).
       const bool canActive = isStandalone ? (lpHaldexFps >= 50U)

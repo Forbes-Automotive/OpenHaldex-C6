@@ -35,7 +35,9 @@ The firmware runs on an **ESP32‑C6** and reads CAN bus messages from the vehic
 
 It can operate using OEM CAN signals or it is able to run in Standalone mode - which makes it perfect for conversions!
 
-![OpenHaldex-C6](/Images/openHaldexUI.png)
+![OpenHaldex-C6 Web UI — dashboard, Basic, Expert, Learn, live data, Long Learn, diagnostics and OTA](/Images/openHaldexUI.png)
+
+![OpenHaldex-C6 Web UI — force modes, controller options, steering scale, frame editing, live diagnostics, bridge mode and backup](/Images/openHaldexUI-2.png)
 
 ## Contents
 
@@ -146,15 +148,15 @@ The controller provides several preset modes along with a fully customisable 'Ex
 <p align="center">
   <img src="/Images/ui-dashboard.png" alt="Dashboard — mode selection and Haldex engagement gauge" width="300">
   &nbsp;&nbsp;
-  <img src="/Images/ui-live-data.png" alt="Dashboard — live speed, throttle, RPM and boost" width="300">
+  <img src="/Images/ui-live-data.png" alt="Dashboard — live speed, throttle, RPM, boost and per-wheel slip" width="300">
 </p>
 
-*Dashboard: pick a mode, watch the engagement gauge follow the request, and keep an eye on the live data underneath.*
+*Dashboard: pick a mode, watch the engagement gauge follow the request (with the last 15 s of actual vs target underneath), and keep an eye on the live data and wheel slip further down the page.*
 
-The **Basic** tab holds the simple guards that apply to every mode — disengage below or above a speed, and a minimum throttle before any lock is applied:
+The **Basic** tab holds the simple guards that apply to every mode — disengage below or above a speed, a minimum throttle before any lock is applied, and how quickly lock is released:
 
 <p align="center">
-  <img src="/Images/ui-basic.png" alt="Basic tab — disengage speeds and minimum throttle" width="300">
+  <img src="/Images/ui-basic.png" alt="Basic tab — disengage speeds, minimum throttle and lock release rate" width="300">
 </p>
 
 ---
@@ -167,6 +169,14 @@ Expert mode allows lock targets to be configured based on **speed and throttle s
 
 *Expert mode grid configuration interface within the OpenHaldex-C6 UI.*
 
+The rest of the **Expert** tab draws the same table as a lock-map surface, and adds an optional **Steering-Angle Lock Scale** — a five-point curve that trims the commanded lock as steering-wheel angle increases (full lock straight ahead, FWD bias in tight turns). It applies to Gen2, Gen4 and Gen5 (0CQ/VAQ) and to every mode, not just Expert:
+
+<p align="center">
+  <img src="/Images/ui-expert.png" alt="Expert tab — editor grid, lock map surface and steering-angle lock scale" width="300">
+  &nbsp;&nbsp;
+  <img src="/Images/ui-steering-scale.png" alt="Expert tab — steering-angle lock scale curve" width="300">
+</p>
+
 ---
 
 ## Haldex Learning
@@ -176,12 +186,10 @@ Allow the controller to learn *your* Haldex by replacing the original methodolog
 Use the 'Learn Haldex' in the Settings page and within one minute the controller will learn how to get EXACTLY the lock percentage you request.  No more approximations, just exact values.
 
 <p align="center">
-  <img src="/Images/ui-settings.png" alt="Settings — Haldex generation and controller options" width="300">
-  &nbsp;&nbsp;
-  <img src="/Images/ui-learn.png" alt="Settings — Learn Haldex" width="300">
+  <img src="/Images/ui-settings.png" alt="Settings — Haldex generation and the Learn Haldex card with Fix Hunting" width="300">
 </p>
 
-*Settings: pick the Haldex generation and controller options (left); Learn Haldex, Long Learn and the Gen 5 calibration live further down the same page (right).*
+*Settings: pick the Haldex generation, then run **Learn Haldex**. The card reports whether a learned table is active and carries the Gen5 **Fix Hunting** toggle described below.*
 
 ### Long Learn (automated block bisection)
 
@@ -195,6 +203,12 @@ If a normal learn isn't clean (jumps, plateaus, never reaches 100%), **Long Lear
 Expect 10–20 minutes with the car running and Haldex CAN active. The tracker shows the current phase, sweep count, the block under test, the current floor and torque ceiling, the reference score and the live Sent/Returned bars. Cancelling (or losing Haldex data during the Initial Sweep or Confirmation phases) restores the blocks, floor, torque ceiling, Fix Hunting toggle and learn table that were in place before the run.
 
 Below the tracker, a **Chassis / car notes** box (saved on the unit) and **Export report (.txt)** produce a plain-text record of the car, calibration values, the recommended block set (as a checklist plus the raw mask), the full sweep log and the stored learn table — handy for sharing a known-good layout for a given chassis.
+
+<p align="center">
+  <img src="/Images/ui-long-learn.png" alt="Settings — Long Learn card with notes and report export, and the Gen 5 Lock Calibration card" width="300">
+</p>
+
+*Settings: the Long Learn card (with the core-blocks option, notes and report export) and, beneath it, the **Gen 5 Lock Calibration** card — the torque ceiling (`Lock Calibration`) and `Launch PWM Floor` that Long Learn adjusts.*
 
 ### Gen5 'Fix Hunting'
 
@@ -230,6 +244,12 @@ Two optional force mode triggers are available via. CAN signals already present 
 - **TC button** — pressing the traction control button can also trigger force mode
 
 Both are optional and can be enabled in the Settings page. They allow mode changes from OEM controls without any additional wiring.
+
+<p align="center">
+  <img src="/Images/ui-mode-options.png" alt="Settings — Mode Options (TC / hazard / external button force modes and their priority) and Output Options (brake and handbrake follow)" width="300">
+</p>
+
+*Settings → **Mode Options**: each force-mode trigger has its own target mode, the external button can either advance or hold-to-force, and a priority order settles what happens when several triggers are active at once. **Output Options** underneath sets whether the brake and handbrake outputs follow (or invert) the inputs.*
 
 ---
 
@@ -313,6 +333,12 @@ From the **Diagnostics** page you can:
 If you are locked out or forget your password, **long-pressing the `Mode` button** will clear the WiFi password and restore the open AP. The SSID is preserved (use **Reset to Default** in the UI if you want to revert the name to `OpenHaldex-C6`).
 
 <p align="center">
+  <img src="/Images/ui-wifi.png" alt="Diagnostics — WiFi Name (SSID) and WiFi Password cards" width="300">
+</p>
+
+*Diagnostics: rename the access point and set or clear its WPA2 password.*
+
+<p align="center">
   <img src="/Images/UIDemo.png" alt="OpenHaldex C6 Web UI" width="900" style="max-width:100%;">
 </p>
 
@@ -392,6 +418,12 @@ Low Power Mode requires **one short calibration step** the first time, because e
 
 The controller will now sleep, drawing ~14 mA, and **wake automatically whenever the CAN frame rate rises above the threshold** — i.e. when you unlock or start the car.  The LED, CAN chips and CPU are all off/reduced.
 
+<p align="center">
+  <img src="/Images/ui-controller-options.png" alt="Settings — Controller Options card: CAN Sleep, CAN Sleep (Aggressive), Bench Mode, LP Wake Threshold with the live Chassis / Haldex frame rate, plus Broadcast over CAN, SavvyCAN and Live Diagnostics toggles" width="300">
+</p>
+
+*Settings → **Controller Options**: everything in this section lives on one card — the two CAN Sleep toggles, Bench Mode, the **LP Wake Threshold** slider with the live **Chassis / Haldex fps** readout beneath it — alongside Broadcast over CAN, the SavvyCAN outputs, Live Diagnostics and LED brightness.*
+
 > [!NOTE]
 > **Standalone mode:** with no chassis bus, the Haldex ECU itself sleeps fully, so any Haldex-bus CAN traffic wakes the module regardless of the slider value.
 
@@ -410,12 +442,16 @@ It's safe to leave on by accident: the moment either bus shows real traffic in a
 
 Optionally the controller can **also** join a home or garage WiFi network as a client (`WIFI_AP_STA`), so it's reachable at `openhaldex.local` — or its LAN address, shown on the card — from a phone or laptop that's already on that network, without switching WiFi to **OpenHaldex‑C6**. The controller's own access point keeps running either way; leave the field blank and nothing changes.
 
-Set it up on the **Diagnostics** tab under **Home WiFi (Bridge Mode)**: pick the network from the scan (or type a hidden one), enter its password, **Save & Apply**. The card then shows connection state and signal strength.
+Set it up on the **Diagnostics** tab under **Home WiFi (Bridge Mode)** (the same card is repeated on the **OTA** tab, because this is also how the phone gets internet for [Check for updates](#doing-it-from-the-ota-page)): pick the network from the scan (or type a hidden one), enter its password, **Save & Apply**. The card then shows connection state and signal strength.
+
+<p align="center">
+  <img src="/Images/ui-bridge-mode.png" alt="Diagnostics — Home WiFi (Bridge Mode) card, connected to a home network and showing its LAN address" width="300">
+</p>
 
 Two things worth knowing:
 
 - The ESP32‑C6 has **one radio** shared between its AP and the client side. A scan or a connection attempt pulls it off the AP's channel for a second or two. The controller therefore only looks for the home network for **20 s after starting**, then **once every 5 minutes** — so a saved home network can't keep interrupting the AP while the car is away from home.
-- Bridge mode doesn't change [Low Power Mode](#low-power-mode): with no CAN traffic and nobody on the AP, the controller still sleeps after five minutes (and drops off the home network). On the bench, use Bench Mode.
+- Bridge mode mostly doesn't change [Low Power Mode](#low-power-mode): with no CAN traffic and nobody using the controller, it still sleeps after five minutes (and drops off the home network). A browser that has the UI open through the router *does* count as "somebody" — it holds WiFi up the same way a phone joined to the AP does, so an update over the bridge can't be cut off. On the bench with nothing open, use Bench Mode.
 
 Endpoints: `GET/POST /api/wifi/sta` `{ssid, password}` (empty `ssid` disables) · `POST /api/wifi/sta/reset` · `GET /api/wifi/scan` (asynchronous — poll until `scanning` is false).
 
@@ -426,6 +462,10 @@ Endpoints: `GET/POST /api/wifi/sta` `{ssid, password}` (empty `ssid` disables) �
 A firmware + filesystem reflash can wipe the settings stored on the device, and nobody wants to re-type an Expert grid. **Diagnostics → Backup & Restore** exports the Expert tune, steering-angle lock scale, per-generation frame edits, every setting and the WiFi names to a JSON file, and imports them back in one go.
 
 WiFi passwords are **write-only** on the device and are never written to the file; after an import you're prompted once for any that were set.
+
+<p align="center">
+  <img src="/Images/ui-backup-restore.png" alt="Diagnostics — Backup & Restore card with Export Config and Import Config" width="300">
+</p>
 
 The same file format works from a computer with [`tools/openhaldex_config.py`](tools/openhaldex_config.py):
 
@@ -600,18 +640,27 @@ Other useful endpoints: `GET /ota/info` (current version, web‑UI version, chip
 
 ### Doing it from the OTA page
 
-1. On a phone or laptop with internet, download `littlefs.bin` and `firmware.bin` from the newest `V…` folder under [`Releases/`](Releases/) (use GitHub's **Download raw file** button).
-2. Connect to the **OpenHaldex‑C6** Wi‑Fi and open the **OTA** tab.
-3. **Update Type → Filesystem (web UI)**, pick `littlefs.bin`, **Upload**. The step tracker marks it done and switches to Firmware.
-4. **Update Type → Firmware (application)**, pick `firmware.bin`, **Upload**. The device reboots by itself; reconnect and reload the page.
+The **OTA** tab has three ways in, all ending in the same guided sequence (filesystem → verify → firmware → reboot) through the safety‑gated endpoints above. Nothing on the controller ever fetches from the internet; in every case it's the **browser** that gets the files and pushes them to the device.
 
-Nothing on the controller ever fetches from the internet — the phone needs a connection only for step 1, which can happen anywhere. Keep the page open and the screen on during each upload.
+**Option 1 — straight from GitHub.** The browser needs internet *while it can still reach the controller*. The reliable way to get that is [bridge mode](#home-wifi-bridge-mode): join the controller to your home/garage router (the **Home WiFi** card is repeated on the OTA tab for this), put the phone on the same network, and open the address the card shows. The phone keeps its normal internet and the controller is one hop away. On the bare **OpenHaldex‑C6** AP most phones drop mobile data, so that route is best‑effort.
+
+1. Press **Check for updates**. The page first pings the controller — if it can't be reached you get a **Retry** and told why (wrong network, or the controller has gone to sleep). Then it fetches the release list. With no internet it reads the controller's bridge status and says exactly what to do next: join the network the controller is already on (address included), fix a configured‑but‑dropped link, or **Set up Home WiFi** (jumps to the card).
+2. Pick a version. Newer stable releases are listed by default; tick **Show beta / older versions** to roll back. Rollback is allowed — the confirm warns that older releases may not have this page, so coming forward again could mean USB.
+3. **Install**. Each image is downloaded with a progress bar, uploaded with its published SHA‑256 (the device refuses a mismatch), the filesystem is verified, then the firmware goes in and the page waits for the reboot.
+
+Where the list comes from: [`Releases/releases.json`](Releases/releases.json) (notes, date, channel, `ota` flag, size and SHA‑256 per image — written by `tools/make_release.py`, which rescans every `Releases/V*/` folder; run it with `--reindex` after dropping a folder in by hand) merged with the `V*` folder listing from the GitHub API. A folder that isn't in the index yet still shows up, tagged *unverified* (no checksum, no notes); a folder deleted from GitHub disappears even if the index still lists it. `raw.githubusercontent.com` is tried first, then the jsDelivr mirror of the same repo.
+
+**Option 2 — from files already on the phone, no internet needed.** Somewhere with signal, download `littlefs.bin` and `firmware.bin` from the newest `V…` folder under [`Releases/`](Releases/) (GitHub's **Download raw file** button). Back on the controller's WiFi, pick both files in one go — each is identified by its contents, not its name — and **Install picked files** runs the same sequence.
+
+**Manual Upload** — the original one‑file‑at‑a‑time card: **Filesystem (web UI)** → `littlefs.bin`, then **Firmware (application)** → `firmware.bin`. The step tracker keeps its place across the reboot.
+
+Keep the page open and the screen on during an install. While a browser is on the UI — including through the home router — the controller won't switch WiFi off for [Low Power Mode](#low-power-mode), and never while an upload is being written.
 
 <p align="center">
-  <img src="/Images/ui-ota.png" alt="OTA tab — device information and the update safety gate" width="300">
+  <img src="/Images/ui-ota.png" alt="OTA tab — device information, the update safety gate and the two-step filesystem / firmware uploader" width="300">
 </p>
 
-*OTA tab: the running firmware, and the safety gate that has to read **Allowed** before an upload is accepted.*
+*OTA tab: the running firmware, the safety gate that has to read **Allowed** before an upload is accepted, and the two-step uploader (Filesystem first, then Firmware).*
 
 > [!NOTE]
 > USB via ESP Web‑Tools (above) remains the recommended method for a controller's **first** flash or for recovering from a failed update; OTA is for updating a controller that's already running.
@@ -631,10 +680,10 @@ Throughout the Web UI — Diagnostics, CAN health, force‑mode sources, and sim
 This applies to items such as Chassis/Haldex CAN health, steering health, ASR/TC status, hazard and brake/handbrake inputs, and the OTA safety banner (`SAFE` in green / `NOT SAFE` in red).
 
 <p align="center">
-  <img src="/Images/ui-diagnostics.png" alt="Diagnostics tab — CAN status pills and system info" width="300">
+  <img src="/Images/ui-diagnostics.png" alt="Diagnostics tab — CAN status pills, CAN information (mode, force-mode sources, steering, ASR/TC, hazards), brake / handbrake signals and system info" width="300">
 </p>
 
-*Diagnostics: both CAN buses healthy, plus chip, CPU load, free heap and firmware at a glance.*
+*Diagnostics: both CAN buses healthy, the decoded chassis signals (steering health and angle, ASR/TC, hazards), the brake and handbrake input/output pills, plus chip, CPU load, free heap and firmware at a glance.*
 
 ---
 
@@ -718,6 +767,14 @@ The PQ‑platform controllers are diagnosed with **KWP2000 tunnelled over VW TP2
 
 Raw measuring‑block bytes are also exposed so any remaining values can be characterised.
 
+<p align="center">
+  <img src="/Images/ui-live-diag-uds.png" alt="Dashboard — UDS Data (MQB) card for Gen5: terminal voltage, module / clutch / fin temperatures, clutch current, PWM, voltage and blockage" width="300">
+  &nbsp;&nbsp;
+  <img src="/Images/ui-live-diag-kwp.png" alt="Dashboard — Live Data (TP2.0) card for Gen2 / Gen4: oil and plate temperature, supply voltage, oil pressure, estimated torque, clutch duty and valve current" width="300">
+</p>
+
+*Dashboard: with Live Diagnostics enabled the standard Haldex Data card is replaced by the **UDS Data (MQB)** card on Gen5 (left) or the **Live Data (TP2.0)** card on Gen2 / Gen4 (right).*
+
 > [!NOTE]
 > If VCDS or other scan tools will not connect, turn this setting off as it may not cleanly pick up the VCDS request so it does not block the tool.  Excessive CAN traffic can cause spurious dash errors.
 
@@ -733,6 +790,10 @@ From the **Diagnostics** page you can enable or disable OpenHaldex's editing of 
 - A **Reset to Defaults** button restores the generation's standard set.
 
 This is useful for **understanding** which edited frame upsets a Haldex learn procedure or causes fault codes, for tailoring behaviour on unusual vehicles, or for adding/removing specific signals during development.
+
+<p align="center">
+  <img src="/Images/ui-frame-editing.png" alt="Diagnostics — Frame Editing (Advanced) card listing each editable CAN frame for the selected generation as a toggle, with Reset to Defaults" width="300">
+</p>
 
 > [!NOTE]
 > Frame editing can apply to both 'Normal' and 'Standalone' modes and only to the currently selected generation.

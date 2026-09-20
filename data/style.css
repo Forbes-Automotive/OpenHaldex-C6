@@ -585,6 +585,58 @@ input[type="file"]::file-selector-button:hover { background: rgba(36, 209, 196, 
 .status-line { margin-top: 10px; font-size: 13px; color: var(--muted); }
 .status-line.error { color: var(--danger); }
 .status-line.ok { color: var(--ok); }
+/* Check for Updates card */
+.upd-beta { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; cursor: pointer; }
+.upd-notes {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-line;
+}
+.upd-notes:empty { display: none; }
+#updSteps { flex-wrap: wrap; }
+#updSteps .ota-step { flex: 1 1 140px; font-size: 12px; padding: 8px 10px; }
+#updState.upd-available { color: var(--accent-2); }
+#updState.upd-current { color: var(--ok); }
+#updState.upd-bad { color: var(--danger); }
+/* Update card: the two routes are separated by a subheading each */
+.upd-sub {
+  margin: 20px 0 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+/* Two-pass offline instructions */
+.upd-offline {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px 10px 30px;
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.upd-offline li { margin-bottom: 6px; }
+.upd-offline li:last-child { margin-bottom: 0; }
+.upd-offline code { font-size: 12px; }
+.upd-offline a, .status-line a, #updGoBridge { color: var(--accent); }
+/* One line per picked .bin, with the type detected from its contents */
+.upd-files { margin-bottom: 12px; }
+.upd-files:empty { display: none; }
+.upd-file {
+  font-size: 13px;
+  color: var(--ok);
+  padding: 4px 0;
+}
+.upd-file.bad { color: var(--warning); }
 .btn-primary {
   background: var(--panel-2);
   color: var(--accent);

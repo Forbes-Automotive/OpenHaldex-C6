@@ -2,6 +2,7 @@
 #include <OpenHaldexC6_UDS.h>
 #include <OpenHaldexC6_Calculations.h>
 #include <OpenHaldexC6_WiFi.h>
+#include <OpenHaldexC6_OTA.h> // otaNoteWebActivity()
 
 #include <cstring>
 #include <vector>    // /api/wifi/scan de-dup
@@ -868,7 +869,9 @@ void setupAPI()
 
     // GET /api/dashboard - retrieve live status data (polled regularly by JS)
     webServer.on("/api/dashboard", HTTP_GET, [](AsyncWebServerRequest *request)
-                 { statusOutgoing(request); });
+                 {
+                     otaNoteWebActivity(); // a browser is on the UI - hold WiFi up even if it came in via the home router
+                     statusOutgoing(request); });
 
     // GET /api/uds/read - UDS read-by-identifier helper
     webServer.on("/api/uds/read", HTTP_GET, [](AsyncWebServerRequest *request)
@@ -1211,6 +1214,7 @@ void setupAPI()
     // GET /api/wifi/sta - bridge-mode status. Password is write-only, never returned.
     webServer.on("/api/wifi/sta", HTTP_GET, [](AsyncWebServerRequest *request)
                  {
+                     otaNoteWebActivity();
                      JsonDocument resp;
                      resp["ssid"] = wifiStaSsid;
                      resp["passwordSet"] = (strlen(wifiStaPassword) >= 8);
