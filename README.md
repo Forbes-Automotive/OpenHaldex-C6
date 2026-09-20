@@ -141,6 +141,20 @@ The controller provides several preset modes along with a fully customisable 'Ex
 | 5050 | 100% lock | Blue |
 | Expert | User‑defined lock | White |
 
+<p align="center">
+  <img src="/Images/ui-dashboard.png" alt="Dashboard — mode selection and Haldex engagement gauge" width="300">
+  &nbsp;&nbsp;
+  <img src="/Images/ui-live-data.png" alt="Dashboard — live speed, throttle, RPM and boost" width="300">
+</p>
+
+*Dashboard: pick a mode, watch the engagement gauge follow the request, and keep an eye on the live data underneath.*
+
+The **Basic** tab holds the simple guards that apply to every mode — disengage below or above a speed, and a minimum throttle before any lock is applied:
+
+<p align="center">
+  <img src="/Images/ui-basic.png" alt="Basic tab — disengage speeds and minimum throttle" width="300">
+</p>
+
 ---
 
 ## Expert Mode
@@ -158,6 +172,14 @@ Expert mode allows lock targets to be configured based on **speed and throttle s
 Allow the controller to learn *your* Haldex by replacing the original methodology of approximating a lock percentage by cycling through all of the available lock percentages.  
 
 Use the 'Learn Haldex' in the Settings page and within one minute the controller will learn how to get EXACTLY the lock percentage you request.  No more approximations, just exact values.
+
+<p align="center">
+  <img src="/Images/ui-settings.png" alt="Settings — Haldex generation and controller options" width="300">
+  &nbsp;&nbsp;
+  <img src="/Images/ui-learn.png" alt="Settings — Learn Haldex" width="300">
+</p>
+
+*Settings: pick the Haldex generation and controller options (left); Learn Haldex, Long Learn and the Gen 5 calibration live further down the same page (right).*
 
 ### Long Learn (automated block bisection)
 
@@ -543,6 +565,12 @@ Other useful endpoints: `GET /ota/info` (current version, web‑UI version, chip
 
 Nothing on the controller ever fetches from the internet — the phone needs a connection only for step 1, which can happen anywhere. Keep the page open and the screen on during each upload.
 
+<p align="center">
+  <img src="/Images/ui-ota.png" alt="OTA tab — device information and the update safety gate" width="300">
+</p>
+
+*OTA tab: the running firmware, and the safety gate that has to read **Allowed** before an upload is accepted.*
+
 > [!NOTE]
 > USB via ESP Web‑Tools (above) remains the recommended method for a controller's **first** flash or for recovering from a failed update; OTA is for updating a controller that's already running.
 
@@ -559,6 +587,12 @@ Throughout the Web UI — Diagnostics, CAN health, force‑mode sources, and sim
 | 🟠 Orange | Unavailable — no value has been received for this field (e.g. not applicable to the selected Haldex generation, or data hasn't arrived yet) |
 
 This applies to items such as Chassis/Haldex CAN health, steering health, ASR/TC status, hazard and brake/handbrake inputs, and the OTA safety banner (`SAFE` in green / `NOT SAFE` in red).
+
+<p align="center">
+  <img src="/Images/ui-diagnostics.png" alt="Diagnostics tab — CAN status pills and system info" width="300">
+</p>
+
+*Diagnostics: both CAN buses healthy, plus chip, CPU load, free heap and firmware at a glance.*
 
 ---
 
