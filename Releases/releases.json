@@ -10,13 +10,13 @@
       "notes": "Forbes Automotive UI theme, OTA tab, Long Learn, Gen5 (0CQ VAQ) fixes, PQ handbrake from CAN, Home WiFi bridge mode, Backup & Restore, Bench Mode.",
       "firmware": {
         "path": "V9.00.0/firmware.bin",
-        "size": 1337600,
-        "sha256": "5c2a728695baed62cb6a5cecb89c7dabb1a243b0ad6b4d7036cfd8a446eee77d"
+        "size": 1337792,
+        "sha256": "a14549ef42201613d2b4ac69f4f94a7638a71520dc00b1691b12ced36fed19d3"
       },
       "filesystem": {
         "path": "V9.00.0/littlefs.bin",
         "size": 720896,
-        "sha256": "e5ece1f57b5299a0c0cc748d20ba8c51ffd56f907de26690a3de633293ecfead"
+        "sha256": "ed168098195b11c3c1e77f25c971855dc153c517911d453357a64bdf875e35a3"
       }
     },
     {
