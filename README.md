@@ -51,6 +51,8 @@ It can operate using OEM CAN signals or it is able to run in Standalone mode - w
 - [OTA Updates (Wi‑Fi)](#ota-updates-wi-fi)
 - [Status Indicators](#status-indicators)
 - [Low Power Mode](#low-power-mode)
+- [Home WiFi (Bridge Mode)](#home-wifi-bridge-mode)
+- [Backup & Restore](#backup--restore)
 - [CAN Sniffing](#can-sniffing-savvycan--gvret)
 - [Live Diagnostics](#live-diagnostics)
 - [Frame Editing](#frame-editing-addingremoving-can-signals)
@@ -395,6 +397,46 @@ The controller will now sleep, drawing ~14 mA, and **wake automatically whenever
 
 > [!NOTE]
 > **Switched-ignition installs:** if the module is already powered off with the ignition, Low Power Mode saves little and is optional.  
+
+### Bench Mode
+
+The board can't tell the difference between *harnessed to a car that's asleep* and *no harness at all* — both look like zero CAN traffic — so on the bench, with CAN Sleep on, the WiFi drops after five minutes mid-session. **Bench Mode** (Settings, under CAN Sleep) holds the WiFi up regardless.
+
+It's safe to leave on by accident: the moment either bus shows real traffic in a power cycle, Bench Mode stops applying and normal sleep resumes, so it can't weaken the parked-car battery protection once the unit is actually installed. The web UI also greys the toggle out while CAN is detected, so it can't be switched on while harnessed to a live car in the first place.
+
+---
+
+## Home WiFi (Bridge Mode)
+
+Optionally the controller can **also** join a home or garage WiFi network as a client (`WIFI_AP_STA`), so it's reachable at `openhaldex.local` — or its LAN address, shown on the card — from a phone or laptop that's already on that network, without switching WiFi to **OpenHaldex‑C6**. The controller's own access point keeps running either way; leave the field blank and nothing changes.
+
+Set it up on the **Diagnostics** tab under **Home WiFi (Bridge Mode)**: pick the network from the scan (or type a hidden one), enter its password, **Save & Apply**. The card then shows connection state and signal strength.
+
+Two things worth knowing:
+
+- The ESP32‑C6 has **one radio** shared between its AP and the client side. A scan or a connection attempt pulls it off the AP's channel for a second or two. The controller therefore only looks for the home network for **20 s after starting**, then **once every 5 minutes** — so a saved home network can't keep interrupting the AP while the car is away from home.
+- Bridge mode doesn't change [Low Power Mode](#low-power-mode): with no CAN traffic and nobody on the AP, the controller still sleeps after five minutes (and drops off the home network). On the bench, use Bench Mode.
+
+Endpoints: `GET/POST /api/wifi/sta` `{ssid, password}` (empty `ssid` disables) · `POST /api/wifi/sta/reset` · `GET /api/wifi/scan` (asynchronous — poll until `scanning` is false).
+
+---
+
+## Backup & Restore
+
+A firmware + filesystem reflash can wipe the settings stored on the device, and nobody wants to re-type an Expert grid. **Diagnostics → Backup & Restore** exports the Expert tune, steering-angle lock scale, per-generation frame edits, every setting and the WiFi names to a JSON file, and imports them back in one go.
+
+WiFi passwords are **write-only** on the device and are never written to the file; after an import you're prompted once for any that were set.
+
+The same file format works from a computer with [`tools/openhaldex_config.py`](tools/openhaldex_config.py):
+
+```
+python tools/openhaldex_config.py export backup.json
+python tools/openhaldex_config.py import backup.json
+python tools/openhaldex_config.py import backup.json --tune-only
+```
+
+Contributed in [PR #39](https://github.com/Forbes-Automotive/OpenHaldex-C6/pull/39) by louij2, along with Bench Mode and bridge mode.
+
 ---
 
 ## Installation
