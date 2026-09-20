@@ -1,7 +1,7 @@
 /*
 OpenHaldex-C6 - Forbes Automotive
 Haldex Controller for Gen1, Gen2, Gen4 and Gen5 Haldex Controllers
-Version: 8.00.3
+Version: 8.00.5
 */
 
 #include <OpenHaldexC6_defs.h>
@@ -18,8 +18,15 @@ Version: 8.00.3
 void setup()
 {
 #if enableDebug || detailedDebug || detailedDebugCAN || detailedDebugWiFi || detailedDebugEEP || detailedDebugIO
-  Serial.begin(500000);                // start serial at a high baud rate for debugging
-  Serial.setTxTimeoutMs(10);           // set a small timeout for Serial writes to prevent blocking if the Serial Monitor is not open
+  Serial.begin(500000);      // start serial at a high baud rate for debugging
+  Serial.setTxTimeoutMs(10); // set a small timeout for Serial writes to prevent blocking if the Serial Monitor is not open
+  // native USB-CDC: give the host up to 3s to attach so early boot logs (LittleFS/WiFi/mDNS) aren't lost before it connects
+  unsigned long serialWaitStart = millis();
+  while (!Serial && millis() - serialWaitStart < 3000)
+  {
+    delay(10);
+  }
+  delay(250);                          // small grace period after attach before the first message is sent
   DEBUG("OpenHaldex-C6 Launching..."); // debug message to indicate startup
 #endif
 
@@ -51,16 +58,15 @@ void setup()
 
   if (needsFirmwareConfirmation())
   {
-    DEBUG("[OTA SAFETY] New firmware detected - confirming after safety checks...");
-    // Small delay to ensure CAN buses are fully initialized
-    delay(100);
-    confirmFirmwareValidity();
+    DEBUG("[OTA SAFETY] New firmware detected - confirmation deferred to otaRollbackTick()");
   }
 }
 
 void loop()
 {
   vTaskDelay(pdMS_TO_TICKS(100)); // yield the Arduino loop task so other FreeRTOS tasks can run
+
+  otaRollbackTick(); // confirm a freshly-installed OTA image once the device has proven itself
 
   { // temp counters for debugging, just left in because they can be useful for testing timing of various functions/tasks
     tempCounter++;
@@ -113,22 +119,7 @@ void loop()
     WiFi.disconnect(true, true); // disconnect and erase AP settings to ensure a clean restart
     WiFi.mode(WIFI_OFF);         // turn off WiFi to reset the state
 
-    WiFi.mode(WIFI_AP); // restart in AP mode
-    WiFi.softAPConfig(IPAddress(192, 168, 1, 1), IPAddress(192, 168, 1, 1), IPAddress(255, 255, 255, 0));
-    if (strlen(wifiPassword) >= 8)
-    {
-      WiFi.softAP(wifiHostName, wifiPassword); // password-protected network
-    }
-    else
-    {
-      WiFi.softAP(wifiHostName); // open network
-    }
-    WiFi.setSleep(false);
-    // Aggressive sleep: reduce AP TX power to reduce active-WiFi current.
-    if (canSleepAggressive)
-    {
-      WiFi.setTxPower(WIFI_POWER_8_5dBm);
-    }
+    startSoftAP(); // restart in AP mode (local-only DHCP, current SSID/password)
     MDNS.end();
     MDNS.begin("openhaldex"); // restart openhaldex.local
     MDNS.addService("http", "tcp", 80);

@@ -1,27 +1,94 @@
 #include <OpenHaldexC6_StandaloneCAN.h>
 #include <OpenHaldexC6_Calculations.h>
 
-// Standalone frames honour the same frame-edit mask as the passthrough path: a
+// Standalone frames are the same frame-edit type as the passthrough path: a
 // block turned OFF in the UI is simply not generated (mirrors the passthrough
 // "leave the frame untouched" behaviour). Frames that are not listed as editable
 // blocks for the active generation always send. All standalone Haldex-frame
 // transmits go through here instead of calling twai_transmit_v2 directly.
+// Checksummed frames: map a CAN ID to its ID sequence so an overridden byte can
+// have its CRC recomputed. IDs absent here carry no checksum.
+static const uint8_t *idSeqFor(uint32_t id)
+{
+  switch (id)
+  {
+  case 0x0A8:
+    return ID_SEQ_0A8;
+  case 0x0AD:
+    return ID_SEQ_0AD;
+  case 0x0A7:
+    return ID_SEQ_0A7;
+  case 0x08A:
+    return ID_SEQ_08A;
+  case 0x086:
+    return ID_SEQ_086;
+  case 0x121:
+    return ID_SEQ_121;
+  case 0x110:
+    return ID_SEQ_110;
+  case 0x106:
+    return ID_SEQ_106;
+  case 0x104:
+    return ID_SEQ_104;
+  case 0x116:
+    return ID_SEQ_116;
+  case 0x101:
+    return ID_SEQ_101;
+  case 0x0FD:
+    return ID_SEQ_0fd;
+  case 0x5BE:
+    return ID_SEQ_5be;
+  case 0x3BE:
+    return ID_SEQ_3be;
+  case 0x641:
+    return ID_SEQ_641;
+  case 0x645:
+    return ID_SEQ_645;
+  case 0x65D:
+    return ID_SEQ_65d;
+  case 0x392:
+    return ID_SEQ_392;
+  default:
+    return nullptr;
+  }
+}
+
 static inline void standaloneTx(twai_message_t &f)
 {
-  int gi = frameEditGenIdx(haldexGeneration);
-  if (gi >= 0)
+  int genid = frameEditGenIdx(haldexGeneration);
+  if (genid >= 0)
   {
     for (uint16_t i = 0; i < frameEditBlockCount; i++)
     {
-      if (frameEditBlocks[i].genIdx == (uint8_t)gi &&
+      if (frameEditBlocks[i].genIdx == (uint8_t)genid &&
           frameEditBlocks[i].canId == f.identifier)
       {
-        if (!frameEditEnabled((uint8_t)gi, frameEditBlocks[i].bit))
+        if (!frameEditEnabled((uint8_t)genid, frameEditBlocks[i].bit))
           return; // block disabled -> do not generate this frame
         break;
       }
     }
   }
+
+  // Serial-lab byte overrides, applied last so they beat whatever built the
+  // frame. CRC is recomputed after, or the Haldex would reject the frame and
+  // the measurement would be of a dropped frame rather than a changed byte.
+  bool overridden = false;
+  for (uint8_t i = 0; i < LAB_OVR_MAX; i++)
+  {
+    if (labOverrides[i].canId == f.identifier && labOverrides[i].byteIdx < 8)
+    {
+      f.data[labOverrides[i].byteIdx] = labOverrides[i].value;
+      overridden = true;
+    }
+  }
+  if (overridden)
+  {
+    const uint8_t *seq = idSeqFor(f.identifier);
+    if (seq)
+      f.data[0] = calcChecksum(f.data, seq);
+  }
+
   twai_transmit_v2(twai_bus_1, &f, 0);
 }
 
@@ -60,6 +127,9 @@ void frames10(void *arg)
         break;
       case 51:
         Gen5_0AY_frames10();
+        break;
+      case 52:
+        Gen5_0CQ_VAQ_frames10();
         break;
       }
     }
@@ -102,6 +172,9 @@ void frames20(void *arg)
       case 51:
         Gen5_0AY_frames20();
         break;
+      case 52:
+        Gen5_0CQ_VAQ_frames20();
+        break;
       }
     }
     vTaskDelay(20 / portTICK_PERIOD_MS);
@@ -139,6 +212,9 @@ void frames25(void *arg)
         break;
       case 51:
         Gen5_0AY_frames25();
+        break;
+      case 52:
+        Gen5_0CQ_VAQ_frames25();
         break;
       }
     }
@@ -182,6 +258,9 @@ void frames100(void *arg)
       case 51:
         Gen5_0AY_frames100();
         break;
+      case 52:
+        Gen5_0CQ_VAQ_frames100();
+        break;
       }
     }
     vTaskDelay(100 / portTICK_PERIOD_MS);
@@ -223,6 +302,9 @@ void frames200(void *arg)
       case 51:
         Gen5_0AY_frames200();
         break;
+      case 52:
+        Gen5_0CQ_VAQ_frames200();
+        break;
       }
     }
     vTaskDelay(200 / portTICK_PERIOD_MS);
@@ -263,6 +345,9 @@ void frames1000(void *arg)
         break;
       case 51:
         Gen5_0AY_frames1000();
+        break;
+      case 52:
+        Gen5_0CQ_VAQ_frames1000();
         break;
       }
     }
@@ -594,8 +679,8 @@ void Gen2_frames25()
   // PQ Kombi_1 (0x320, DLC 8) - instrument-cluster broadcast (vw_pq.dbc: Kombi_1).
   frame.identifier = mKombi_1;
   frame.data_length_code = 8;
-  frame.data[0] = 0x00; // Bremsinfo / Oeldruck status bits
-  frame.data[1] = 0x02; // Angezeigte_Geschwindigkeit (displayed speed * 0.32 km/h)
+  frame.data[0] = 0x00; // Oeldruck / Tankwarn / Vorglueh lamp bits
+  frame.data[1] = 0x02; // bit0 KO1_Bremsinfo (fluid warn), bit1 KO1_Handbremse - NOTE: 0x02 = handbrake APPLIED (as captured; Gen4 set uses 0x00)
   frame.data[2] = 0x00; // Geschwindigkeit_Kombi_1 low (raw vehicle speed * 0.01 km/h)
   frame.data[3] = 0x00; // Geschwindigkeit_Kombi_1 high
   frame.data[4] = 0x36; // Tankinhalt (fuel level, 1..126 l)
@@ -663,7 +748,7 @@ void Gen4_frames10()
   frame.data[7] = 0x07;                                        // Radgeschw_HR high
   standaloneTx(frame);
 
-  if(haldexLearnActive || state.mode != MODE_5050)
+  if (haldexLearnActive || state.mode != MODE_5050)
   {
     appliedTorque = get_lock_target_adjusted_value(0x7F, false); // regulated clamp
   }
@@ -676,13 +761,13 @@ void Gen4_frames10()
   // data[7] = XOR-CRC over data[0..6]; data[6] is rolling counter (steps of 16).
   frame.identifier = BRAKES4_ID;
   frame.data_length_code = 8;
-  frame.data[0] = appliedTorque; // ABS_Vorgabewert_hinten_Kupplung (rear-clutch %)
-  frame.data[1] = 0x00;                                        // ABS_Vorgabewert_mitte_Kupplungs low (centre stiffness Nm/min)
-  frame.data[2] = 0x00;                                        // ABS_Vorgabewert_mitte_Kupplungs high
-  frame.data[3] = 0x64;                                        // status / reserved
-  frame.data[4] = 0x00;                                        // reserved
-  frame.data[5] = 0x00;                                        // reserved
-  frame.data[6] = BRAKES4_counter;                             // rolling counter (16-step)
+  frame.data[0] = appliedTorque;   // ABS_Vorgabewert_hinten_Kupplung (rear-clutch %)
+  frame.data[1] = 0x00;            // ABS_Vorgabewert_mitte_Kupplungs low (centre stiffness Nm/min)
+  frame.data[2] = 0x00;            // ABS_Vorgabewert_mitte_Kupplungs high
+  frame.data[3] = 0x64;            // status / reserved
+  frame.data[4] = 0x00;            // reserved
+  frame.data[5] = 0x00;            // reserved
+  frame.data[6] = BRAKES4_counter; // rolling counter (16-step)
   BRAKES4_crc = 0;
   for (uint8_t i = 0; i < 7; i++)
   {
@@ -1739,6 +1824,19 @@ void Gen41_frames250()
   twai_transmit_v2(twai_bus_0, &frame, 0);
 }
 
+// Measured frame roles (bench, Gen5 0CQ, standalone, V3 packing, CF 30, floor 0,
+// one frame disabled at a time; control = 30.0% reported / 30.7% PWM / 3.88 A):
+//   ESP_19  0x0B2  MANDATORY - off: 0% engagement, pump dead (0% PWM, 0.01 A)
+//   Motor_11 0x0A7 MANDATORY - off: 0% engagement, pump dead (0% PWM, 0.01 A)
+//   ESP_05  0x106  MANDATORY - off: 0% engagement, but pump still runs (17% PWM,
+//                  1.6 A) - gates committing to/reporting lock, not actuation
+//   ESP_14  0x08A  THE LIMITER - off: 98.6% engagement (peak 100) on a 30%
+//                  request. BR_Vorg_*_Max is what caps delivered lock
+//   Motor_12 0x0A8 no measurable effect at this operating point
+//   ESP_02  0x101  no measurable effect at this operating point
+//   ESP_21  0x0FD  no measurable effect at this operating point
+// Command, pump duty and reported value track 1:1 in V3. Note "no effect" was
+// only established at steady 30% on a bench - not during transitions or at speed.
 void Gen5_0CQ_frames10()
 {
   twai_message_t frame;
@@ -1757,33 +1855,18 @@ void Gen5_0CQ_frames10()
   frame.data[7] = 0x00; // ESP_18 reserved (doesn't affect)
   standaloneTx(frame);
 
-  // MQB ESP_19 (0x0B2, DLC 8) - wheel speeds (ESP_VL/VR/HL/HR_Radgeschw_02, LE * 1/64 km/h).
-  // Wheel speed MUST keep changing or haldex slowly disengages.
+  // MQB ESP_19 (0x0B2, DLC 8) - wheel speeds (ESP_VL/VR/HL/HR_Radgeschw_02,
+  // LE, 0.0075 km/h/bit - see the real decode in OpenHaldexC6_can.cpp).
+  // Wheel speed MUST keep changing or haldex slowly disengages - static
+  // makes it fade over time and eventually stop. Front wheels are also
+  // inflated above rear by a lock_target-proportional delta (simulated
+  // slip requesting engagement) - see fill_esp19_wheel_speeds().
   frame.identifier = ESP_19; // ESP_19 0x0b2
   frame.extd = 0;
   frame.rtr = 0;
-  frame.data_length_code = 8; // mad, but wheel speed MUST change - static makes it reduce over time and eventually stop.  Changing it to 0x0B makes it stop immediately.  Counter from 0x20 to 0x2F keeps it going.
-  // moved to a slow incrememter (1000ms)
-  frame.data[0] = get_lock_target_adjusted_value(ESP_19_counter2, false);        // ESP_HL_Radgeschw_02 low (HL - wheel speed)
-  frame.data[1] = get_lock_target_adjusted_value(ESP_19_counter, false);         // ESP_HL_Radgeschw_02 high (HL - wheel speed)
-  frame.data[2] = get_lock_target_adjusted_value(ESP_19_counter2, false);        // ESP_HR_Radgeschw_02 low (HR - wheel speed)
-  frame.data[3] = get_lock_target_adjusted_value(ESP_19_counter, false);         // ESP_HR_Radgeschw_02 high (HR - wheel speed)
-  frame.data[4] = get_lock_target_adjusted_value(ESP_19_counter2 + 0xBA, false); // ESP_VL_Radgeschw_02 low (VL - wheel speed 0xCA)
-  frame.data[5] = get_lock_target_adjusted_value(ESP_19_counter, false);         // ESP_VL_Radgeschw_02 high (VL - wheel speed -- affects if =0x0B)
-  frame.data[6] = get_lock_target_adjusted_value(ESP_19_counter2 + 0xBA, false); // ESP_VR_Radgeschw_02 low (VR - wheel speed 0xCa)
-  frame.data[7] = get_lock_target_adjusted_value(ESP_19_counter, false);         // ESP_VR_Radgeschw_02 high (VR - wheel speed -- affects if =0x0B)
+  frame.data_length_code = 8;
+  fill_esp19_wheel_speeds(frame.data);
   standaloneTx(frame);
-
-  ESP_19_counter++;
-  ESP_19_counter2++;
-  if (ESP_19_counter > 0x10) // 0x1A
-  {
-    ESP_19_counter = 0x0A; // 0x10
-  }
-  if (ESP_19_counter2 > 0x2F) // 0x0E
-  {
-    ESP_19_counter2 = 0x2E; // 0x00
-  }
 
   // MQB Getriebe_11 (0x0AD, DLC 8) - transmission ECU broadcast.
   // GE_MMom_Anf_02 (engine torque request), GE_MMom_Vorhalt_02 (anticipatory torque),
@@ -1871,51 +1954,10 @@ void Gen5_0CQ_frames10()
   else
   {
     // ---- BPK packing (Fix Hunting toggle on; needed for 554K @ partial lock) ----
-    // DBC-correct bit-packed Soll_Roh/Ist/Solf with fixed defaults and slew limits.
-    const uint8_t BPK_CEIL = 220;     // Nm at 100% lock
-    const uint8_t BPK_SLEW_IST = 8;   // Nm/cycle, MO_Mom_Ist_Summe ramp
-    const uint8_t BPK_SLEW_SOLF = 32; // Nm/cycle, MO_Mom_Soll_gefiltert ramp
-    const uint8_t BPK_FLOOR = 10;
-
-    uint8_t torqueNm = get_lock_target_adjusted_value(0xFE, false);
-    appliedTorque = torqueNm;
-    torqueNm = (uint8_t)(BPK_FLOOR +
-                         ((uint16_t)torqueNm * (BPK_CEIL - BPK_FLOOR)) / 0xFE);
-
-    // Slew limits on Ist and Soll_gefiltert.
-    static uint8_t prevIstNm = 0, prevSolfNm = 0;
-    auto slew = [](uint8_t cur, uint8_t target, uint8_t step) -> uint8_t
-    {
-      if (target > cur)
-        return ((uint16_t)cur + step >= target) ? target : (uint8_t)(cur + step);
-      if (target < cur)
-        return (cur <= step || cur - step <= target) ? target : (uint8_t)(cur - step);
-      return cur;
-    };
-    uint8_t istNm = slew(prevIstNm, torqueNm, BPK_SLEW_IST);
-    uint8_t solfNm = slew(prevSolfNm, torqueNm, BPK_SLEW_SOLF);
-    prevIstNm = istNm;
-    prevSolfNm = solfNm;
-
-    uint16_t rawSollRoh = (uint16_t)(torqueNm + 509) & 0x3FF;
-    uint16_t rawIst = (uint16_t)(istNm + 509) & 0x3FF;
-    uint16_t rawSolf = (uint16_t)(solfNm + 509) & 0x3FF;
-
-    // Idle baselines for non-driven signals.
-    const uint8_t TRAEG_LO = 0xFD;
-    const uint8_t TRAEG_HI = 0x01;
-    const uint8_t SCHUB_LO = 0x07;
-    const uint8_t SCHUB_HI = 0x1E;
-    const uint8_t STATUS_FL = 0x20; // Normalbetrieb=1, QBit=valid
-
-    frame.data[0] = 0x00; // CRC placeholder
-    frame.data[1] = (MOTOR_11_counter & 0x0F) | ((rawSollRoh & 0x000F) << 4);
-    frame.data[2] = ((rawSollRoh >> 4) & 0x3F) | ((rawIst & 0x0003) << 6);
-    frame.data[3] = (rawIst >> 2) & 0xFF;
-    frame.data[4] = TRAEG_LO;
-    frame.data[5] = (TRAEG_HI & 0x03) | ((rawSolf & 0x3F) << 2);
-    frame.data[6] = ((rawSolf >> 6) & 0x0F) | ((SCHUB_LO & 0x0F) << 4);
-    frame.data[7] = (SCHUB_HI & 0x1F) | STATUS_FL;
+    // Shared with the normal-mode packer so the two can never drift, and so the
+    // serial lab tunables apply identically in both. See fill_motor11_bpk().
+    appliedTorque = get_lock_target_adjusted_value(0xFE, false); // pre-scale value, for telemetry
+    fill_motor11_bpk(frame.data, MOTOR_11_counter);
   }
 
   frame.data[0] = calcChecksum(frame.data, ID_SEQ_0A7); // for 0x0A7
@@ -1942,10 +1984,29 @@ void Gen5_0CQ_frames10()
   frame.data[1] = ESP_14_counter; // ESP_BZ_14 - rolling counter (0x10>0x1F)
   frame.data[2] = 0x00;           // ESP_14 reserved/status (doesn't affect)
   frame.data[3] = 0x00;           // ESP_14 reserved/status (doesn't affect, sometimes 0xC0, sometimes 0x00)
-  frame.data[4] = 0x00;           // BR_Vorg_Quer_Min (Minimum specified limit value of the clutch's operating range by the ESP MQB Haldex: 100% torque corresponds to 2000 Nm.) - doesn't affect
-  frame.data[6] = 0x00;           // BR_Vorg_Allrad_Min (Minimum specified limit value of the clutch's operating range by the ESP MQB Haldex: 100% torque corresponds to 2000 Nm) - doesn't affect
 
   appliedTorque = get_lock_target_adjusted_value(0xFE, false);
+
+  // Launch PWM floor: raise BR_Vorg_*_Min while lock is commanded, clamped
+  // strictly below Max so the Haldex keeps room to modulate. 0% = unchanged,
+  // and it collapses to 0 whenever Max does (off-throttle, FWD, coasting).
+  // Adopted from OpenHaldex-Edge by Rekt (Kile Thomson) - see THIRD_PARTY_NOTICES.md.
+  {
+    uint8_t esp14Floor = 0;
+    if (esp14MinFloorPct > 0 && appliedTorque > 1)
+    {
+      uint16_t f = ((uint16_t)appliedTorque * esp14MinFloorPct) / 100;
+      if (f > (uint16_t)(appliedTorque - 1))
+        f = (uint16_t)(appliedTorque - 1);
+      esp14Floor = (uint8_t)f;
+    }
+    // Danger Zone: at a full 50:50 request only, pin Min to Max so the Haldex
+    // has no modulation room and goes to full pump duty.
+    if (dangerZoneEnabled && lock_target >= 100 && appliedTorque > 1)
+      esp14Floor = (uint8_t)(appliedTorque - 1);
+    frame.data[4] = esp14Floor; // BR_Vorg_Quer_Min
+    frame.data[6] = esp14Floor; // BR_Vorg_Allrad_Min
+  }
 
   frame.data[5] = appliedTorque; // BR_Vorg_Quer_Max (Maximum predefined limit of the clutch's operating range by the ESP MQB Haldex: 100% torque corresponds to 2000 Nm.)
   frame.data[7] = appliedTorque; // BR_Vorg_Allrad_Max (Maximum specified limit of the clutch's operating range by the ESP MQB Haldex: 100% torque corresponds to 2000 Nm.)
@@ -2432,6 +2493,772 @@ void Gen5_0CQ_frames1000()
 }
 
 // =============================================================================
+// Gen5 (0CQ) VAQ Standalone Frames - generation 52
+// A copy of the Gen5 0CQ set (same IDs, bytes, counters, CRCs and
+// standaloneTx gating - gen 52 shares the FE_GEN_50 frame-edit blocks). 
+// Each frame carries a 'VAQ K-matrix' note saying which signals
+// the VAQ node is listed as receiving (MQB FCAN K-matrix, node 'VAQ'); frames
+// marked NOT in its receive list are the first candidates to drop. 
+// Feedback comes back on Quersperre_03 (0x137) rather than Allrad_03 (0x118);
+// diagnostics on 0x71E/0x788 rather than 0x70F/0x779 (both decoded/selectable).
+// =============================================================================
+void Gen5_0CQ_VAQ_frames10()
+{
+  twai_message_t frame;
+  // MQB ESP_18 (0x135, DLC 8) - ESP minor broadcast. Fixed response, no changes.
+  // VAQ K-matrix: NOT in the VAQ receive list (no VAQ signal on ESP_18). Kept
+  // like-for-like; block 10 can drop it to prove it is dead weight on this unit.
+  frame.identifier = ESP_18; // 0x135.  Fixed response, no changes
+  frame.extd = 0;
+  frame.rtr = 0;
+  frame.data_length_code = 8;
+  frame.data[0] = 0x00; // ESP_18_CHK / checksum (supposed to have CRC? doesn't affect)
+  frame.data[1] = 0xC0; // ESP_18 BZ counter / status (always 0xC0, never changes)
+  frame.data[2] = 0x00; // ESP_18 reserved (doesn't affect)
+  frame.data[3] = 0x00; // ESP_18 reserved (doesn't affect)
+  frame.data[4] = 0x00; // ESP_18 reserved (doesn't affect)
+  frame.data[5] = 0x00; // ESP_18 reserved (doesn't affect)
+  frame.data[6] = 0x00; // ESP_18 reserved (doesn't affect)
+  frame.data[7] = 0x00; // ESP_18 reserved (doesn't affect)
+  standaloneTx(frame);
+
+  // MQB ESP_19 (0x0B2, DLC 8) - wheel speeds (ESP_VL/VR/HL/HR_Radgeschw_02,
+  // LE, 0.0075 km/h/bit - see the real decode in OpenHaldexC6_can.cpp).
+  // Wheel speed MUST keep changing or haldex slowly disengages - static
+  // makes it fade over time and eventually stop. Front wheels are also
+  // inflated above rear by a lock_target-proportional delta (simulated
+  // slip requesting engagement) - see fill_esp19_wheel_speeds().
+  // VAQ K-matrix: reads all four ESP_*_Radgeschw_02 (LE16, 0.0075 km/h/bit):
+  // b0-1 HL, b2-3 HR, b4-5 VL, b6-7 VR. For a FRONT transverse lock the
+  // relevant slip is left vs right (VL vs VR), not front vs rear - the 0CQ
+  // keep-alive dither is kept as-is, a VL/VR delta is the VAQ-specific lever.
+  frame.identifier = ESP_19; // ESP_19 0x0b2
+  frame.extd = 0;
+  frame.rtr = 0;
+  frame.data_length_code = 8;
+  fill_esp19_wheel_speeds(frame.data);
+  standaloneTx(frame);
+
+  // MQB Getriebe_11 (0x0AD, DLC 8) - transmission ECU broadcast.
+  // GE_MMom_Anf_02 (engine torque request), GE_MMom_Vorhalt_02 (anticipatory torque),
+  // GE_Fahrstufe (selected gear), GE_Schalt_Sequenz (shift state), GE_Zielgang.
+  // VAQ K-matrix: reads only GE_Zielgang (b7 bits 4-7: 0 P/N, 1-8 gear).
+  frame.identifier = GETRIEBE_11; // 0x0AD
+  frame.extd = 0;
+  frame.rtr = 0;
+  frame.data_length_code = 8;
+  frame.data[0] = 0x00;                // GE_CHK_02 - checksum placeholder (none affect)
+  frame.data[1] = GETRIEBE_11_counter; // GE_BZ_02 - rolling 4-bit counter (0x00>0x0F)
+  frame.data[2] = 0x00;                // GE_MMom_Anf_02 (engine torque-intervention request) - Was 0xFE Torque intervention at the engine. Requests a short-term reduction or increase in torque from the ECU. This signal is only valid in combination with GE_MMom_Status (for MQB) or GE_MMom_Status_02 (for MLBevo).
+  frame.data[3] = 0xFE;                // GE_MMom_Vorhalt_02 (Pre-control torque - anticipatory torque request)
+  frame.data[4] = 0x00;                // GE_Fahrstufe (Actual gear/range selected: 5=P, 6=R, 7=N, 8=D, 9=S, 10=E, 13/14=T)
+  frame.data[5] = 0x00;                // GE_Schalt_Sequenz (Shift sequence state: 0=idle, 1=shift in progress, etc.) - does not affect (>0x00)
+  frame.data[6] = 0x00;                // GE_Kraftschluss / clutch lock-up (Power transmission status / clutch lock-up state) - does not affect (>0x00)
+  frame.data[7] = 0x00;                // GE_Zielgang (Target gear of current shift)
+
+  frame.data[0] = calcChecksum(frame.data, ID_SEQ_0AD); // for 0x0AD
+
+  GETRIEBE_11_counter++;
+  if (GETRIEBE_11_counter > 0x0F)
+  {
+    GETRIEBE_11_counter = 0;
+  }
+  standaloneTx(frame);
+
+  // MQB Motor_12 (0x0A8, DLC 8) - engine torque limits / RPM (Motor_12).
+  // MO_Mom_neg_verfuegbar (max engine braking), Mom_Statisch_Limit (static limit),
+  // Mom_Dynamisch_Limit (dynamic limit), MO_Drehzahl_01 (engine RPM).
+  // VAQ K-matrix: reads only MO_Drehzahl_01 (b6-7 LE16, 0.25 rpm/bit).
+  // 0CQ lock-modulates b7 ('does affect'): to the VAQ that is the rpm high
+  // byte, 0x00..0xFA -> 0..16000 rpm. An 'engine running' gate is a likely
+  // reason it mattered - test a fixed b7 (e.g. 0x0C = ~800 rpm) on the VAQ.
+  frame.identifier = MOTOR_12; // Motor_12 0x0A8
+  frame.extd = 0;
+  frame.rtr = 0;
+  frame.data_length_code = 8;
+  frame.data[0] = 0x00;                                                    // MO_CHK_02 - checksum placeholder
+  frame.data[1] = MOTOR_12_counter;                                        // MO_BZ_02 - rolling counter (0x70>0x7F)
+  frame.data[2] = 0x00;                                                    // MO_Mom_neg_verfuegbar (Negative available torque / maximum engine braking) - does not affect (doesn't affect)
+  frame.data[3] = 0x00;                                                    // Static torque limit (sometimes 0xC0, sometimes 0x00) - doesn't affect
+  frame.data[4] = 0x00;                                                    // Dynamic torque limit (sometimes 0x3A, sometimes 0x39) - doesn't affect
+  frame.data[5] = 0x64;                                                    // Vehicle speed signal quality bit (0x64=good, 0x00=bad). True? - doesn't affect
+  frame.data[6] = 0x0F;                                                    // Engine speed signal quality bit (Bool). Was 0xD4 - does affect.
+  frame.data[7] = get_lock_target_adjusted_value(MOTOR_12_counter, false); // MO_Drehzahl_01 (Engine speed / RPM, was 0xAE affects.  >30 slows down.  Only adds 5%. Was 0x10 - does affect)
+
+  frame.data[0] = calcChecksum(frame.data, ID_SEQ_0A8); // for 0x0A8
+
+  MOTOR_12_counter++;
+  if (MOTOR_12_counter > 0x7F)
+  {
+    MOTOR_12_counter = 0x70;
+  }
+  standaloneTx(frame);
+
+  // MQB Motor_11 (0x0A7, DLC 8) - engine torque demand/output broadcast.
+  //
+  // Two packings, selected by the user-facing "Fix Hunting" toggle (fixHunting):
+  //   fixHunting == false (default): empirical V3 packing, b6/b7 lock-modulated
+  //                                  0..0xFA. Confirmed working on 554C, 554D,
+  //                                  554H, and 554K @ 100% lock.
+  //   fixHunting == true            : DBC-correct bit-packed Soll_Roh/Ist/Solf
+  //                                  with fixed BPK defaults. Required on 554K
+  //                                  at partial lock (60/40, 70/30) where the
+  //                                  V3 packing causes the controller to hunt.
+  //
+  // The previous auto-detect logic was removed because the engagement-crossing
+  // heuristic falsely flagged 554D as hunting. Mode is now strictly user-set
+  // and persisted to EEPROM.
+  // VAQ K-matrix: reads MO_Mom_Soll_Roh (b1[4-7]+b2[0-5]), MO_Mom_Ist_Summe
+  // (b2[6-7]+b3), MO_Mom_Schub (b6[4-7]+b7[0-4]) and MO_Status_Normalbetrieb_01
+  // (b7 bit 5). It does NOT list MO_Mom_Soll_gefiltert (Haldex-only). V3 packing
+  // puts appliedTorque in b6/b7, so Normalbetrieb follows bit 5 of the lock
+  // value (clear for 0x40-0x5F, 0x80-0x9F, 0xC0-0xDF). FIXHUNT 1 (BPK packing)
+  // is DBC-correct and holds Normalbetrieb = 1 - test it early on the VAQ.
+  frame.identifier = MOTOR_11; // MOTOR_11 0x0A7
+  frame.extd = 0;
+  frame.rtr = 0;
+  frame.data_length_code = 8;
+
+  if (!fixHunting)
+  {
+    // ---- V3 packing (default, working on 554C/D/H and 554K@100%) ----
+    appliedTorque = get_lock_target_adjusted_value(0xFA, false);
+
+    frame.data[0] = 0x00;             // MO_CHK_01 - checksum placeholder
+    frame.data[1] = MOTOR_11_counter; // MO_BZ_01 - rolling counter (0x40..0x4F)
+    frame.data[2] = 0xFA;             // MO_Mom_Soll_Roh
+    frame.data[3] = 0xFA;             // MO_Mom_Ist
+    frame.data[4] = 0x00;             // MO_Mom_Traegheit_Summe
+    frame.data[5] = 0xFA;             // MO_Mom_Soll_gefiltert
+    frame.data[6] = appliedTorque;    // lock-modulated (massive effect)
+    frame.data[7] = appliedTorque;    // lock-modulated (massive effect)
+  }
+  else
+  {
+    // ---- BPK packing (Fix Hunting toggle on; needed for 554K @ partial lock) ----
+    // Shared with the normal-mode packer so the two can never drift, and so the
+    // serial lab tunables apply identically in both. See fill_motor11_bpk().
+    appliedTorque = get_lock_target_adjusted_value(0xFE, false); // pre-scale value, for telemetry
+    fill_motor11_bpk(frame.data, MOTOR_11_counter);
+  }
+
+  frame.data[0] = calcChecksum(frame.data, ID_SEQ_0A7); // for 0x0A7
+
+  MOTOR_11_counter++;
+  if (MOTOR_11_counter > 0x4F)
+  {
+    MOTOR_11_counter = 0x40;
+  }
+
+  standaloneTx(frame);
+  /*
+  0xd2,0x3d,0xcd,0x28,0x4c,0x14,0x22,0x4b,0x24,0xac,0xfa,0x55,0x66,0x80,0x0d,0x6c
+  */
+
+  // MQB ESP_14 (0x08A, DLC 8) - ESP-to-AWD coupling-range limits.
+  // BR_Vorg_Quer_Min/Max (lateral stability range), BR_Vorg_Allrad_Min/Max (AWD range).
+  // 100% torque = 2000 Nm. data[7] has massive effect on engagement.
+  // VAQ K-matrix: reads BR_Status_Quer_ESP (b3 bits 3-5: 0 cross lock
+  // deactivated, 1 ESP error, 2 comms disturbed, 3 ESP ready, 4 ESP requests
+  // cross lock, 5 AYC support), BR_Vorg_Quer_Min (b4) and BR_Vorg_Quer_Max (b5),
+  // 0.4 %/bit, 252 = quick close/open, 254 init, 255 error. The Allrad bytes
+  // b6/b7 are NOT read by the VAQ. 0CQ sends b3 = 0x00 = 'cross lock
+  // deactivated' - PRIME SUSPECT if the VAQ never engages: try b3 = 0x18
+  // (ready) or 0x20 (ESP requests cross lock) with OVR 08A 3 0x18 / 0x20.
+  //
+  // BENCH RESULT 2026-09-17 (real 0CQ907554E VAQ): this frame IS the lever.
+  //   - BR_Status_Quer_ESP must be >= 3 (0x18 ready / 0x20 request / 0x28 AYC);
+  //     0 "deactivated" -> always 0 %, whatever Min/Max say.
+  //   - QUER_Ist_Proz follows BR_Vorg_Quer_Min 1:1 (0.4 %/bit): 0x0A -> 4 %,
+  //     0x32 -> 20 %, 0x7D -> 50 %, 0xC8/0xE1/0xFA -> 80 % (cap at standstill).
+  //   - Min > Max is rejected (0 %, pump off). Min 0 with Max > 0 -> ~11 %
+  //     rule-mode preload. Min = Max = 0 -> 0 %, pump idles at 15 % PWM.
+  //   - Motor_11 packing (FIXHUNT), Charisma, rpm, wheel-speed splits: no effect.
+  //   Both bytes have to change together, which is why single-byte sweeps
+  //   never found it. The torque-ceiling scaling of the 0CQ path is wrong
+  //   here: the VAQ wants plain percent.
+  frame.identifier = ESP_14; // ESP_14 0x08A
+  frame.extd = 0;
+  frame.rtr = 0;
+  frame.data_length_code = 8;
+  frame.data[0] = 0x00;           // ESP_CHK_14 - checksum placeholder
+  frame.data[1] = ESP_14_counter; // ESP_BZ_14 - rolling counter (0x10>0x1F)
+  frame.data[2] = 0x00;           // DSR steering-torque offset (not read by the VAQ)
+
+  // Cross-lock request in plain percent: 0..250 = 0..100 % (0.4 %/bit).
+  const uint8_t quer = get_lock_target_adjusted_value(250, false);
+  frame.data[3] = quer ? 0x20 : 0x00; // BR_Status_Quer_ESP (b3 bits 3-5): 4 "ESP requests cross lock" / 0 deactivated
+  frame.data[4] = quer;               // BR_Vorg_Quer_Min - the VAQ follows this one
+  frame.data[5] = quer;               // BR_Vorg_Quer_Max = Min: exact command, no rule-mode headroom
+
+  // Allrad bytes (b6/b7) are not read by the VAQ; keep the 0CQ packing so the
+  // like-for-like set stays comparable if a Haldex is ever put on this bus.
+  appliedTorque = get_lock_target_adjusted_value(0xFE, false);
+  {
+    uint8_t esp14Floor = 0;
+    if (esp14MinFloorPct > 0 && appliedTorque > 1)
+    {
+      uint16_t f = ((uint16_t)appliedTorque * esp14MinFloorPct) / 100;
+      if (f > (uint16_t)(appliedTorque - 1))
+        f = (uint16_t)(appliedTorque - 1);
+      esp14Floor = (uint8_t)f;
+    }
+    if (dangerZoneEnabled && lock_target >= 100 && appliedTorque > 1)
+      esp14Floor = (uint8_t)(appliedTorque - 1);
+    frame.data[6] = esp14Floor; // BR_Vorg_Allrad_Min
+  }
+  frame.data[7] = appliedTorque; // BR_Vorg_Allrad_Max
+
+  frame.data[0] = calcChecksum(frame.data, ID_SEQ_08A); // for 0x08A
+
+  ESP_14_counter++;
+  if (ESP_14_counter > 0x1F)
+  {
+    ESP_14_counter = 0x10;
+  }
+  standaloneTx(frame);
+
+  /*
+  0xd4,0xd4,0xd4,0xd4,0xd4,0xd4,0xd4,0xd4,0xd4,0xd4,0xd4,0xd4,0xd4,0xd4
+  */
+
+  // MQB LWI_01 (0x086, DLC 8) - steering-angle sensor (Lenkwinkelinformation).
+  // LWI_Lenkradwinkel (steering wheel angle * 0.1 deg), LWI_Lenkradw_Geschw (rate * 5 deg/s),
+  // LWI_Sensorstatus, plus quality bits.
+  // VAQ K-matrix: reads BZ, LWI_Sensorstatus (b1 bit 4), QBit (b1 bit 7),
+  // LWI_Lenkradwinkel (b2 + b3[0-4], 0.1 deg/bit) and VZ (b3 bit 5). The 0CQ
+  // b2 = 0x01 is really Lenkradwinkel low byte = 0.1 deg, harmless.
+  // Bench 2026-09-17: the VAQ logged the LWI_01 "missing" DTC (0x00410D) with
+  // the 0CQ packing on. Cause: the 0CQ counter runs 0x10..0x1F, which keeps
+  // b1 bit 4 = LWI_Sensorstatus = 1 "not calibrated" (K-matrix VAL_ 134). The
+  // Haldex never checked it; the VAQ does. Low nibble only -> status 0 "OK".
+  frame.identifier = LWI_01; // LWI_01 0x086
+  frame.extd = 0;
+  frame.rtr = 0;
+  frame.data_length_code = 8;
+  frame.data[0] = 0x00;                  // LWI_CHK - checksum placeholder
+  frame.data[1] = LWI_01_counter & 0x0F; // LWI_BZ (b1[0-3]); b1.4 Sensorstatus = 0 OK; b1.7 QBit = 0 valid
+  frame.data[2] = 0x01;                  // LWI_Lenkradwinkel low byte (0.1 deg)
+  frame.data[3] = 0x00;                  // LWI_Lenkradwinkel high bits + VZ (b3.5) = 0
+  frame.data[4] = 0x00;                  // LWI_Lenkradw_Geschw low
+  frame.data[5] = 0x00;                  // LWI_Lenkradw_Geschw high / VZ
+  frame.data[6] = 0x00;
+  frame.data[7] = 0x00;
+
+  frame.data[0] = calcChecksum(frame.data, ID_SEQ_086); // for 0x086
+
+  LWI_01_counter++;
+  if (LWI_01_counter > 0x1F)
+  {
+    LWI_01_counter = 0x10;
+  }
+
+  standaloneTx(frame);
+  /*
+  0x86,0x86,0x86,0x86,0x86,0x86,0x86,0x86,0x86,0x86,0x86,0x86,0x86,0x86
+  */
+}
+
+void Gen5_0CQ_VAQ_frames20()
+{
+  twai_message_t frame;
+  // MQB Motor_20 (0x121, DLC 8) - accelerator pedal raw/filtered + status.
+  // MO_Accelerator_Raw_Value_01 (raw pedal), MO_Fahrpedal_Roh, MO_Pedal_Filt.
+  // VAQ K-matrix: reads MO_Fahrpedalrohwert_01 (b1[4-7]+b2[0-3], 0.4 %/bit)
+  // and MO_QBit_Fahrpedalwerte_01 (b2 bit 4). Counter 0x0X + b2 0x40 -> pedal
+  // raw 0 %, QBit 0 (valid).
+  // Bench 2026-09-17: the VAQ logged the Motor_20 "missing" DTC (0x004157,
+  // plus 0x004457) with the 0CQ packing on. Bytes 2..5 now match a real MQB
+  // idle capture (b2 0x00, b3 0xC0, b4 0x39, b5 0x50) instead of the 0CQ
+  // guesses (0x40 0x40 0x19 0x59); the 0CQ never checked them, the VAQ does.
+  frame.identifier = MOTOR_20;      // MOTOR_20 0x121
+  frame.data_length_code = 8;       // DLC 8
+  frame.data[0] = 0x00;             // MO_CHK_20 - checksum
+  frame.data[1] = MOTOR_20_counter; // MO_BZ_20 (b1[0-3]) + Fahrpedalrohwert low nibble (b1[4-7]) = 0
+  frame.data[2] = 0x00;             // Fahrpedalrohwert high nibble = 0 %, MO_QBit_Fahrpedalwerte_01 (b2.4) = 0 valid
+  frame.data[3] = 0xC0;             // real-car idle value
+  frame.data[4] = 0x39;             // real-car idle value
+  frame.data[5] = 0x50;             // real-car idle value
+  frame.data[6] = 0x7E;             // real-car idle value
+  frame.data[7] = 0xFE;             // real-car idle value
+
+  frame.data[0] = calcChecksum(frame.data, ID_SEQ_121); // for 0x121
+
+  MOTOR_20_counter++;
+  if (MOTOR_20_counter > 0x0F)
+  {
+    MOTOR_20_counter = 0x00;
+  }
+
+  standaloneTx(frame);
+  /*
+  0xe9,0x65,0xae,0x6b,0x7b,0x35,0xe5,0x5f,0x4e,0xc7,0x86,0xa2,0xbb,0xdd,0xeb,0xb4
+  */
+
+  // MQB ESP_10 (0x116, DLC 8) - lateral dynamics / yaw + lateral accel.
+  // ESP_Gierrate (yaw), ESP_Querbeschleunigung (lateral acceleration), status bits.
+  // VAQ K-matrix: NOT in the VAQ receive list (only the Haldex reads
+  // ESP_*_Fahrtrichtung from it). Kept like-for-like; candidate to drop.
+  frame.identifier = ESP_10;                            // ESP_10 0x116
+  frame.data_length_code = 8;                           // DLC 8
+  frame.data[0] = 0x00;                                 // BR_CHK_10 - checksum
+  frame.data[1] = ESP_10_counter;                       // BR_BZ_10 - rolling counter (0x00>0x0F)
+  frame.data[2] = 0x01;                                 // ESP_QBit / status flags (no affect all these affect, find which one)
+  frame.data[3] = 0x04;                                 // ESP_Gierrate low (yaw rate) (no effect sometimes 0xC0, sometimes 0x00)
+  frame.data[4] = 0x00;                                 // ESP_Gierrate high (no effect sometimes 0x3A, somtimes 0x39)
+  frame.data[5] = 0x40;                                 // ESP_VZ_Gierrate (yaw sign) (no effect)
+  frame.data[6] = 0x00;                                 // ESP_Querbeschleunigung low (lateral G) (no effect)
+  frame.data[7] = 0xFF;                                 // ESP_Querbeschleunigung high (lateral G - this affects(!) - a good 40%.  Was 0xFF)
+  frame.data[0] = calcChecksum(frame.data, ID_SEQ_116); // for 0x116
+
+  ESP_10_counter++;
+  if (ESP_10_counter > 0x0F)
+  {
+    ESP_10_counter = 0x00;
+  }
+
+  standaloneTx(frame);
+  /*
+  0xac,0xac,0xac,0xac,0xac,0xac,0xac,0xac,0xac,0xac,0xac,0xac,0xac,0xac,0xac
+  */
+
+  // MQB ESP_05 (0x106, DLC 8) - brake pressure + brake-light/brake-pedal flags.
+  // BR_Bremsdruck (master cylinder pressure), BR_Bremslicht (brake-light), BR_Bremspedal (pedal active).
+  // VAQ K-matrix: reads BZ, ESP_QBit_Fahrer_bremst (b1 bit 5), ESP_Fahrer_bremst
+  // (b3 bit 2), ESP_Verz_TSK_aktiv (b3 bit 3), ESP_Verz_EPB_aktiv (b7 bit 2).
+  // The 0CQ 'b3 affects' finding is ESP_Fahrer_bremst (brake threshold
+  // exceeded); 0xC0 leaves it clear.
+  frame.identifier = ESP_05;                            // ESP_05 0x106
+  frame.data_length_code = 8;                           // DLC 8
+  frame.data[0] = 0x00;                                 // BR_CHK_05 - checksum
+  frame.data[1] = ESP_05_counter;                       // BR_BZ_05 - rolling counter (0x80>0x8F)
+  frame.data[2] = 0x64;                                 // BR_Bremsdruck (master-cylinder brake pressure) (no effect)
+  frame.data[3] = 0xC0;                                 // BR_Bremslicht / brake-light status (this affects(!) sometimes 0xC0, sometimes 0x00)
+  frame.data[4] = 0x00;                                 // BR_Status / brake event flags (no effect sometimes 0x3A, somtimes 0x39)
+  frame.data[5] = 0x00;                                 // BR_Status reserved (no effect)
+  frame.data[6] = 0xFD;                                 // BR_Status reserved (no effect)
+  frame.data[7] = 0x00;                                 // BR_Bremspedal (brake pedal active flag) (this affects(!) - on/off.  Was 0x10.  0x00 doesn't hurt)
+  frame.data[0] = calcChecksum(frame.data, ID_SEQ_106); // for 0x106
+
+  ESP_05_counter++;
+  if (ESP_05_counter > 0x8F)
+  {
+    ESP_05_counter = 0x80;
+  }
+
+  standaloneTx(frame);
+  /*
+  0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x07,0x07
+  */
+
+  // MQB EPB_01 (0x104, DLC 8) - electronic parking brake state.
+  // VAQ K-matrix: NOT in the VAQ receive list. Kept like-for-like.
+  frame.identifier = EPB_01;                            // EPB_01 0x104
+  frame.data_length_code = 8;                           // DLC 8
+  frame.data[0] = 0x00;                                 // EPB_CHK - checksum
+  frame.data[1] = EPB_01_counter;                       // EPB_BZ - rolling counter (0x30>0x3F - none affect)
+  frame.data[2] = 0xA6;                                 // EPB_Status (parking brake apply/release state)
+  frame.data[3] = 0x00;                                 // EPB_Status reserved (sometimes 0xC0, sometimes 0x00)
+  frame.data[4] = 0xE6;                                 // EPB_Status reserved (sometimes 0x3A, somtimes 0x39)
+  frame.data[5] = 0x00;                                 // EPB_Status reserved
+  frame.data[6] = 0x00;                                 // EPB_Status reserved
+  frame.data[7] = 0x31;                                 // EPB_Status reserved
+  frame.data[0] = calcChecksum(frame.data, ID_SEQ_104); // for 0x104
+
+  EPB_01_counter++;
+  if (EPB_01_counter > 0x3F)
+  {
+    EPB_01_counter = 0x30;
+  }
+
+  standaloneTx(frame);
+  /*
+  0x05,0x05,0x05,0x05,0x05,0x05,0x05,0x05,0x05,0x05,0x05,0x05,0x05,0x05
+  */
+
+  // MQB ESP_02 (0x101, DLC 8) - ESP brake/yaw status broadcast.
+  // VAQ K-matrix: reads BZ, the three QBits (b1 bits 4-6), Querbeschleunigung
+  // (b2, 0.01 g - 1.27), Laengsbeschl (b3 + b4[0-1], 0.03125 m/s2 - 16),
+  // Gierrate (b5 + b6[0-5], 0.01 deg/s) and VZ_Gierrate (b6 bit 6). 0CQ values
+  // decode to -0.01 g lateral, +0.47 m/s2 longitudinal, 0.12 deg/s yaw.
+  // Bench 2026-09-17: the VAQ logged the ESP_02 "missing" DTC (0x00410F) with
+  // the 0CQ packing on. Cause: the 0CQ counter runs 0x00..0x1F, so for half
+  // of every cycle b1 bit 4 = ESP_QBit_Querb = 1 "replacement/error value"
+  // (K-matrix VAL_ 257). Low nibble only -> all three QBits (b1[4-6]) = 0 valid.
+  frame.identifier = ESP_02;                            // ESP_02 0x101
+  frame.data_length_code = 8;                           // DLC 8
+  frame.data[0] = 0x00;                                 // BR_CHK_02 - checksum
+  frame.data[1] = ESP_02_counter & 0x0F;                // BR_BZ_02 (b1[0-3]); QBits (b1[4-6]) = 0 valid
+  frame.data[2] = 0x7E;                                 // BR_Bremsdruck / status (doesn't effect one of these affects, find which one - doesn't affect)
+  frame.data[3] = 0x0F;                                 // BR_Status / event flags (doesn't effect sometimes 0xC0, sometimes 0x00)
+  frame.data[4] = 0x82;                                 // ESP_Gierrate / yaw (doesn't effect sometimes 0x3A, somtimes 0x39)
+  frame.data[5] = 0x0C;                                 // ESP_Status (doesn't effect rolling?)
+  frame.data[6] = 0x40;                                 // ESP_Status reserved (doesn't efffect)
+  frame.data[7] = 0x00;                                 // ESP_Status reserved (doesn't effect)
+  frame.data[0] = calcChecksum(frame.data, ID_SEQ_101); // for 0x101
+
+  ESP_02_counter++;
+  if (ESP_02_counter > 0x1F)
+  {
+    ESP_02_counter = 0x00;
+  }
+
+  standaloneTx(frame);
+  /*
+  0xaa,0xaa,0xaa,0xaa,0xaa,0xaa,0xaa,0xaa,0xaa,0xaa,0xaa,0xaa,0xaa
+  */
+
+  // MQB ESP_21 (0x0FD, DLC 8) - ESP wheel-speed/dynamics diagnostics.
+  // VAQ K-matrix: reads BZ and b7 bits 0 ABS_Bremsung, 1 ASR_Anf, 4
+  // EDS_Eingriff, 5 ESP_Eingriff. 0CQ b7 = 0x00 -> no interventions.
+  frame.identifier = ESP_21;                            // ESP_21 0x0fd
+  frame.data_length_code = 8;                           // DLC 8
+  frame.data[0] = 0x00;                                 // BR_CHK_21 - checksum
+  frame.data[1] = ESP_21_counter;                       // BR_BZ_21 - rolling counter (0x00>0x1F)
+  frame.data[2] = 0x1F;                                 // ESP_21 status (in diagnosis? none affect)
+  frame.data[3] = 0x80;                                 // ESP_21 status (sometimes 0xC0, sometimes 0x00)
+  frame.data[4] = 0x00;                                 // ESP_21 status (sometimes 0x3A, somtimes 0x39)
+  frame.data[5] = 0x00;                                 // ESP_21 reserved
+  frame.data[6] = 0x00;                                 // ESP_21 reserved
+  frame.data[7] = 0x00;                                 // ESP_21 reserved
+  frame.data[0] = calcChecksum(frame.data, ID_SEQ_0fd); // for 0x0fd
+
+  ESP_21_counter++;
+  if (ESP_21_counter > 0x1F)
+  {
+    ESP_21_counter = 0x00;
+  }
+
+  standaloneTx(frame);
+
+  /*
+  0xb4,0xef,0xf8,0x49,0x1e,0xe5,0xc2,0xc0,0x97,0x19,0x3c,0xc9,0xf1,0x98,0xd6,0x61
+  */
+}
+
+void Gen5_0CQ_VAQ_frames25()
+{
+  twai_message_t frame;
+  // MQB Kombi_01 (0x30B, DLC 8) - instrument cluster broadcast.
+  // KBI_Kilometerstand (odometer), KBI_Geschw_Anzeige (displayed speed), warning lamps.
+  // VAQ K-matrix: reads only KBI_Handbremse (b2 bit 7). 0CQ b2 = 0x02 -> off.
+  // Handbrake-follow rewrites this bit for gen 52 too (see can.cpp).
+  // Bench 2026-09-17: the VAQ logged the Kombi_01 "missing" DTC (0x00410E)
+  // with the static 0CQ frame on. K-matrix: Kombi_01_BZ is b1[0-3], a rolling
+  // counter the 0CQ never needed advanced. Roll it for the VAQ.
+  static uint8_t kombi01Bz = 0;
+  frame.identifier = KOMBI_01;                          // kombi 1 0x30b
+  frame.data_length_code = 8;                           // DLC 8
+  frame.data[0] = 0x10;                                 // KBI lamps (b0) - all off except bit 4 SILA_gueltig
+  frame.data[1] = (uint8_t)(0x20 | (kombi01Bz & 0x0F)); // Kombi_01_BZ (b1[0-3]) rolling + 0CQ high nibble
+  kombi01Bz++;
+  frame.data[2] = 0x02; // KBI_Kilometerstand byte 0 (odometer)
+  frame.data[3] = 0x00; // KBI_Kilometerstand byte 1
+  frame.data[4] = 0x0C; // KBI_Kilometerstand byte 2
+  frame.data[5] = 0x00; // KBI status
+  frame.data[6] = 0x00; // KBI warning lamps
+  frame.data[7] = 0x24; // KBI status reserved
+  standaloneTx(frame);
+}
+
+void Gen5_0CQ_VAQ_frames100()
+{
+  twai_message_t frame;
+  // MQB ESP_23 (0x5BE, DLC 8) - longitudinal/lateral acceleration, tyre data.
+  // BR_Laengsbeschleunigung (longitudinal G), BR_Querbeschleunigung (lateral G), BR_Tire_Circumference.
+  // VAQ K-matrix: NOT in the VAQ receive list. Kept like-for-like.
+  frame.identifier = ESP_23;                            // ESP_23 0x5be - this is fixed in Savvy but CHKS in Kmatrix?
+  frame.data_length_code = 8;                           // DLC 8
+  frame.data[0] = 0x00;                                 // BR_CHK_23 - checksum placeholder (no effect)
+  frame.data[1] = ESP_23_counter;                       // BR_BZ_23 - rolling counter (no effect B high byte)
+  frame.data[2] = 0xBF;                                 // BR_Laengsbeschleunigung low (longitudinal G) (no effect C)
+  frame.data[3] = 0x7F;                                 // BR_Laengsbeschleunigung high (no effect D)
+  frame.data[4] = 0x00;                                 // BR_Querbeschleunigung low (lateral G - rate of change (block 010))
+  frame.data[5] = 0x00;                                 // BR_Querbeschleunigung high (rate of change (block 010))
+  frame.data[6] = 0x7C;                                 // BR_Tire_Circumference / status (rate of change (block 010))
+  frame.data[7] = 0x78;                                 // BR_Tire_Circumference / status (rate of change (block 010))
+  frame.data[0] = calcChecksum(frame.data, ID_SEQ_5be); // for 0x5be
+
+  ESP_23_counter++;
+  if (ESP_23_counter > 0x1F)
+  {
+    ESP_23_counter = 0x00;
+  }
+
+  standaloneTx(frame);
+  /*
+    0xc9,0x21,0x6f,0x63,0xd2,0x42,0x6a,0x77,0x4a,0x3d,0xb0,0x62,0x9f,0x38,0xcd,0x5c
+    */
+
+  // MQB Parkhilfe_04 (0x54B, DLC 8) - park-assist module state broadcast.
+  // VAQ K-matrix: NOT in the VAQ receive list. Kept like-for-like.
+  frame.identifier = Parkhilfe_04; // Parkhilfe_04 0x54B
+  frame.data_length_code = 8;      // DLC 8
+  frame.data[0] = 0x00;            // PH_Status low (angle of turn (block 011) low byte)
+  frame.data[1] = 0x00;            // PH_Status high (no effect B high byte)
+  frame.data[2] = 0x00;            // PH_Status reserved (no effect C)
+  frame.data[3] = 0x00;            // PH_Status reserved (no effect D)
+  frame.data[4] = 0x00;            // PH_Status reserved (rate of change (block 010))
+  frame.data[5] = 0x00;            // PH_Status reserved (rate of change (block 010))
+  frame.data[6] = 0x00;            // PH_Status reserved (rate of change (block 010))
+  frame.data[7] = 0x24;            // PH_Status reserved (rate of change (block 010))
+  standaloneTx(frame);
+
+  // MQB Gateway_72 (0x3DB, DLC 8) - gateway routing/diagnostic broadcast.
+  // VAQ K-matrix: NOT in the VAQ receive list. Kept like-for-like.
+  frame.identifier = GATEWAY_72; // gateway 72 0x3db
+  frame.data_length_code = 8;    // DLC 8
+  frame.data[0] = 0x50;          // GW_Status / routing flags
+  frame.data[1] = 0x80;          // GW_Status
+  frame.data[2] = 0x00;          // GW_Status reserved
+  frame.data[3] = 0x00;          // GW_Status reserved
+  frame.data[4] = 0x05;          // GW_Status reserved
+  frame.data[5] = 0x10;          // GW_Status reserved
+  frame.data[6] = 0x01;          // GW_Status reserved
+  frame.data[7] = 0x78;          // GW_Status reserved
+  standaloneTx(frame);
+
+  // MQB Getriebe_14 (0x3C8, DLC 8) - transmission slow broadcast (Charisma, drag torque, launch).
+  // VAQ K-matrix: NOT in the VAQ receive list. Kept like-for-like.
+  frame.identifier = GETRIEBE_14; // getriebe 14 0x3c8
+  frame.data_length_code = 8;     // DLC 8
+  frame.data[0] = 0x00;           // GE_Beschl_max (Maximum possible acceleration - limited by gear/clutch)
+  frame.data[1] = 0x00;           // GE_Charisma_Fahrprogramm (Charisma drive programme selected - affects shift mapping)
+  frame.data[2] = 0x54;           // GE_Charisma_Status (Charisma system status)
+  frame.data[3] = 0x24;           // GE_M_Verlust (Drag/friction loss torque in transmission)
+  frame.data[4] = 0x00;           // GE_Launch_Control (Launch control active)
+  frame.data[5] = 0x60;           // GE_Status reserved
+  frame.data[6] = 0x01;           // GE_Status reserved
+  frame.data[7] = 0x51;           // GE_Status reserved
+  standaloneTx(frame);
+
+  // MQB Motor_14 (0x3BE, DLC 8) - start/stop subsystem state broadcast.
+  // MO_StSt_Status (state machine), MO_StSt_Restart (restart event), MO_StSt_Stop (stop event).
+  // VAQ K-matrix: reads MO_Gangposition (b2 bits 4-7: 0 N, 1-8 gear, 9 P,
+  // 10 S, 11 D/E, 13 R, 14 undefined), MO_Fahrer_bremst (b3 bit 4), its QBit
+  // (b3 bit 5) and MO_Kuppl_schalter (b4 bit 5). 0CQ b2 = 0xE6 -> gear 14
+  // 'not defined'; try 0x26 (gear 2) if the VAQ wants a real gear.
+  frame.identifier = MOTOR_14;                          // motor 14 0x3be
+  frame.data_length_code = 8;                           // DLC 8
+  frame.data[0] = 0x00;                                 // MO_CHK_14 - checksum
+  frame.data[1] = MOTOR_14_counter;                     // MO_BZ_14 - rolling counter (0x10 to 0x1F)
+  frame.data[2] = 0xE6;                                 // MO_StSt_Status (Start/stop system state - 0=inactive, 1=stopping, 2=stopped, 3=restarting) (doesn't effect)
+  frame.data[3] = 0x01;                                 // MO_StSt_Restart (Restart event flag) (this affects(!) on/off)
+  frame.data[4] = 0xC8;                                 // MO_StSt_Stop (Engine stop event flag) (doesn't effect)
+  frame.data[5] = 0x80;                                 // MO_StSt status reserved (doesn't effect)
+  frame.data[6] = 0x00;                                 // MO_StSt status reserved (doesn't effect)
+  frame.data[7] = 0x80;                                 // MO_StSt status reserved (doesn't effect)
+  frame.data[0] = calcChecksum(frame.data, ID_SEQ_3be); // for 0x3be
+
+  MOTOR_14_counter++;
+  if (MOTOR_14_counter > 0x1F)
+  {
+    MOTOR_14_counter = 0x10;
+  }
+
+  standaloneTx(frame);
+  /*
+  0x1f,0x28,0xc6,0x85,0xe6,0xf8,0xb0,0x19,0x5b,0x64,0x35,0x21,0xe4,0xf7,0x9c,0x24
+  */
+
+  // MQB ESP_07 (0x392, DLC 8) - ESP brake-event/intervention diagnostics.
+  // VAQ K-matrix: reads only ESP_Rollenmodus_Deaktivieren (b7 bit 6).
+  frame.identifier = ESP_07;                            // ESP_07 0x392
+  frame.data_length_code = 8;                           // DLC 8
+  frame.data[0] = 0x00;                                 // BR_CHK_07 - checksum
+  frame.data[1] = ESP_07_counter;                       // BR_BZ_07 - rolling counter (0x20>0x2F)
+  frame.data[2] = 0x00;                                 // ESP_07 status (one of these affects, find which one)
+  frame.data[3] = 0x00;                                 // ESP_07 status (no effect)
+  frame.data[4] = 0x00;                                 // ESP_07 status (no effect)
+  frame.data[5] = 0x00;                                 // ESP_07 status (no efefct)
+  frame.data[6] = 0x00;                                 // ESP_07 status (no effect)
+  frame.data[7] = 0x00;                                 // ESP_07 status (no effect)
+  frame.data[0] = calcChecksum(frame.data, ID_SEQ_392); // for 0x392
+
+  ESP_07_counter++;
+  if (ESP_07_counter > 0x20)
+  {
+    ESP_07_counter = 0x2F;
+  }
+  standaloneTx(frame);
+  /*
+   0x91,0x91,0x91,0x91,0x91,0x91,0x91,0x91,0x91,0x91,0x91,0x91,0x91,0x91
+   */
+
+  // MQB ESP_29 (0x18C, DLC 8) - ESP slow-rate diagnostic broadcast.
+  // VAQ K-matrix: NOT in the VAQ receive list. Kept like-for-like.
+  frame.identifier = ESP_29;  // esp_29 0x18c
+  frame.data_length_code = 8; // DLC 8
+  frame.data[0] = 0x00;       // BR_CHK_29 - checksum
+  frame.data[1] = 0x20;       // BR_BZ_29 - counter (checksum (0x20>0x2F)?  Not in Savvy)
+  frame.data[2] = 0x59;       // ESP_29 status
+  frame.data[3] = 0x00;       // ESP_29 status
+  frame.data[4] = 0x00;       // ESP_29 status
+  frame.data[5] = 0x00;       // ESP_29 status
+  frame.data[6] = 0x00;       // ESP_29 status
+  frame.data[7] = 0x00;       // ESP_29 status
+  standaloneTx(frame);
+}
+
+void Gen5_0CQ_VAQ_frames200()
+{
+  twai_message_t frame;
+  // PQ mKombi_2 (0x0C2, DLC 8) - electronic power steering / instrument-cluster slow.
+  // Transmit currently disabled (commented out below).
+  // VAQ K-matrix: PQ-era ID, not an MQB FCAN message at all. Transmit stays
+  // disabled, exactly as in the 0CQ set.
+  frame.identifier = mKombi_2; // electronic power steering 0x0C2
+  frame.data_length_code = 8;  // DLC 8
+  frame.data[0] = 0x4C;        // EPS status / steering torque (angle of turn (block 011) low byte)
+  frame.data[1] = 0x86;        // EPS status (no effect B high byte)
+  frame.data[2] = 0x85;        // EPS status (no effect C)
+  frame.data[3] = 0x00;        // EPS status (no effect D)
+  frame.data[4] = 0x00;        // EPS reserved (rate of change (block 010))
+  frame.data[5] = 0x30;        // EPS reserved (rate of change (block 010))
+  frame.data[6] = 0xFF;        // EPS reserved (rate of change (block 010))
+  frame.data[7] = 0x04;        // EPS reserved (rate of change (block 010))
+  // standaloneTx(frame);
+}
+
+void Gen5_0CQ_VAQ_frames1000()
+{
+  twai_message_t frame;
+  // MQB Motor_07 (0x640, DLC 8) - engine slow-rate diagnostics broadcast.
+  // VAQ K-matrix: NOT in the VAQ receive list. Kept like-for-like.
+  frame.identifier = MOTOR_07; // motor 07, 1000ms
+  frame.data_length_code = 8;  // DLC 8
+  frame.data[0] = 0xA0;        // MO_07 diagnostic byte (no effect from any)
+  frame.data[1] = 0x5A;        // MO_07 diagnostic byte
+  frame.data[2] = 0x56;        // MO_07 diagnostic byte
+  frame.data[3] = 0xA3;        // MO_07 diagnostic byte
+  frame.data[4] = 0x80;        // MO_07 diagnostic byte
+  frame.data[5] = 0xA0;        // MO_07 diagnostic byte
+  frame.data[6] = 0x59;        // MO_07 diagnostic byte
+  frame.data[7] = 0x01;        // MO_07 diagnostic byte
+  standaloneTx(frame);
+
+  // VAQ K-matrix: reads CHA_Ziel_FahrPr_VAQ (b4 bits 4-7). 0CQ b4 = 0x02 ->
+
+  // VAQ programme 0 'no function'. Candidates: 0x12 / 0x22 / 0x32 (programme
+
+  // 1 / 2 / 3) via OVR 385 4 0x12 etc.
+
+  frame.identifier = CHARISMA_01; // charisma_01 0x385
+  frame.data_length_code = 8;     // DLC 8 no effect from any
+  frame.data[0] = 0x00;           // CHA_Target_Driving_Program_AGA & CHA_Target_Driving_Prior_ESP
+  frame.data[1] = 0x00;           // CHA_Target_Driving_Pri_Freewheel & void
+  frame.data[2] = 0x22;           // CHA_Target_Driving_Program_MO & CHA_Target_Driving_Program_GE
+  frame.data[3] = 0x02;           // CHA_Target_Driving_PR_ALR (inc. AWD) & CHA_Target_Driving_Program_MO_BZS
+  frame.data[4] = 0x02;           // CHA_Target_Driving_Project_DR & CHA_Target_Driving_Prior_VAQ
+  frame.data[5] = 0x20;           // CHA_Target_Driving_PR_AFS & CHA_Target_Driving_Program_RGS
+  frame.data[6] = 0x02;           // CHA_Target_Driving_Price_EPS & CHA_Target_Driving_Principal_ACC
+  frame.data[7] = 0x02;           // CHA_Target_Driving_Prior_SAK & CHA_Target_Driving_Program_MO_StSt
+  standaloneTx(frame);
+
+  // MQB Systeminfo_01 (0x585, DLC 8) - system identification/info broadcast.
+  // VAQ K-matrix: reads SI_NWDF (b1 bit 2) and SI_NWDF_gueltig (b1 bit 3).
+  // 0CQ b1 = 0x3C sets both (network diagnostics released and valid).
+  frame.identifier = SYSTEMINFO_01; // systeminfo_01 0x585
+  frame.data_length_code = 8;       // DLC 8
+  frame.data[0] = 0x84;             // SI status / system info
+  frame.data[1] = 0x3C;             // SI info
+  frame.data[2] = 0x00;             // SI info
+  frame.data[3] = 0x7F;             // SI info
+  frame.data[4] = 0x14;             // SI info
+  frame.data[5] = 0x00;             // SI info
+  frame.data[6] = 0x00;             // SI info
+  frame.data[7] = 0x00;             // SI info
+  standaloneTx(frame);
+
+  // VAQ K-matrix: reads MO_Faktor_Momente_02 (b1 bits 4-5) and MO_Kraftstoffart
+
+  // (b4 bits 4-7). Counter 0x10-0x1F -> Faktor 1; b4 = 0x14 -> petrol.
+
+  frame.identifier = MOTOR_CODE_01;      // motor_code_01 0x641
+  frame.data_length_code = 8;            // DLC 8 no affect from any
+  frame.data[0] = 0x00;                  // checksum
+  frame.data[1] = MOTOR_CODE_01_counter; // rolling (10>1F)
+  // MQB Motor_Code_01 (0x641, DLC 8) - engine code / identification broadcast.
+  frame.identifier = MOTOR_CODE_01;      // motor_code_01 0x641
+  frame.data_length_code = 8;            // DLC 8
+  frame.data[0] = 0x00;                  // MO_CHK_Code - checksum placeholder
+  frame.data[1] = MOTOR_CODE_01_counter; // MO_BZ_Code - rolling counter (10>1F)
+  frame.data[2] = 0x2B;                  // MO_Code byte (engine identification ASCII/code)
+  frame.data[3] = 0x53;                  // MO_Code byte
+  frame.data[4] = 0x14;                  // MO_Code byte
+  frame.data[5] = 0x14;                  // MO_Code byte
+  frame.data[6] = 0xD7;                  // MO_Code byte
+  frame.data[7] = 0x24;                  // MO_Code byte
+
+  MOTOR_CODE_01_counter++;
+  if (MOTOR_CODE_01_counter > 0x1F)
+  {
+    MOTOR_CODE_01_counter = 0x10;
+  }
+
+  standaloneTx(frame);
+  /*
+  0x47,0x47,0x47,0x47,0x47,0x47,0x47,0x47,0x47,0x47,0x47,0x47,0x47,0x47,0x47
+  */
+
+  // MQB ESP_20 (0x65D, DLC 8) - ESP slow diagnostic broadcast incl. tyre circumference.
+  // VAQ K-matrix: reads BR_Systemart (b1 bits 4-5), BR_QBit_Reifenumfang (b6
+  // bit 3) and BR_Reifenumfang (b6[4-7] + b7, mm). Counter 0x30-0x3F ->
+  // Systemart 3 'ESP with EPB'; b6/b7 = 0xE2/0x79 -> 1950 mm, QBit 0.
+  frame.identifier = ESP_20;                            // esp_20 0x65d
+  frame.data_length_code = 8;                           // DLC 8 no affect from any
+  frame.data[0] = 0x00;                                 // BR_CHK_20 - checksum
+  frame.data[1] = ESP_20_counter;                       // BR_BZ_20 - rolling counter (rolling (30>3F))
+  frame.data[2] = 0x2B;                                 // ESP_20 status (no effect C)
+  frame.data[3] = 0x10;                                 // ESP_20 status (no effect D)
+  frame.data[4] = 0x00;                                 // ESP_20 status
+  frame.data[5] = 0x00;                                 // ESP_20 status
+  frame.data[6] = 0xE2;                                 // ESP_20 status
+  frame.data[7] = 0x79;                                 // BR_Tire_Circumference (BR_Tire circumference)
+  frame.data[0] = calcChecksum(frame.data, ID_SEQ_65d); // for 0x65d
+
+  ESP_20_counter++;
+  if (ESP_20_counter > 0x3F)
+  {
+    ESP_20_counter = 0x30;
+  }
+
+  standaloneTx(frame);
+  /*
+  0xac,0xb3,0xab,0xeb,0x7a,0xe1,0x3b,0xf7,0x73,0xba,0x7c,0x9e,0x06,0x5f,0x02,0xd9
+  */
+
+  // MQB Diagnose_01 (0x6B2, DLC 8) - generic diagnostic broadcast.
+  // VAQ K-matrix: reads DGN_Verlernzaehler (b0), KBI_Kilometerstand (b1-b3[0-3])
+  // and the date/time fields. All static in this set.
+  frame.identifier = DIAGNOSE_01; // diagnose_01 0x6b2
+  frame.data_length_code = 8;     // DLC 8
+  frame.data[0] = 0x30;           // DG_Status
+  frame.data[1] = 0x4D;           // DG_Status
+  frame.data[2] = 0x58;           // DG_Status
+  frame.data[3] = 0xA2;           // DG_Status
+  frame.data[4] = 0x89;           // DG_Status
+  frame.data[5] = 0x85;           // DG_Status
+  frame.data[6] = 0x3F;           // DG_Status (0x3F OR 0xBF? (3F, then BF, then 3F, then BF...))
+  frame.data[7] = 0x30;           // DG_Status (2D, then 2D, then 2E, then 2E, then 2F, then 2F... roll over? When?)
+  standaloneTx(frame);
+
+  // MQB Kombi_02 (0x6B7, DLC 8) - instrument cluster slow-rate broadcast.
+  // VAQ K-matrix: reads KBI_Standzeit_02 (b2[4-7] .. b4[0-4], seconds).
+  frame.identifier = KOMBI_02; // kombi2 0x6b7
+  frame.data_length_code = 8;  // DLC 8
+  frame.data[0] = 0x4D;        // KBI_02 status (no effect from any)
+  frame.data[1] = 0x58;        // KBI_02 status
+  frame.data[2] = 0xF2;        // KBI_02 status
+  frame.data[3] = 0xEE;        // KBI_02 status
+  frame.data[4] = 0x04;        // KBI_02 status
+  frame.data[5] = 0x2B;        // KBI_02 status
+  frame.data[6] = 0x00;        // KBI_02 status
+  frame.data[7] = 0x78;        // KBI_02 status
+  standaloneTx(frame);
+}
+
+// =============================================================================
 // Gen5 (0AY) Standalone Frames
 // 0AY is a different MQB-era controller variant; the frames below are an
 // initial copy of the Gen4 (PQ-derived) standalone set
@@ -2491,12 +3318,12 @@ void Gen5_0AY_frames10()
   frame.identifier = BRAKES4_ID;
   frame.data_length_code = 8;
   frame.data[0] = get_lock_target_adjusted_value(0x7F, false) - 0x7F; // ABS_Vorgabewert_hinten_Kupplung (rear-clutch %)
-  frame.data[1] = 0x00;                                        // ABS_Vorgabewert_mitte_Kupplungs low (centre stiffness Nm/min)
-  frame.data[2] = 0x00;                                        // ABS_Vorgabewert_mitte_Kupplungs high
-  frame.data[3] = 0x64;                                        // status / reserved
-  frame.data[4] = 0x00;                                        // reserved
-  frame.data[5] = 0x00;                                        // reserved
-  frame.data[6] = BRAKES4_counter;                             // rolling counter (16-step)
+  frame.data[1] = 0x00;                                               // ABS_Vorgabewert_mitte_Kupplungs low (centre stiffness Nm/min)
+  frame.data[2] = 0x00;                                               // ABS_Vorgabewert_mitte_Kupplungs high
+  frame.data[3] = 0x64;                                               // status / reserved
+  frame.data[4] = 0x00;                                               // reserved
+  frame.data[5] = 0x00;                                               // reserved
+  frame.data[6] = BRAKES4_counter;                                    // rolling counter (16-step)
   BRAKES4_crc = 0;
   for (uint8_t i = 0; i < 7; i++)
   {
@@ -2805,7 +3632,7 @@ void Gen42_frames10()
 {
   twai_message_t frame;
   frame.extd = 0;
-  frame.rtr  = 0;
+  frame.rtr = 0;
 
   // FORD_GEN42_WHEEL_SPEEDS_ID 0x4B0 (Bus1, 10 ms) — ABS/ESC wheel speeds.
   // FL / FR / RL / RR, each 16-bit big-endian. Encoding: (raw − 10 000) / 100 km/h.
@@ -2815,20 +3642,20 @@ void Gen42_frames10()
   // At 0 % lock: all four wheels at 0x2710 (balanced, no engagement requested).
   // At 100 % lock: front +~1 000 counts (~10 km/h simulated slip). [WHEEL_SPEEDS]
   {
-    const uint8_t  spd_adj     = get_lock_target_adjusted_value(0xFA, false);
+    const uint8_t spd_adj = get_lock_target_adjusted_value(0xFA, false);
     const uint16_t front_delta = (uint16_t)spd_adj * 4U; // 0 to ~1 000 counts
-    const uint16_t front_spd   = 0x2710U + front_delta;  // FL / FR speed word
-    const uint16_t rear_spd    = 0x2710U;                 // RL / RR at reference
-    frame.identifier       = FORD_GEN42_WHEEL_SPEEDS_ID;
+    const uint16_t front_spd = 0x2710U + front_delta;    // FL / FR speed word
+    const uint16_t rear_spd = 0x2710U;                   // RL / RR at reference
+    frame.identifier = FORD_GEN42_WHEEL_SPEEDS_ID;
     frame.data_length_code = 8;
     frame.data[0] = (uint8_t)(front_spd >> 8);    // FL high byte
     frame.data[1] = (uint8_t)(front_spd & 0xFFU); // FL low byte
     frame.data[2] = (uint8_t)(front_spd >> 8);    // FR high byte
     frame.data[3] = (uint8_t)(front_spd & 0xFFU); // FR low byte
-    frame.data[4] = (uint8_t)(rear_spd  >> 8);    // RL high byte
-    frame.data[5] = (uint8_t)(rear_spd  & 0xFFU); // RL low byte
-    frame.data[6] = (uint8_t)(rear_spd  >> 8);    // RR high byte
-    frame.data[7] = (uint8_t)(rear_spd  & 0xFFU); // RR low byte
+    frame.data[4] = (uint8_t)(rear_spd >> 8);     // RL high byte
+    frame.data[5] = (uint8_t)(rear_spd & 0xFFU);  // RL low byte
+    frame.data[6] = (uint8_t)(rear_spd >> 8);     // RR high byte
+    frame.data[7] = (uint8_t)(rear_spd & 0xFFU);  // RR low byte
     standaloneTx(frame);
   }
 
@@ -2837,15 +3664,16 @@ void Gen42_frames10()
   // D2:D3 = PrplWhlTot_Tq_LimMn (minimum propulsion torque limit).
   // D4:D5 = PrplWhlTot_Tq_Rq    (requested propulsion torque).
   // D6 b6:b7 = BrkOnOffSwtch_D_Actl, D7 b0:b6 = ACCompressorDisp (%). [TorqueDataEngFlags]
-  frame.identifier       = FORD_GEN42_TORQUE_FLAGS_ID;
+  frame.identifier = FORD_GEN42_TORQUE_FLAGS_ID;
   frame.data_length_code = 8;
   frame.data[0] = 0x28U + get_lock_target_adjusted_value(0xD7, false); // Tq_Actl high byte: 0x28→0xFF (proportional to lock_target)
-  frame.data[1] = 0xE0;                                                   // Tq_Actl low byte (static)
+  frame.data[1] = 0xE0;                                                // Tq_Actl low byte (static)
   frame.data[2] = 0x27U + get_lock_target_adjusted_value(0xD8, false); // Tq_LimMn high byte: 0x27→0xFF
-  frame.data[3] = 0x10;                                                   // Tq_LimMn low byte (static)
+  frame.data[3] = 0x10;                                                // Tq_LimMn low byte (static)
   frame.data[4] = 0x27U + get_lock_target_adjusted_value(0xD8, false); // Tq_Rq high byte: 0x27→0xFF
-  frame.data[5] = 0x10;                                                   // Tq_Rq low byte (static)
-  frame.data[6] = 0x88; frame.data[7] = 0x00;                           // flags / AC displacement
+  frame.data[5] = 0x10;                                                // Tq_Rq low byte (static)
+  frame.data[6] = 0x88;
+  frame.data[7] = 0x00; // flags / AC displacement
   standaloneTx(frame);
 
   // FORD_GEN42_ENG_SPD_THROTTLE_ID 0x201 (Bus1, 10 ms) — PCM engine/vehicle speed.
@@ -2853,23 +3681,31 @@ void Gen42_frames10()
   // D2:D3 = Veh_V_ActlEng (0.01 kph/LSB, vehicle speed from engine estimate).
   // D4:D5 = ApedPos_Pc_ActlArb (0.1 %/LSB, arbitrated accelerator position).
   // D6 b4:b5 = ApedPosPcActl_D_Qf, D6 b2 = Autostart_B_Stat. [EngVehicleSpThrottle_CG1]
-  frame.identifier       = FORD_GEN42_ENG_SPD_THROTTLE_ID;
+  frame.identifier = FORD_GEN42_ENG_SPD_THROTTLE_ID;
   frame.data_length_code = 8;
-  frame.data[0] = 0x00; frame.data[1] = 0x00; // EngAout_N = 0 rpm
-  frame.data[2] = 0x40; frame.data[3] = 0x00; // Veh_V_ActlEng = 0 kph
-  frame.data[4] = 0x00; frame.data[5] = 0x00; // ApedPos = 0 %
-  frame.data[6] = 0x00; frame.data[7] = 0x80; // quality flags / static
+  frame.data[0] = 0x00;
+  frame.data[1] = 0x00; // EngAout_N = 0 rpm
+  frame.data[2] = 0x40;
+  frame.data[3] = 0x00; // Veh_V_ActlEng = 0 kph
+  frame.data[4] = 0x00;
+  frame.data[5] = 0x00; // ApedPos = 0 %
+  frame.data[6] = 0x00;
+  frame.data[7] = 0x80; // quality flags / static
   standaloneTx(frame);
 
   // FORD_GEN42_POWERTRAIN_DATA6_ID 0x205 (Bus1, 10 ms) — PCM fuel/torque model data.
   // D4:D5 = provisional fuel-related word (rapidly varying in logs, not a tank sensor).
   // D6 = provisional fuel-related byte. [PowertrainData_6 / PROVISIONAL_0x205]
-  frame.identifier       = FORD_GEN42_POWERTRAIN_DATA6_ID;
+  frame.identifier = FORD_GEN42_POWERTRAIN_DATA6_ID;
   frame.data_length_code = 8;
-  frame.data[0] = 0x02; frame.data[1] = 0x8B;
-  frame.data[2] = 0x01; frame.data[3] = 0xFF;
-  frame.data[4] = 0x02; frame.data[5] = 0x18; // provisional fuel-related word
-  frame.data[6] = 0x01; frame.data[7] = 0xFF;
+  frame.data[0] = 0x02;
+  frame.data[1] = 0x8B;
+  frame.data[2] = 0x01;
+  frame.data[3] = 0xFF;
+  frame.data[4] = 0x02;
+  frame.data[5] = 0x18; // provisional fuel-related word
+  frame.data[6] = 0x01;
+  frame.data[7] = 0xFF;
   standaloneTx(frame);
 
   // FORD_GEN42_TRANS_GEAR_DATA2_ID 0x231 (Bus1, 10 ms) — TCM torque/gear status.
@@ -2880,18 +3716,21 @@ void Gen42_frames10()
   // byte[1] b3:b0 / byte[2-5] = MtrGen1Aout_Tq_Rq (b53|14, 0.1 Nm/LSB, −800 Nm).
   // byte[6] = TrnMil_D_Rq / EngExhBrkTq_Pc_Rq. DLC=7. [TransGearData_2]
   // Log-verified payload: 01 52 64 00 01 00 80
-  frame.identifier       = FORD_GEN42_TRANS_GEAR_DATA2_ID;
+  frame.identifier = FORD_GEN42_TRANS_GEAR_DATA2_ID;
   frame.data_length_code = 7;
-  frame.data[0] = 0x01; frame.data[1] = 0x52; // No_Cs=0x01; No_Cnt=5 | 0x02
-  frame.data[2] = 0x64; frame.data[3] = 0x00; // MtrGen1Aout_Tq_Rq
-  frame.data[4] = 0x01; frame.data[5] = 0x00; // TrnMsgTxt_D_Rq / static
+  frame.data[0] = 0x01;
+  frame.data[1] = 0x52; // No_Cs=0x01; No_Cnt=5 | 0x02
+  frame.data[2] = 0x64;
+  frame.data[3] = 0x00; // MtrGen1Aout_Tq_Rq
+  frame.data[4] = 0x01;
+  frame.data[5] = 0x00;                                                          // TrnMsgTxt_D_Rq / static
   frame.data[6] = 0x80U | (0x1FU + get_lock_target_adjusted_value(0x20, false)); // MtrGen1Aout_Tq_Rq upper 6 bits: 0x1F (0 Nm) → 0x3F (~+813 Nm)
   standaloneTx(frame);
 
   // FORD_GEN42_BODY_INFO4_ID 0x240 (Bus1, 10 ms) — BCM body information (2-byte variant).
   // DBC superset (8 B) includes EngOff_T_Actl (seconds), AmbTempImpr (0.25 °C/LSB, −128 °C).
   // Focus RS logs consistently show only 2 bytes: 0x00 0x40. [Body_Information_4_CG1]
-  frame.identifier       = FORD_GEN42_BODY_INFO4_ID;
+  frame.identifier = FORD_GEN42_BODY_INFO4_ID;
   frame.data_length_code = 2;
   frame.data[0] = 0x00;
   frame.data[1] = 0x40;
@@ -2902,7 +3741,7 @@ void Gen42_frames20()
 {
   twai_message_t frame;
   frame.extd = 0;
-  frame.rtr  = 0;
+  frame.rtr = 0;
 
   // FORD_GEN42_ACCEL_BRAKE_STATUS_ID 0x080 (Bus1, 20 ms) — PCM accel/brake status.
   // D0:D1 = AccelPedal_Pc (10-bit Motorola b6|10, 0.1 %/LSB): D0[6:5]=raw[9:8], D1[7:0]=raw[7:0].
@@ -2910,33 +3749,36 @@ void Gen42_frames20()
   // D2:D3 = static 0x7530.  D4:D5 = static 0x0130.
   // D7 = 8-bit rolling counter (shared with 0x20F D8 and 0x211 D8).
   // DBC signals: AccelPedal_Pc b6|10 (0.1 %/LSB Motorola), BrakePedal_D b4|2. DLC=7. [ACCEL_BRAKE_STATUS]
-  frame.identifier       = FORD_GEN42_ACCEL_BRAKE_STATUS_ID;
+  frame.identifier = FORD_GEN42_ACCEL_BRAKE_STATUS_ID;
   frame.data_length_code = 7;
   {
     const uint16_t raw_pedal = (uint16_t)get_lock_target_adjusted_value(0xFA, false) * 4U; // 0–1000 = 0–100.0 %
-    frame.data[0] = 0x07U | (uint8_t)(((raw_pedal >> 8) & 0x03U) << 5); // AccelPedal[9:8]; BrakePedal=0; bit2:0=0x7
-    frame.data[1] = (uint8_t)(raw_pedal & 0xFFU);                        // AccelPedal[7:0]
+    frame.data[0] = 0x07U | (uint8_t)(((raw_pedal >> 8) & 0x03U) << 5);                    // AccelPedal[9:8]; BrakePedal=0; bit2:0=0x7
+    frame.data[1] = (uint8_t)(raw_pedal & 0xFFU);                                          // AccelPedal[7:0]
   }
-  frame.data[2] = 0x75; frame.data[3] = 0x30; // D3:D4 = 0x7530 (constant)
-  frame.data[4] = 0x01; frame.data[5] = 0x30; // D5:D6 = 0x0130 (constant)
-  frame.data[6] = gen42_main_counter;           // D7 = 8-bit rolling counter
+  frame.data[2] = 0x75;
+  frame.data[3] = 0x30; // D3:D4 = 0x7530 (constant)
+  frame.data[4] = 0x01;
+  frame.data[5] = 0x30;               // D5:D6 = 0x0130 (constant)
+  frame.data[6] = gen42_main_counter; // D7 = 8-bit rolling counter
   standaloneTx(frame);
 
   // FORD_GEN42_ENGINE_DATA_ID 0x090 (Bus1, 20 ms) — PCM engine speed data.
   // D1 high nibble = 4-bit rolling counter 0x0-0xF (D1 = (counter << 4) | 0x07).
   // DBC signal: EngAout_N_Actl b35|13 (2 rpm/LSB, Motorola). D7:D8 = 0x07D0 (constant). [ENGINE_DATA]
-  frame.identifier       = FORD_GEN42_ENGINE_DATA_ID;
+  frame.identifier = FORD_GEN42_ENGINE_DATA_ID;
   frame.data_length_code = 8;
   frame.data[0] = (uint8_t)((gen42_090_nibble << 4) | 0x07U); // D1: 4-bit counter | 0x07
-  frame.data[1] = 0x05;                                         // D2 (constant)
-  frame.data[2] = 0x57;                                         // D3 (constant — EngAout_N upper bits)
-  frame.data[3] = 0x07;                                         // D4 (constant)
+  frame.data[1] = 0x05;                                       // D2 (constant)
+  frame.data[2] = 0x57;                                       // D3 (constant — EngAout_N upper bits)
+  frame.data[3] = 0x07;                                       // D4 (constant)
   {
     const uint16_t V_rpm = 400U + (uint16_t)get_lock_target_adjusted_value(0xFA, false) * 10U; // 400–2900 → 800–5800 RPM
-    frame.data[4] = (uint8_t)(0xC0U | ((V_rpm >> 8) & 0x1FU)); // D5: upper 5 bits of V; flags 0b110 preserved
-    frame.data[5] = (uint8_t)(V_rpm & 0xFFU);                   // D6: lower 8 bits of V
+    frame.data[4] = (uint8_t)(0xC0U | ((V_rpm >> 8) & 0x1FU));                                 // D5: upper 5 bits of V; flags 0b110 preserved
+    frame.data[5] = (uint8_t)(V_rpm & 0xFFU);                                                  // D6: lower 8 bits of V
   }
-  frame.data[6] = 0x07; frame.data[7] = 0xD0;                  // D7:D8 = 0x07D0 (constant)
+  frame.data[6] = 0x07;
+  frame.data[7] = 0xD0; // D7:D8 = 0x07D0 (constant)
   standaloneTx(frame);
 
   // FORD_GEN42_BRAKE_DATA_ID 0x20F (Bus1, 20 ms) — ABS provisional brake data.
@@ -2945,14 +3787,16 @@ void Gen42_frames20()
   // D7 = 0xC8 − D6 (complement; D6 + D7 always = 0xC8 = 200 decimal).
   // D8 = shared 8-bit rolling counter (same as 0x080 D7 and 0x211 D8).
   // D2:D3 = provisional brake pressure: 0x0FB0 observed at full brake.
-  frame.identifier       = FORD_GEN42_BRAKE_DATA_ID;
+  frame.identifier = FORD_GEN42_BRAKE_DATA_ID;
   frame.data_length_code = 8;
-  frame.data[0] = 0x75; frame.data[1] = 0x30; // D1:D2 = 0x7530 (constant)
-  frame.data[2] = 0x27; frame.data[3] = 0x10; // D3:D4 = 0x2710 (constant)
-  frame.data[4] = 0x40;                         // D5 (constant)
-  frame.data[5] = gen42_20F_d6;                 // D6: +0x10 per frame, mod 256
+  frame.data[0] = 0x75;
+  frame.data[1] = 0x30; // D1:D2 = 0x7530 (constant)
+  frame.data[2] = 0x27;
+  frame.data[3] = 0x10;                            // D3:D4 = 0x2710 (constant)
+  frame.data[4] = 0x40;                            // D5 (constant)
+  frame.data[5] = gen42_20F_d6;                    // D6: +0x10 per frame, mod 256
   frame.data[6] = (uint8_t)(0xC8U - gen42_20F_d6); // D7: complement (D6 + D7 = 0xC8)
-  frame.data[7] = gen42_main_counter;            // D8: shared 8-bit rolling counter
+  frame.data[7] = gen42_main_counter;              // D8: shared 8-bit rolling counter
   standaloneTx(frame);
 
   // FORD_GEN42_DESIRED_TORQ_BRK_ID 0x211 (Bus1, 20 ms) — ABS desired torque/brake.
@@ -2961,14 +3805,16 @@ void Gen42_frames20()
   // D3 b3 = AbsActv_B_Actl (ABS active flag). D4:D5 = static 0x4848.
   // D5:D6 b47|10 = VehLongOvrGnd_A_Est (0.035 m/s², offset −17.9 m/s²).
   // D8 = shared 8-bit rolling counter. [DesiredTorqBrk_CG1]
-  frame.identifier       = FORD_GEN42_DESIRED_TORQ_BRK_ID;
+  frame.identifier = FORD_GEN42_DESIRED_TORQ_BRK_ID;
   frame.data_length_code = 8;
-  frame.data[0] = 0xFF; frame.data[1] = 0xFE; // PrplWhlTot_Tq_RqMx
+  frame.data[0] = 0xFF;
+  frame.data[1] = 0xFE;                                        // PrplWhlTot_Tq_RqMx
   frame.data[2] = get_lock_target_adjusted_value(0xFF, false); // RearDiffLck_Tq_RqMx upper 8 bits: 0→255 Nm (proportional to lock_target)
-  frame.data[3] = 0x00;                                         // RearDiffLck_Tq_RqMx lower 4 bits = 0; AbsActv_B_Actl = 0
-  frame.data[4] = 0x48; frame.data[5] = 0x48; // VehLongOvrGnd_A_Est (static)
-  frame.data[6] = 0x00;                         // constant
-  frame.data[7] = gen42_main_counter;            // D8: shared 8-bit rolling counter
+  frame.data[3] = 0x00;                                        // RearDiffLck_Tq_RqMx lower 4 bits = 0; AbsActv_B_Actl = 0
+  frame.data[4] = 0x48;
+  frame.data[5] = 0x48;               // VehLongOvrGnd_A_Est (static)
+  frame.data[6] = 0x00;               // constant
+  frame.data[7] = gen42_main_counter; // D8: shared 8-bit rolling counter
   standaloneTx(frame);
 
   // FORD_GEN42_DRIVE_MODE_ID 0x190 (Bus1, 20 ms) — GWM/PCM drive mode status.
@@ -2979,23 +3825,23 @@ void Gen42_frames20()
   // D7:D8 = provisional steering angle word (0x8000 = 0°, per guide). [PROVISIONAL_0x190]
   {
     const uint8_t drive_mode = (lock_target > 0.0f) ? 0x60U : 0x20U;
-    frame.identifier       = FORD_GEN42_DRIVE_MODE_ID;
+    frame.identifier = FORD_GEN42_DRIVE_MODE_ID;
     frame.data_length_code = 8;
-    frame.data[0] = 0x00;                        // D1 (constant)
-    frame.data[1] = 0x51;                        // D2: engine speed proxy (~1000 rpm idle)
-    frame.data[2] = drive_mode;                  // D3: drive-mode (0x20=idle, 0x60=demand)
-    frame.data[3] = 0x80;                        // D4 (constant)
-    frame.data[4] = 0x04;                        // D5 (constant — drive-engaged status)
-    frame.data[5] = gen42_190_counter & 0x0FU;   // D6: 4-bit nibble counter 0x00-0x0F
-    frame.data[6] = 0x00;                        // D7 (constant)
-    frame.data[7] = 0x3C;                        // D8 (constant)
+    frame.data[0] = 0x00;                      // D1 (constant)
+    frame.data[1] = 0x51;                      // D2: engine speed proxy (~1000 rpm idle)
+    frame.data[2] = drive_mode;                // D3: drive-mode (0x20=idle, 0x60=demand)
+    frame.data[3] = 0x80;                      // D4 (constant)
+    frame.data[4] = 0x04;                      // D5 (constant — drive-engaged status)
+    frame.data[5] = gen42_190_counter & 0x0FU; // D6: 4-bit nibble counter 0x00-0x0F
+    frame.data[6] = 0x00;                      // D7 (constant)
+    frame.data[7] = 0x3C;                      // D8 (constant)
     standaloneTx(frame);
   }
 
   // Advance counters after all 20 ms frames are sent.
-  gen42_main_counter++;                                              // free-running 8-bit (0x080/0x20F/0x211 shared)
-  gen42_090_nibble  = (uint8_t)((gen42_090_nibble  + 1U) & 0x0FU); // 4-bit 0-15
-  gen42_20F_d6      = (uint8_t)((gen42_20F_d6      + 0x10U) & 0xFFU); // +0x10, mod 256
+  gen42_main_counter++;                                            // free-running 8-bit (0x080/0x20F/0x211 shared)
+  gen42_090_nibble = (uint8_t)((gen42_090_nibble + 1U) & 0x0FU);   // 4-bit 0-15
+  gen42_20F_d6 = (uint8_t)((gen42_20F_d6 + 0x10U) & 0xFFU);        // +0x10, mod 256
   gen42_190_counter = (uint8_t)((gen42_190_counter + 1U) & 0x0FU); // 4-bit 0-15
 }
 
@@ -3003,23 +3849,27 @@ void Gen42_frames100()
 {
   twai_message_t frame;
   frame.extd = 0;
-  frame.rtr  = 0;
+  frame.rtr = 0;
 
   // FORD_GEN42_WARN_STATUS_ID 0x212 (Bus1, 100 ms) — IPC/ABS warning status.
   // Provisional: D3/D5 interact for DSC/TCS warning; D4 b5=brake warn, D4 b3=ABS warn.
   // Log-verified payload: F8 00 38 80 15 00 00 00 [PROVISIONAL_0x212]
-  frame.identifier       = FORD_GEN42_WARN_STATUS_ID;
+  frame.identifier = FORD_GEN42_WARN_STATUS_ID;
   frame.data_length_code = 8;
-  frame.data[0] = 0xF8; frame.data[1] = 0x00; // D1: status byte, D2 (zero)
-  frame.data[2] = 0x38; frame.data[3] = 0x80; // D3: DSC/TCS candidate, D4: brake/ABS candidates
-  frame.data[4] = 0x15; frame.data[5] = 0x00; // D5: TCS candidate
-  frame.data[6] = 0x00; frame.data[7] = 0x00;
+  frame.data[0] = 0xF8;
+  frame.data[1] = 0x00; // D1: status byte, D2 (zero)
+  frame.data[2] = 0x38;
+  frame.data[3] = 0x80; // D3: DSC/TCS candidate, D4: brake/ABS candidates
+  frame.data[4] = 0x15;
+  frame.data[5] = 0x00; // D5: TCS candidate
+  frame.data[6] = 0x00;
+  frame.data[7] = 0x00;
   standaloneTx(frame);
 
   // FORD_GEN42_COUNTER_275_ID 0x275 (Bus1, 100 ms) — unknown rolling counter frame.
   // D1 steps +0x20 per 100 ms cycle: 0x80, 0xA0, 0xC0, 0xE0, 0x00, 0x20, 0x40, 0x60, (wrap).
   // Not matched in available DBCs. DLC=3.
-  frame.identifier       = FORD_GEN42_COUNTER_275_ID;
+  frame.identifier = FORD_GEN42_COUNTER_275_ID;
   frame.data_length_code = 3;
   frame.data[0] = gen42_275_counter; // D1: rolling counter (+0x20 per frame)
   frame.data[1] = 0x00;              // D2 (constant)
@@ -3033,40 +3883,52 @@ void Gen42_frames200()
 {
   twai_message_t frame;
   frame.extd = 0;
-  frame.rtr  = 0;
+  frame.rtr = 0;
 
   // FORD_GEN42_UNKNOWN_270_ID 0x270 (Bus1, 200 ms) — unknown 200 ms heartbeat.
   // D1 = 0x81/0x82 (slow-varying in log); D2 = 0x01 constant. Not in available DBCs.
   // Log-verified most common payload: 81 01 00 00 00 00 00 00
-  frame.identifier       = FORD_GEN42_UNKNOWN_270_ID;
+  frame.identifier = FORD_GEN42_UNKNOWN_270_ID;
   frame.data_length_code = 8;
-  frame.data[0] = 0x81; frame.data[1] = 0x01; // D1: status/counter, D2: 0x01
-  frame.data[2] = 0x00; frame.data[3] = 0x00;
-  frame.data[4] = 0x00; frame.data[5] = 0x00;
-  frame.data[6] = 0x00; frame.data[7] = 0x00;
+  frame.data[0] = 0x81;
+  frame.data[1] = 0x01; // D1: status/counter, D2: 0x01
+  frame.data[2] = 0x00;
+  frame.data[3] = 0x00;
+  frame.data[4] = 0x00;
+  frame.data[5] = 0x00;
+  frame.data[6] = 0x00;
+  frame.data[7] = 0x00;
   standaloneTx(frame);
 
   // FORD_GEN42_UNKNOWN_280_ID 0x280 (Bus1, 200 ms) — unknown 200 ms heartbeat.
   // D1:D2 = 0x00 0x00; D3 = 0xB0 (most common observed; varies slowly in log);
   // D4-D8 = 0x00. Not matched in available DBCs.
   // Log-verified most common payload: 00 00 B0 00 00 00 00 00
-  frame.identifier       = FORD_GEN42_UNKNOWN_280_ID;
+  frame.identifier = FORD_GEN42_UNKNOWN_280_ID;
   frame.data_length_code = 8;
-  frame.data[0] = 0x00; frame.data[1] = 0x00;
-  frame.data[2] = 0xB0; frame.data[3] = 0x00; // D3: 0xB0 most common; slowly varies
-  frame.data[4] = 0x00; frame.data[5] = 0x00;
-  frame.data[6] = 0x00; frame.data[7] = 0x00;
+  frame.data[0] = 0x00;
+  frame.data[1] = 0x00;
+  frame.data[2] = 0xB0;
+  frame.data[3] = 0x00; // D3: 0xB0 most common; slowly varies
+  frame.data[4] = 0x00;
+  frame.data[5] = 0x00;
+  frame.data[6] = 0x00;
+  frame.data[7] = 0x00;
   standaloneTx(frame);
 
   // FORD_GEN42_FOUR_BY_FOUR_SW_ID 0x460 (Bus1, 200 ms) — GWM 4WD switch status.
   // D1=0x00, D2=0x50 (AWD-auto / selector mode), D3-D8=0x00. [FourByFourSwitchData_FD1]
   // Log-verified payload: 00 50 00 00 00 00 00 00
-  frame.identifier       = FORD_GEN42_FOUR_BY_FOUR_SW_ID;
+  frame.identifier = FORD_GEN42_FOUR_BY_FOUR_SW_ID;
   frame.data_length_code = 8;
-  frame.data[0] = 0x00; frame.data[1] = 0x50; // D2=0x50: AWD auto selector position
-  frame.data[2] = 0x00; frame.data[3] = 0x00;
-  frame.data[4] = 0x00; frame.data[5] = 0x00;
-  frame.data[6] = 0x00; frame.data[7] = 0x00;
+  frame.data[0] = 0x00;
+  frame.data[1] = 0x50; // D2=0x50: AWD auto selector position
+  frame.data[2] = 0x00;
+  frame.data[3] = 0x00;
+  frame.data[4] = 0x00;
+  frame.data[5] = 0x00;
+  frame.data[6] = 0x00;
+  frame.data[7] = 0x00;
   standaloneTx(frame);
 }
 
@@ -3074,7 +3936,7 @@ void Gen42_frames1000()
 {
   twai_message_t frame;
   frame.extd = 0;
-  frame.rtr  = 0;
+  frame.rtr = 0;
 
   // FORD_GEN42_PTRAIN_DATA1_ID 0x420 (Bus1, 1000 ms) — PCM powertrain data 1.
   // D1 alternates 0x62/0x63 each second.
@@ -3084,12 +3946,15 @@ void Gen42_frames1000()
   // [PowertrainData_1_CG1 / PROVISIONAL_0x420]
   {
     static uint8_t gen42_420_toggle = 0U;
-    frame.identifier       = FORD_GEN42_PTRAIN_DATA1_ID;
+    frame.identifier = FORD_GEN42_PTRAIN_DATA1_ID;
     frame.data_length_code = 8;
     frame.data[0] = (gen42_420_toggle & 1U) ? 0x63U : 0x62U; // D1 toggle
-    frame.data[1] = 0x00; frame.data[2] = 0x00;
-    frame.data[3] = 0x5D; frame.data[4] = 0x43; // TrnTotLss_Tq_Est / static
-    frame.data[5] = 0x10; frame.data[6] = 0x00;
+    frame.data[1] = 0x00;
+    frame.data[2] = 0x00;
+    frame.data[3] = 0x5D;
+    frame.data[4] = 0x43; // TrnTotLss_Tq_Est / static
+    frame.data[5] = 0x10;
+    frame.data[6] = 0x00;
     frame.data[7] = 0x00;
     standaloneTx(frame);
     gen42_420_toggle++;
@@ -3098,62 +3963,80 @@ void Gen42_frames1000()
   // FORD_GEN42_UNKNOWN_428_ID 0x428 (Bus1, 1000 ms) — provisional StrgWheel_PolicePkg.
   // Possible police-package steering wheel data (CGEA2011); not confirmed for Focus RS.
   // Static payload. DLC=4.
-  frame.identifier       = FORD_GEN42_UNKNOWN_428_ID;
+  frame.identifier = FORD_GEN42_UNKNOWN_428_ID;
   frame.data_length_code = 4;
-  frame.data[0] = 0xFF; frame.data[1] = 0x7D;
-  frame.data[2] = 0x6A; frame.data[3] = 0x31;
+  frame.data[0] = 0xFF;
+  frame.data[1] = 0x7D;
+  frame.data[2] = 0x6A;
+  frame.data[3] = 0x31;
   standaloneTx(frame);
 
   // FORD_GEN42_CLUSTER_INFO_ID 0x430 (Bus1, 1000 ms) — IPC cluster information fragment.
   // DBC 8-byte superset includes OdometerMasterValue D2:D4 (km), DrvSlipCtlMde_D_Rq.
   // Focus RS logs show only DLC=2: 0xBC 0x12 (static). [Cluster_Information]
-  frame.identifier       = FORD_GEN42_CLUSTER_INFO_ID;
+  frame.identifier = FORD_GEN42_CLUSTER_INFO_ID;
   frame.data_length_code = 2;
-  frame.data[0] = 0xBC; frame.data[1] = 0x12;
+  frame.data[0] = 0xBC;
+  frame.data[1] = 0x12;
   standaloneTx(frame);
 
   // FORD_GEN42_CLUSTER_INFO3_ID 0x433 (Bus1, 1000 ms) — IPC cluster information 3.
   // D0:D1 = FuelLvl_Pc_Dsply b7|10 (0.109 %/LSB, −5.22 % offset).
   // D4 b6 = HILL_DESC_SW (hill-descent switch). D7 b0:b3 = camera config bits.
   // Gear-state bitmask in D0-D3 per guide (gear selector position bits). [Cluster_Information_3_CG1]
-  frame.identifier       = FORD_GEN42_CLUSTER_INFO3_ID;
+  frame.identifier = FORD_GEN42_CLUSTER_INFO3_ID;
   frame.data_length_code = 8;
-  frame.data[0] = 0x00; frame.data[1] = 0x01;
-  frame.data[2] = 0x34; frame.data[3] = 0x01; // FuelLvl_Pc / gear state bits
-  frame.data[4] = 0x00; frame.data[5] = 0x20; // HILL_DESC_SW, camera config
-  frame.data[6] = 0x00; frame.data[7] = 0x00;
+  frame.data[0] = 0x00;
+  frame.data[1] = 0x01;
+  frame.data[2] = 0x34;
+  frame.data[3] = 0x01; // FuelLvl_Pc / gear state bits
+  frame.data[4] = 0x00;
+  frame.data[5] = 0x20; // HILL_DESC_SW, camera config
+  frame.data[6] = 0x00;
+  frame.data[7] = 0x00;
   standaloneTx(frame);
 
   // FORD_GEN42_UNKNOWN_4F0_ID 0x4F0 (Bus1, 1000 ms) — unknown slow heartbeat.
   // Static content in all logs. Not matched in available DBCs. DLC=6.
   // Log-verified payload: 19 2C 22 50 23 45
-  frame.identifier       = FORD_GEN42_UNKNOWN_4F0_ID;
+  frame.identifier = FORD_GEN42_UNKNOWN_4F0_ID;
   frame.data_length_code = 6;
-  frame.data[0] = 0x19; frame.data[1] = 0x2C;
-  frame.data[2] = 0x22; frame.data[3] = 0x50;
-  frame.data[4] = 0x23; frame.data[5] = 0x45;
+  frame.data[0] = 0x19;
+  frame.data[1] = 0x2C;
+  frame.data[2] = 0x22;
+  frame.data[3] = 0x50;
+  frame.data[4] = 0x23;
+  frame.data[5] = 0x45;
   standaloneTx(frame);
 
   // FORD_GEN42_UNKNOWN_4F1_ID 0x4F1 (Bus1, 1000 ms) — unknown slow heartbeat.
   // Static content in all logs. Not matched in available DBCs.
   // Log-verified payload: 41 01 90 01 90 64 61 61
-  frame.identifier       = FORD_GEN42_UNKNOWN_4F1_ID;
+  frame.identifier = FORD_GEN42_UNKNOWN_4F1_ID;
   frame.data_length_code = 8;
-  frame.data[0] = 0x41; frame.data[1] = 0x01;
-  frame.data[2] = 0x90; frame.data[3] = 0x01;
-  frame.data[4] = 0x90; frame.data[5] = 0x64;
-  frame.data[6] = 0x61; frame.data[7] = 0x61;
+  frame.data[0] = 0x41;
+  frame.data[1] = 0x01;
+  frame.data[2] = 0x90;
+  frame.data[3] = 0x01;
+  frame.data[4] = 0x90;
+  frame.data[5] = 0x64;
+  frame.data[6] = 0x61;
+  frame.data[7] = 0x61;
   standaloneTx(frame);
 
   // FORD_GEN42_VIN_ASCII_ID 0x4F3 (Bus1, 1000 ms) — static ASCII build-ID fragment.
   // Content is vehicle-specific (likely a build/part code). Varies between cars.
   // Log reference: "DAM42365" (44 41 4D 34 32 33 36 35).
   // Not matched in available DBCs.
-  frame.identifier       = FORD_GEN42_VIN_ASCII_ID;
+  frame.identifier = FORD_GEN42_VIN_ASCII_ID;
   frame.data_length_code = 8;
-  frame.data[0] = 0x44; frame.data[1] = 0x41; // 'D' 'A'
-  frame.data[2] = 0x4D; frame.data[3] = 0x34; // 'M' '4'
-  frame.data[4] = 0x32; frame.data[5] = 0x33; // '2' '3'
-  frame.data[6] = 0x36; frame.data[7] = 0x35; // '6' '5'
+  frame.data[0] = 0x44;
+  frame.data[1] = 0x41; // 'D' 'A'
+  frame.data[2] = 0x4D;
+  frame.data[3] = 0x34; // 'M' '4'
+  frame.data[4] = 0x32;
+  frame.data[5] = 0x33; // '2' '3'
+  frame.data[6] = 0x36;
+  frame.data[7] = 0x35; // '6' '5'
   standaloneTx(frame);
 }

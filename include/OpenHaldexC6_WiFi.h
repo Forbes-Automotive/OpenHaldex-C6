@@ -8,6 +8,7 @@
 
 // These functions are no longer used - kept for compatibility
 void setupWiFi();
+void startSoftAP();       // (re)start the local-only AP with current SSID/password (no DHCP gateway/DNS)
 void disconnectWifi();
 void resetWifiPassword(); // clears WiFi password and restarts AP as open network
 void resetWifiSsid();     // restores default SSID and restarts AP

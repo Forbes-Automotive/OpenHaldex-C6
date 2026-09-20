@@ -35,6 +35,8 @@ void readEEP() // function to read stored preferences into runtime variables
   pref.begin("throttleArray", false); // stored throttle curve bytes
   pref.begin("speedArray", false);    // stored speed curve bytes
   pref.begin("lockArray", false);     // stored lock curve bytes
+  pref.begin("steerArray", false);    // stored steering-angle breakpoint bytes
+  pref.begin("steerScale", false);    // stored steering-angle lock-scale bytes
   pref.begin("learnTable", false);    // stored haldex learn table
   pref.begin("wifiPwd", false);       // stored WiFi AP password
   pref.begin("udsMQBEn", false);      // UDS MQB polling enable preference
@@ -59,6 +61,10 @@ void readEEP() // function to read stored preferences into runtime variables
     pref.putBool("dsbOnboardBtn", disableOnboardButton);       // save disable onboard button
     pref.putBool("dsbExtBtn", disableExternalButton);          // save disable external button
     pref.putBool("fixHunting", fixHunting);                    // save Motor_11 BPK-mode toggle
+    pref.putBool("dangerZone", dangerZoneEnabled);             // save Danger Zone (full-duty 50:50)
+    pref.putUShort("bpkCeilNm", bpkCeilingNm);                 // save per-car BPK ceiling (Nm)
+    pref.putUChar("esp14Floor", esp14MinFloorPct);             // save ESP_14 launch PWM floor (%)
+    pref.putString("llNotes", longLearnNotes);                 // save Long Learn notes (empty on first run)
     pref.putBool("canSleepEn", canSleepEnabled);               // save CAN-wake light sleep enable
     pref.putBool("canSleepAggr", canSleepAggressive);          // save aggressive CAN sleep enable
     pref.putUShort("lpWakeFps", lpWakeThresholdFps);           // save LP wake threshold (fps)
@@ -76,6 +82,8 @@ void readEEP() // function to read stored preferences into runtime variables
     pref.putBytes("speedArray", (byte *)(&speedArray), sizeof(speedArray));          // save speed array bytes
     pref.putBytes("throttleArray", (byte *)(&throttleArray), sizeof(throttleArray)); // save throttle array bytes
     pref.putBytes("lockArray", (byte *)(&lockArray), sizeof(lockArray));             // save lock array bytes
+    pref.putBytes("steerArray", (byte *)(&steeringArray), sizeof(steeringArray));                   // save steering breakpoint bytes
+    pref.putBytes("steerScale", (byte *)(&steeringLockScaleArray), sizeof(steeringLockScaleArray)); // save steering lock-scale bytes
     pref.putBool("learnOK", false);                                                  // learn table not valid on first run
     pref.putString("wifiPwd", wifiPassword);                                         // save WiFi password (empty = open network)
     pref.putString("wifiSsid", wifiSsid);                                            // save WiFi SSID (factory default on first run)
@@ -83,6 +91,7 @@ void readEEP() // function to read stored preferences into runtime variables
     pref.putUChar("forceModesPrio", forceModesPriority);                             // save force-modes priority order
     pref.putFloat("lockReleaseRate", lockReleaseRatePerSec);                         // save lock release rate (%/s)
     pref.putBool("lockReleaseEn", lockReleaseEnabled);                               // save lock release enable
+    pref.putBool("steerScaleEn", steeringScaleEnabled);                              // save steering-scale enable
     pref.putBytes("feMask", frameEditMask, sizeof(frameEditMask));                    // save frame-edit masks (defaults)
     pref.putBytes("feMaskSA", frameEditMaskSA, sizeof(frameEditMaskSA));              // save standalone frame-edit masks (defaults)
   } // end if first run
@@ -102,6 +111,7 @@ void readEEP() // function to read stored preferences into runtime variables
     disableOnboardButton = pref.getBool("dsbOnboardBtn", false);            // load disable onboard button
     disableExternalButton = pref.getBool("dsbExtBtn", false);               // load disable external button
     fixHunting = pref.getBool("fixHunting", false);                         // load Motor_11 BPK-mode toggle
+    dangerZoneEnabled = pref.getBool("dangerZone", false);      // load Danger Zone (full-duty 50:50)
     canSleepEnabled = pref.getBool("canSleepEn", true);                     // load CAN-wake light sleep enable
     canSleepAggressive = pref.getBool("canSleepAggr", false);               // load aggressive CAN sleep enable
     lpWakeThresholdFps = pref.getUShort("lpWakeFps", 1100);                  // load LP wake threshold (fps)
@@ -110,6 +120,7 @@ void readEEP() // function to read stored preferences into runtime variables
     otaUpdate = pref.getBool("otaUpdate", false);                          // load OTA update flag
     haldexGeneration = pref.getUChar("haldexGen", 1);                      // load haldex generation with default
     if (haldexGeneration == 5) haldexGeneration = 50;                      // migrate legacy Gen5 -> Gen5 (0CQ)
+    udsApplyDefaultIds(); // UDS pair follows the generation from boot (0x71E/0x788 for the VAQ), not only once the poller connects
     tcForceModeValue = pref.getUChar("tcFMV", 2);                          // load TC force mode value (default 50:50)
     hazardForceModeValue = pref.getUChar("hazFMV", 2);                     // load Hazard force mode value
     extBtnForceModeValue = pref.getUChar("extFMV", 2);                     // load ExtBtn force mode value
@@ -121,6 +132,10 @@ void readEEP() // function to read stored preferences into runtime variables
     pref.getBytes("speedArray", &speedArray, sizeof(speedArray));          // read speed array bytes
     pref.getBytes("throttleArray", &throttleArray, sizeof(throttleArray)); // read throttle array bytes
     pref.getBytes("lockArray", &lockArray, sizeof(lockArray));             // read lock array bytes
+    if (pref.getBytesLength("steerArray") == sizeof(steeringArray))
+      pref.getBytes("steerArray", &steeringArray, sizeof(steeringArray)); // read steering breakpoints (keep defaults if absent)
+    if (pref.getBytesLength("steerScale") == sizeof(steeringLockScaleArray))
+      pref.getBytes("steerScale", &steeringLockScaleArray, sizeof(steeringLockScaleArray)); // read steering lock-scale (keep defaults if absent)
     haldexLearnTableValid = pref.getBool("learnOK", false);                // read learn table valid flag
     if (haldexLearnTableValid)
     {
@@ -136,6 +151,10 @@ void readEEP() // function to read stored preferences into runtime variables
     forceModesPriority = pref.getUChar("forceModesPrio", 0);       // load force-modes priority (0=TC>Haz>Ext)
     lockReleaseRatePerSec = pref.getFloat("lockReleaseRate", 120.0f); // load lock release rate (%/s)
     lockReleaseEnabled = pref.getBool("lockReleaseEn", true);        // load lock release enable
+    steeringScaleEnabled = pref.getBool("steerScaleEn", true);       // load steering-scale enable
+    bpkCeilingNm = pref.getUShort("bpkCeilNm", 220);                 // load per-car BPK ceiling (Nm)
+    esp14MinFloorPct = pref.getUChar("esp14Floor", 0);              // load ESP_14 launch PWM floor (%)
+    pref.getString("llNotes", longLearnNotes, sizeof(longLearnNotes)); // load Long Learn notes (empty if absent)
     bool frameEditMasksChanged = false;
     if (pref.getBytesLength("feMask") == sizeof(frameEditMask))
     {
@@ -237,6 +256,7 @@ void writeEEP(void *arg) // task function to periodically write preferences
     pref.putBool("dsbOnboardBtn", disableOnboardButton);       // write disable onboard button
     pref.putBool("dsbExtBtn", disableExternalButton);          // write disable external button
     pref.putBool("fixHunting", fixHunting);                    // write Motor_11 BPK-mode toggle
+    pref.putBool("dangerZone", dangerZoneEnabled);             // write Danger Zone (full-duty 50:50)
     pref.putBool("canSleepEn", canSleepEnabled);               // write CAN-wake light sleep enable
     pref.putBool("canSleepAggr", canSleepAggressive);          // write aggressive CAN sleep enable
     pref.putUShort("lpWakeFps", lpWakeThresholdFps);           // write LP wake threshold (fps)
@@ -253,6 +273,8 @@ void writeEEP(void *arg) // task function to periodically write preferences
     pref.putBytes("speedArray", (byte *)(&speedArray), sizeof(speedArray));          // write speed array
     pref.putBytes("throttleArray", (byte *)(&throttleArray), sizeof(throttleArray)); // write throttle array
     pref.putBytes("lockArray", (byte *)(&lockArray), sizeof(lockArray));             // write lock array
+    pref.putBytes("steerArray", (byte *)(&steeringArray), sizeof(steeringArray));                   // write steering breakpoints
+    pref.putBytes("steerScale", (byte *)(&steeringLockScaleArray), sizeof(steeringLockScaleArray)); // write steering lock-scale
     pref.putBool("learnOK", haldexLearnTableValid);                                  // write learn valid flag
     if (haldexLearnTableValid)
     {
@@ -264,6 +286,10 @@ void writeEEP(void *arg) // task function to periodically write preferences
     pref.putUChar("forceModesPrio", forceModesPriority);      // write force-modes priority order
     pref.putFloat("lockReleaseRate", lockReleaseRatePerSec);  // write lock release rate (%/s)
     pref.putBool("lockReleaseEn", lockReleaseEnabled);        // write lock release enable
+    pref.putBool("steerScaleEn", steeringScaleEnabled);       // write steering-scale enable
+    pref.putUShort("bpkCeilNm", bpkCeilingNm);                // write per-car BPK ceiling (Nm)
+    pref.putUChar("esp14Floor", esp14MinFloorPct);           // write ESP_14 launch PWM floor (%)
+    pref.putString("llNotes", longLearnNotes);                // write Long Learn chassis/car notes
     pref.putBytes("feMask", frameEditMask, sizeof(frameEditMask)); // write frame-edit masks
     pref.putBytes("feMaskSA", frameEditMaskSA, sizeof(frameEditMaskSA)); // write standalone frame-edit masks
 

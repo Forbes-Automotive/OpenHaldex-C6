@@ -2,7 +2,7 @@
 #include <OpenHaldexC6_defs.h>
 
 // Current firmware version
-#define FW_VERSION "8.00.3" // update this with every firmware release AND change .html version query param to force cache refresh of web UI
+#define FW_VERSION "9.00.0" // web UI now auto cache-busts via %FW_VERSION% (no manual .html edit needed)
 
 /*
 Version Control:
@@ -59,9 +59,47 @@ V8.00.3 - added drop-down options for adding/removing CAN signals if learn isn't
         - but there could be room for some 'additional'.  This allows the user to add additional frames to mirror standalone 
         - fixed bus recovery (would not recover...)
         - minor UI tweak so that force modes display better (single line)
-        - added TP2.0 (ported from Can2Cluster) / VCDS logged (1K0 554C) - see /Documents/vehicle-logs
-        - added new scaling for UDS - 0CQ 554C/D - heated on bench and logged with VCDS
+        - added TP2.0 (ported from Can2Cluster) / VCDS logged (1K0 554C)
+        - added new scaling for UDS - 0CQ 554C/D - proven on bench and logged with VCDS
         - minor lock tweaks on 0CQ to target 100% cleaner
+
+        V8.00.4 - shared Forbes Automotive UI theme; added an OTA tab (safety-gated
+          /ota endpoints kept); automatic product web-asset cache-nosave.
+
+        V8.00.5 - Long Learn (Settings): automated frame-block learning:
+          all blocks on, (Gen5) Launch PWM Floor stepped until the learn is smooth, then each
+          additional block removed one at a time (any effect = kept on, else off),
+          confirmation learn on the final set, live tracker, chassis notes and a
+          .txt report export. Manual Learn now shares the same sweep code.
+        - fixed Gen5 (0CQ VAQ, gen 52) being rejected by the settings API and
+          skipped by the normal-mode frame editor (frames never ran for VAQ).
+        - Reset-to-Defaults confirmed (0CQ default keeps the
+          8.00.3 Motor_14/ESP_07 opt-in, not the V7 10-block set).
+        - OTA tab: the GitHub "Check for Updates" flow was tried and dropped.
+          Phones won't reliably keep mobile data while joined to a WiFi with no
+          internet, so a page-driven download from GitHub can't be relied on.
+          OTA is the plain Can2Cluster-style card: user downloads littlefs.bin +
+          firmware.bin from Releases/ themselves, uploads filesystem then
+          firmware. Releases/releases.json and the index half of
+          tools/make_release.py removed; /ota endpoints unchanged.
+        - AP no longer hands out a default gateway/DNS (local-only network).
+        - startSoftAP() now reports the address the AP actually came up on
+          instead of a hardcoded "192.168.1.1", and logs a rejected softAPConfig.
+        - OTA rollback protection now real: verifyRollbackLater() defers the
+          core's auto-confirm; image confirmed once the web UI is reached or
+          after 60s uptime, else the bootloader reverts on next reset.
+        - fixed /ota/update/fs being captured by the /ota/update handler (route prefix
+          match) - filesystem uploads went to the firmware handler; removed the
+          (never-enforced) OTA basic-auth.
+        - Gen2/Gen4 (PQ) handbrake now decoded from CAN: Kombi_1 (0x320) byte 1
+          bit 1 (KO1_Handbremse per PQ35/46 K-matrix). Diag "Handbrake (CAN)"
+          reports it for Gen2/4/51 (was Gen5 only) and Follow/Invert Handbrake
+          rewrites that bit on the forwarded frame. Brake stays on Motor_2 MO2_BLS.
+        - "Disengage Under/Above Speed" + "Minimum Throttle" now gate EVERY lock
+          path: force-mode triggers (TC/hazard/ext button) previously bypassed
+          the gate in get_lock_target_adjustment() so lock_target read 100% below
+          the cut-off; Expert mode previously bypassed it entirely.
+
 */
 
 

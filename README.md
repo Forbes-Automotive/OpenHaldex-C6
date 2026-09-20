@@ -33,7 +33,7 @@ Starting from the codebase from A-Banging-Donk for Generation 1 differentials; O
 
 The firmware runs on an **ESP32‑C6** and reads CAN bus messages from the vehicle, allowing the controller to modify or generate commands so the Haldex differential behaves exactly as you've configured.  
 
-It can operate using OEM CAN signals or it is also able to run in Standalone mode - this makes it perfect for conversions!
+It can operate using OEM CAN signals or it is able to run in Standalone mode - which makes it perfect for conversions!
 
 ![OpenHaldex-C6](/Images/openHaldexUI.png)
 
@@ -48,6 +48,8 @@ It can operate using OEM CAN signals or it is also able to run in Standalone mod
 - [Expert Mode](#expert-mode)
 - [Installation](#installation)
 - [Firmware Installation](#firmware-installation-esp-web-tools)
+- [OTA Updates (Wi‑Fi)](#ota-updates-wi-fi)
+- [Status Indicators](#status-indicators)
 - [Low Power Mode](#low-power-mode)
 - [CAN Sniffing](#can-sniffing-savvycan--gvret)
 - [Live Diagnostics](#live-diagnostics)
@@ -71,6 +73,8 @@ It can operate using OEM CAN signals or it is also able to run in Standalone mod
 - Adjustable LED brightness
 - Live diagnostics: UDS (Gen5) and KWP2000‑over‑TP2.0 (Gen2/Gen4) with measurement scaling confirmed against VCDS
 - Selectable CAN frames — enable/disable CAN messages per Generation from the Web UI
+- Wireless (OTA) firmware and web‑UI updates over Wi‑Fi
+- Colour‑coded status indicators throughout the Web UI (green / orange / red — see [Status Indicators](#status-indicators))
 
 ![OpenHaldex-C6](/Images/BoardOverview.png)
 
@@ -86,7 +90,7 @@ Assembled modules are available from Forbes Automotive if you do not wish to bui
 
 ## Overview
 
-OpenHaldex sits between your vehicle and the OEM Haldex controller. It can operate as a passthrough (OEM behaviour), or modify messages to request different amounts of differential lock.  
+OpenHaldex-C6 sits between your vehicle and the OEM Haldex controller. It can operate as a passthrough (OEM behaviour), and modify messages to request different amounts of differential lock.  
 
 This is the original source of Generation 2, 4 (including GM) and 5 logic - any forks or code copied from this project is NOT the work of Forbes Automotive and therefore we cannot support other work unless it is remains part of this project.
 
@@ -98,7 +102,7 @@ This is the original source of Generation 2, 4 (including GM) and 5 logic - any 
 
 ## Hardware
 
-The PCB is based around an **ESP32‑C6 Mini** (with Wi‑Fi) but has superior protection against ESD and transient voltages.  It has a built-in fuse and uses quality automotive based components for a reliable system.
+The PCB is based around an **ESP32‑C6 Mini** (with Wi‑Fi) and has superior protection against ESD and transient voltages.  It has a built-in fuse and uses quality automotive based components for a reliable system.
 
 Two TWAI/CAN controllers are built into the PCB along with external IO control:
 
@@ -109,7 +113,7 @@ Two TWAI/CAN controllers are built into the PCB along with external IO control:
 
 These two high‑side drivers for brake/handbrake could be repurposed for other functions like oil coolers!
 
-> This platform replaces the earlier Teensy (OpenHaldex T4) design to provide better wireless support and on‑device configuration.
+> This platform replaces the earlier Teensy (OpenHaldex T4) design to provide wireless support and on‑device configuration.
 
 ## Supported Platforms
 
@@ -120,6 +124,7 @@ These two high‑side drivers for brake/handbrake could be repurposed for other 
 - Generation 4 - Ford (ongoing)
 - Generation 5 - MQB (0CQ)
 - Generation 5 - PQ (0AY)
+- Generation 5 - MQB (VAQ)
 
 ---
 
@@ -142,9 +147,9 @@ The controller provides several preset modes along with a fully customisable 'Ex
 
 Expert mode allows lock targets to be configured based on **speed and throttle setpoints** using a table inside the Web UI. This is true **full control** over your Haldex system. No guesswork. You tune it and it'll do exactly what you want it to do, every time.  It requires OEM CAN messages to be present for throttle/speed inputs.
 
-![ExpertMode](/Images/expertmode.jpg)
+![ExpertMode](/Images/expertmode.png)
 
-*Expert mode grid configuration interface within the OpenHaldex C6 UI.*
+*Expert mode grid configuration interface within the OpenHaldex-C6 UI.*
 
 ---
 
@@ -153,6 +158,19 @@ Expert mode allows lock targets to be configured based on **speed and throttle s
 Allow the controller to learn *your* Haldex by replacing the original methodology of approximating a lock percentage by cycling through all of the available lock percentages.  
 
 Use the 'Learn Haldex' in the Settings page and within one minute the controller will learn how to get EXACTLY the lock percentage you request.  No more approximations, just exact values.
+
+### Long Learn (automated block bisection)
+
+If a normal learn isn't clean (jumps, plateaus, never reaches 100%), **Long Learn** on the Settings page automates the manual "add/remove a frame, learn again" loop, in four phases:
+
+1. **Initial Sweep** — every editable frame block for the selected generation is switched **on** and one learn is run at the **Launch PWM Floor** currently configured. The floor governs the *ramp* (how fast the clutch takes up and releases lock), not how far it can ultimately go, so it isn't hunted through candidate values here — this step just establishes the baseline shape and whether 100% is already reachable as configured.
+2. **BPK Adjust** *(Gen5 only, only runs if step 1 didn't reach 100%)* — if the floor alone can't get to 100%, the torque ceiling itself (**Lock Calibration**, `bpkCeilingNm`) is what's capping it. This step forces **Fix Hunting** on for the rest of the run (the default packing has no ceiling concept at all and would otherwise let the sweep silently ignore whatever ceiling is set) and walks the ceiling up in fixed steps, using quick single-point checks at full lock rather than a full sweep, until 100% is reached or the ceiling hits its safe maximum. Fix Hunting itself is **always reverted** to whatever it was before at the end of the run, win or lose — only the calibrated ceiling *value* is kept, so it needs turning on by hand afterward to actually take effect.
+3. **Sweeping Blocks** — with the calibrated floor/ceiling locked in, each *additional* block (anything outside the generation's default set) is removed one at a time and checked with a quick **release-to-0-then-back-to-100%** cycle (not a full 101-step re-sweep, but a real cycle rather than a frozen hold — holding steady at 100% and just flipping the mask bit turned out to be unreliable, since the controller doesn't cleanly re-evaluate a step change while already sitting at max). Any block whose removal *affects* the result goes back on — **needed** if it got worse (including feedback dropping to nothing — that's the strongest possible "needed" signal, not a failure), flagged **affects (better without)** if it improved; one that makes no difference is **not needed** and stays off. Tick *Also test the default (core) blocks* to bisect everything.
+4. **Confirmation** — a full sweep is stored against the final block set (this is the one place a full 0–100% sweep still matters, since the stored table is used to interpolate every lock target, not just 100%).
+
+Expect 10–20 minutes with the car running and Haldex CAN active. The tracker shows the current phase, sweep count, the block under test, the current floor and torque ceiling, the reference score and the live Sent/Returned bars. Cancelling (or losing Haldex data during the Initial Sweep or Confirmation phases) restores the blocks, floor, torque ceiling, Fix Hunting toggle and learn table that were in place before the run.
+
+Below the tracker, a **Chassis / car notes** box (saved on the unit) and **Export report (.txt)** produce a plain-text record of the car, calibration values, the recommended block set (as a checklist plus the raw mask), the full sweep log and the stored learn table — handy for sharing a known-good layout for a given chassis.
 
 ### Gen5 'Fix Hunting'
 
@@ -249,6 +267,20 @@ data[7] = driver's pedal value (percentage: 0...100%)
 
 3. Access the Web UI
 
+### Connecting from a phone
+
+**Use your phone's Wi‑Fi settings — not its Personal Hotspot / hotspot feature.** The controller is the access point: it broadcasts its own Wi‑Fi network (**OpenHaldex‑C6** by default), the same way a home router does. Your phone just joins that network like any other:
+
+1. Phone **Settings → Wi‑Fi** → select **OpenHaldex‑C6** and connect (open network by default, no password).
+2. Browse to `192.168.1.1` or `openhaldex.local`.
+
+Do **not** turn on your phone's own Hotspot/Personal Hotspot for this — that shares *your* phone's data with other devices, which is the opposite of what's needed here and won't let the phone reach the controller.
+
+> [!NOTE]
+> The controller has no internet access and doesn't need any. Your phone will show *"Wi‑Fi has no internet access"* while connected — that's expected; dismiss it. If the phone keeps dropping the network (some Android versions do this to a Wi‑Fi with no internet), tap the warning and choose **"Stay connected"**. 
+
+If you get stuck mid-way (e.g. the phone auto‑connects to OpenHaldex‑C6 in the background and you didn't mean to), just forget the network or reconnect — the controller keeps running normally whether or not anything is connected to it.
+
 From the **Diagnostics** page you can:
 
 - **Change the WiFi Name (SSID)** — set any 1–32 character printable name (e.g. `MyHaldex`, `MK7-R`). The AP restarts immediately on save.
@@ -263,6 +295,8 @@ If you are locked out or forget your password, **long-pressing the `Mode` button
 If the Wi‑Fi interface becomes unresponsive:
 
 - Long‑press the `Mode` button to clear the WiFi password and restart the AP to an open state.
+
+> The Web UI is built on Forbes Automotive's shared dark theme (the same look used across the Can2Cluster, SpeedPulser, SpeedPulserPro, can2rpm, MQB Steering Wheel Controller and AirLift Controller firmware), so the interface and status conventions stay consistent across the whole product line. Current firmware version: **9.00.0** (shown in the UI footer and at `/ota/info`).
 
 ---
 
@@ -480,6 +514,51 @@ This is the recommended method for most users.
 > Some USB-C cables are **power-only** and will not work for flashing.  
 > If the device does not appear, try a different cable or USB port.
 
+---
+
+## OTA Updates (Wi‑Fi)
+
+Once a controller is already running firmware **8.00.0 or later**, it can also be updated wirelessly over its own Wi‑Fi AP instead of by USB. This is a **two‑step process**, because the filesystem (web UI) and the firmware (application code) live on separate flash partitions and are updated independently:
+
+1. **Step 1 — Filesystem update** (`POST /ota/update/fs`, uploads `littlefs.bin`)  
+   Updates `index.html`, `app.js`, `style.css` and other web assets. The device does **not** reboot after this step — it's meant to be followed immediately by Step 2.
+2. **Step 2 — Firmware update** (`POST /ota/update`, uploads `firmware.bin`)  
+   Updates the application itself. The device reboots automatically once the upload finishes.
+
+Both endpoints accept an optional `?sha256=<hex>` query parameter; when present the device hashes the upload as it arrives and refuses to activate an image that doesn't match. They need no password, but are **safety‑gated**:
+
+- On the **bench** (no CAN detected), updates are allowed at any time.
+- In the **vehicle** (CAN detected), an update is only allowed when the vehicle is stationary, both CAN buses are healthy, the controller is disabled or forced to Stock, and no Haldex temperature‑protection fault is active. `GET /ota/check` reports live pass/fail plus the reason if blocked.
+
+After a firmware update the new image boots in a **pending‑verify** state (ESP‑IDF's rollback mechanism). It is only marked valid — cancelling the automatic rollback — once the web UI has been reached on the new image, or after 60 s of uptime; a build that crash‑loops before either point is reverted to the previous working firmware by the bootloader on the next reset, so a bad flash can't strand the car.
+
+Other useful endpoints: `GET /ota/info` (current version, web‑UI version, chip, free heap, running partition), `GET /ota/fsinfo` (remounts the filesystem and reports the web‑UI version it holds — used to verify Step 1 before Step 2) and `GET /ota/health` (simple liveness check).
+
+### Doing it from the OTA page
+
+1. On a phone or laptop with internet, download `littlefs.bin` and `firmware.bin` from the newest `V…` folder under [`Releases/`](Releases/) (use GitHub's **Download raw file** button).
+2. Connect to the **OpenHaldex‑C6** Wi‑Fi and open the **OTA** tab.
+3. **Update Type → Filesystem (web UI)**, pick `littlefs.bin`, **Upload**. The step tracker marks it done and switches to Firmware.
+4. **Update Type → Firmware (application)**, pick `firmware.bin`, **Upload**. The device reboots by itself; reconnect and reload the page.
+
+Nothing on the controller ever fetches from the internet — the phone needs a connection only for step 1, which can happen anywhere. Keep the page open and the screen on during each upload.
+
+> [!NOTE]
+> USB via ESP Web‑Tools (above) remains the recommended method for a controller's **first** flash or for recovering from a failed update; OTA is for updating a controller that's already running.
+
+---
+
+## Status Indicators
+
+Throughout the Web UI — Diagnostics, CAN health, force‑mode sources, and similar live readouts — status is shown as a coloured pill or dot using a consistent convention:
+
+| Colour | Meaning |
+|---|---|
+| 🟢 Green | Healthy / On / Available — the signal is present and in the expected state |
+| 🔴 Red | Unhealthy / Off / Inactive — the signal is present but reporting a bad or inactive state |
+| 🟠 Orange | Unavailable — no value has been received for this field (e.g. not applicable to the selected Haldex generation, or data hasn't arrived yet) |
+
+This applies to items such as Chassis/Haldex CAN health, steering health, ASR/TC status, hazard and brake/handbrake inputs, and the OTA safety banner (`SAFE` in green / `NOT SAFE` in red).
 
 ---
 
@@ -605,6 +684,7 @@ Pinout and functionality remain consistent across supported enclosure versions.
 
 - **A Banging Donk** — [Original OpenHaldex project](https://github.com/ABangingDonk/OpenHaldexT4) for Gen1 vehicles
 - **Chris (meatro) — OpenHaldex‑S3** — [OpenHaldex‑S3](https://github.com/meatro/OpenHaldex-S3) (MIT). Portions of the map editor / Expert Mode, CAN View, web UI, PlatformIO structure and API control derive from this project
+- **RktBox (Kile Thomson) — OpenHaldex‑Edge** — [OpenHaldex‑Edge](https://github.com/Kile-Thomson/OpenHaldex-Edge). The geometry‑compensated per‑corner slip calculation (Ackermann wheel‑radius model) and the ESP_14 **Launch PWM Floor** (`BR_Vorg_*_Min` raise) were adopted from this project
 - **Arwid Vasilev** — PCB redesign (V1.02)
 - **LVT Technologies** — OTA update integration (now deprecated, but still appreciated)
 
@@ -616,11 +696,12 @@ OpenHaldex‑C6 is **open source** under the permissive [MIT License](https://op
 
 - **Forbes Automotive original code and hardware design files** (Gen2 / Gen4 / Gen5 work, PCB Gerbers, schematics and enclosure files) — **MIT License**. See [LICENSE.md](LICENSE.md).
 - **OpenHaldex‑S3 derived portions** (Chris / meatro) — **MIT**. These remain under MIT; the MIT notice must be preserved.
+- **OpenHaldex‑Edge derived portions** (Rekt / Kile Thomson) — per‑corner slip geometry and Launch PWM Floor. Attribution is retained in the source and in the third‑party notices.
 - **Original OpenHaldex (Gen1, ABangingDonk)**.
 
 Full attribution and upstream license texts are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). If you redistribute source or binaries, keep the third‑party notices and license texts with the distribution.
 
-> **In short:** use it, build it, modify it, redistribute it — that's all encouraged. Just keep the copyright and license notices intact, and keep the OpenHaldex‑C6 banner in the UI.
+> **In short:** use it, build it, modify it, redistribute it — that's all encouraged. Just keep the copyright and license notices intact.
 
 ---
 

@@ -58,6 +58,15 @@
 #define OPENHALDEX_BROADCAST_ID 0x6B0         // broadcast OpenHaldex via. CAN over this address - used for stating mode/performance etc
 #define OPENHALDEX_EXTERNAL_CONTROL_ID 0x6A0  // recieve OpenHaldex via. CAN over this address - used for changing modes etc
 
+// OpenHaldex supplier-specific UDS DIDs answered on the Haldex physical address
+// (request on diagnostics_5_ID 0x70F, response 0x779) so an OBD tester (e.g.
+// Rokketek gauge) can read lock/slip and set the drive mode even though the
+// car's gateway will not forward the passive 0x6B0 broadcast that far.
+#define OPENHALDEX_UDS_RESPONSE_ID 0x779
+#define OPENHALDEX_LOCK_DID 0xFDA0 // RDBI: [cmd%][engagement raw][mode]
+#define OPENHALDEX_SLIP_DID 0xFDA1 // RDBI: 4 signed slip bytes [FL, FR, RL, RR]
+#define OPENHALDEX_MODE_DID 0xFDA2 // WDBI: [mode] sets the drive mode
+
 #define diagnostics_1_ID 0x764
 #define diagnostics_2_ID 0x200
 #define diagnostics_3_ID 0x710
@@ -107,6 +116,22 @@
 #define KOMBI_02 0x6b7
 
 #define HALDEX_ID_GEN5 0x118
+
+// Gen5 VAQ (MQB front-axle transverse lock, K-matrix node "VAQ" / "Quersperre").
+// Source: MQB_FCAN_KMatrix (Documents gitignore/can-databases/vw-mqb). The VAQ
+// node receives 22 of the 25 periodic frames the Haldex does (ESP_10 is the one
+// periodic frame it does NOT list), reads ESP_14 bytes 4/5 (BR_Vorg_Quer_Min/Max)
+// where the Haldex reads bytes 6/7 (BR_Vorg_Allrad_*), and answers diagnostics on
+// its own ISO-TP pair. Its feedback frame is the Quersperre_03 counterpart of the
+// Haldex's Allrad_03 (0x118). Which of these the physical unit really uses is
+// confirmed on the bench with the serial lab's RXIDS / DTC commands.
+#define QUERSPERRE_03 0x137       // TX by Quersperre/VAQ, DLC 4, 100 ms: QUER_Sta_Quersperre b1[4..6], QUER_Gleichlauf b1[7], QUER_Ist_Proz b2 (0.4 %/bit), Charisma b3
+#define QUERSPERRE_04 0x3FF       // TX by Quersperre/VAQ, DLC 8, 500 ms: cluster display bits (lock engage/disengage/closed) b1[4..6]
+#define ISO_QUERSPERRE_REQ  0x71E // UDS physical request to the VAQ / Quersperre ECU (K-matrix ISO_Quersperre_Req)
+#define ISO_QUERSPERRE_RESP 0x788 // UDS response from the VAQ / Quersperre ECU  (K-matrix ISO_Quersperre_Resp)
+#define ISO_ALLRAD_REQ      0x70F // UDS physical request to the Haldex (Allrad) ECU - same as diagnostics_5_ID
+#define ISO_ALLRAD_RESP     0x779 // UDS response from the Haldex (Allrad) ECU  - same as OPENHALDEX_UDS_RESPONSE_ID
+
 
 // Gen41 (Vauxhall / GMW8762 PPEI FDCM) Haldex-originated feedback frames.
 // These are TX'd BY the Haldex; the ESP must RX-only and never retransmit them.

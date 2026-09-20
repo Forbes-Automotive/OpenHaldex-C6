@@ -9,12 +9,12 @@
     <meta http-equiv="Expires" content="0">
 
     <title>OpenHaldex-C6</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=openhaldex-8.00.5">
 </head>
 
 <body>
     <div class="container">
-        <header>
+        <header class="topbar">
             <h1>OpenHaldex-C6</h1>
             <div class="status-bar">
                 <!--<span class="status-badge" id="wsStatus">Connecting...</span>-->
@@ -29,6 +29,7 @@
             <button class="nav-tab" data-page="expert">Expert</button>
             <button class="nav-tab" data-page="settings">Settings</button>
             <button class="nav-tab" data-page="diagnostics">Diagnostics</button>
+            <button class="nav-tab" data-page="ota">OTA</button>
         </nav>
 
         <div class="page active" id="dashboard-page">
@@ -56,8 +57,25 @@
                         <span>Target: <span id="lockTarget">--</span>%</span>
                         <span>Actual: <span id="lockActual">--</span>%</span>
                     </div>
-                    <div class="engagement-bar">
-                        <div class="engagement-fill" id="engagementFill"></div>
+                    <div class="engagement-gauge-wrap" id="engagementGaugeWrap" style="display:none;">
+                        <svg class="engagement-gauge-svg" viewBox="0 0 200 118" aria-label="Haldex engagement gauge">
+                            <path class="eg-track" d="M 20 100 A 80 80 0 0 1 180 100" fill="none" />
+                            <path class="eg-fill" id="gaugeArcFill" d="M 20 100 A 80 80 0 0 1 180 100" fill="none" />
+                            <line class="eg-tick" id="gaugeTargetTick" x1="6" y1="100" x2="30" y2="100" visibility="hidden" />
+                            <text class="eg-value" id="gaugeCenterValue" x="100" y="90" text-anchor="middle">--</text>
+                            <text class="eg-caption" x="100" y="112" text-anchor="middle">LOCK %</text>
+                        </svg>
+                    </div>
+                    <div class="engagement-bar-wrap" id="engagementBarWrap">
+                        <div class="engagement-bar">
+                            <div class="engagement-fill" id="engagementFill"></div>
+                            <div class="engagement-reduction" id="engagementReduction" style="display:none;"></div>
+                        </div>
+                    </div>
+                    <div class="engagement-steering-note" id="steeringReductionNote" style="display:none;"></div>
+                    <div class="chart-wrap" id="lockTraceWrap">
+                        <div class="chart-title">Lock response (last 15s) — <span class="chart-key actual">actual</span> vs <span class="chart-key target">target</span></div>
+                        <svg class="strip-chart" id="lockTraceSvg" viewBox="0 0 320 150" preserveAspectRatio="xMidYMid meet"></svg>
                     </div>
                 </div>
             </section>
@@ -122,6 +140,33 @@
                         <div class="gauge-unit"> bit</div>
                     </div>
                 </div>
+            </section>
+
+            <section class="card" id="wheelSlipCard">
+                <h2>Wheel Slip (%)</h2>
+                <div class="gauge-grid">
+                    <div class="gauge">
+                        <div class="gauge-label">Front Left</div>
+                        <div class="gauge-value" id="slipFL">--</div>
+                        <div class="gauge-unit">%</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Front Right</div>
+                        <div class="gauge-value" id="slipFR">--</div>
+                        <div class="gauge-unit">%</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Rear Left</div>
+                        <div class="gauge-value" id="slipRL">--</div>
+                        <div class="gauge-unit">%</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Rear Right</div>
+                        <div class="gauge-value" id="slipRR">--</div>
+                        <div class="gauge-unit">%</div>
+                    </div>
+                </div>
+                <p class="hint">Geometry-compensated per-corner slip vs. steering-predicted speed. Needs MQB wheel-speed + steering CAN. Geometry defaults are Audi TT Mk3 and want on-car calibration.</p>
             </section>
 
             <section class="card" id="gen41Card" style="display:none;">
@@ -249,6 +294,24 @@
                 </div>
                 <p class="hint" id="kwpStatus">Connecting…</p>
             </section>
+
+            <section class="card">
+                <h2>Display Options</h2>
+                <p class="hint">Choose which readouts show as dial gauges instead of numbers. Saved in this browser.</p>
+                <div class="tile-opt-grid" id="gaugeCustomizer"></div>
+                <div class="toggle-group" style="margin-top:12px;">
+                    <label class="toggle">
+                        <input type="checkbox" id="optEngagementGauge">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Engagement as arc gauge</span>
+                    </label>
+                    <label class="toggle">
+                        <input type="checkbox" id="optLockTrace">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Show lock-response graph</span>
+                    </label>
+                </div>
+            </section>
         </div>
 
         <div class="page" id="settings-page">
@@ -260,6 +323,7 @@
                     <option value="3">Generation 3 - Volvo</option>
                     <option value="4">Generation 4</option>
                     <option value="50">Generation 5 (0CQ)</option>
+                    <option value="52">Generation 5 (0CQ VAQ)</option>
                     <option value="51">Generation 5 (0AY)</option>
                     <option value="41">Generation 4 - GM/SAAB</option>
                 </select>
@@ -297,6 +361,10 @@
                         </div>
                     </div>
                 </div>
+                <div class="chart-wrap" id="learnChartWrap" style="display:none;">
+                    <div class="chart-title">Learned calibration — commanded vs measured (dashed = 1:1)</div>
+                    <svg class="strip-chart" id="learnChartSvg" viewBox="0 0 320 200" preserveAspectRatio="xMidYMid meet"></svg>
+                </div>
                 <div class="learn-controls">
                     <button class="btn-secondary" id="learnStart">Learn Haldex</button>
                     <button class="btn-secondary" id="learnCancel" style="display:none;">Cancel</button>
@@ -309,6 +377,98 @@
                         <span class="toggle-label">Fix Hunting</span>
                     </label>
                     <p class="hint">Enable only if the Haldex hunts at partial lock (e.g. 60/40 or 70/30) on a 554K controller.</p>
+                </div>
+            </section>
+
+            <section class="card" id="longLearnSection">
+                <h2>Long Learn</h2>
+                <p class="hint">Automates the manual add/remove-a-block loop. Turns <strong>every</strong> frame block for this
+                    generation on, then (Gen5 0CQ/VAQ) steps the Launch PWM Floor until the learn is smooth &mdash; it may jump on
+                    first engage (e.g. to 30%) but must then climb cleanly to 100%. It then removes each additional block one at a
+                    time: any block whose removal <em>affects</em> the learn goes back on (flagged if it was actually better without);
+                    one that makes no difference stays off. A final confirmation learn is
+                    stored against the resulting set. Allow 10&ndash;20 minutes with the car running and Haldex CAN active.
+                    Cancelling restores the previous blocks, floor and learn table.</p>
+                <div class="toggle-group">
+                    <label class="toggle">
+                        <input type="checkbox" id="longLearnTestAll">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Also test the default (core) blocks</span>
+                    </label>
+                    <p class="hint">Off = the original edited set is kept as-is and only the transferred/additional blocks are bisected. On = every block is tested (longer, and can leave the Haldex with no lock command during a sweep).</p>
+                </div>
+                <p class="hint" id="longLearnStatusText">--</p>
+                <div class="learn-progress-wrap" id="longLearnProgressWrap" style="display:none;">
+                    <div class="learn-progress-bar">
+                        <div class="learn-progress-fill" id="longLearnProgressFill"></div>
+                    </div>
+                    <span class="learn-progress-label" id="longLearnProgressLabel">0/0</span>
+                </div>
+                <div class="ll-tracker" id="longLearnTracker" style="display:none;">
+                    <div class="ll-row"><span class="ll-key">Phase</span><span class="ll-val" id="llPhase">--</span></div>
+                    <div class="ll-row"><span class="ll-key">Sweep</span><span class="ll-val" id="llSweep">--</span></div>
+                    <div class="ll-row"><span class="ll-key">Testing</span><span class="ll-val" id="llTesting">--</span></div>
+                    <div class="ll-row"><span class="ll-key">PWM floor</span><span class="ll-val" id="llFloor">--</span></div>
+                    <div class="ll-row"><span class="ll-key">Torque ceiling</span><span class="ll-val" id="llBpk">--</span></div>
+                    <div class="ll-row"><span class="ll-key">Reference</span><span class="ll-val" id="llBaseline">--</span></div>
+                    <div class="ll-row"><span class="ll-key">Elapsed</span><span class="ll-val" id="llElapsed">--</span></div>
+                    <div class="learn-dual-bars">
+                        <div class="learn-bar-row">
+                            <span class="learn-bar-label">Sent</span>
+                            <div class="engagement-bar">
+                                <div class="learn-bar-fill-cf" id="llCFFill"></div>
+                            </div>
+                            <span class="ll-bar-num" id="llCFValue">--</span>
+                        </div>
+                        <div class="learn-bar-row">
+                            <span class="learn-bar-label">Returned</span>
+                            <div class="engagement-bar">
+                                <div class="engagement-fill" id="llEngFill"></div>
+                            </div>
+                            <span class="ll-bar-num" id="llEngValue">--</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="ll-results" id="longLearnResults"></div>
+                <div class="learn-controls">
+                    <button class="btn-secondary" id="longLearnStart">Start Long Learn</button>
+                    <button class="btn-secondary" id="longLearnCancel" style="display:none;">Cancel Long Learn</button>
+                </div>
+
+                <h3 class="subsection-title" style="margin-top:18px;">Chassis / car notes</h3>
+                <p class="hint">Free text saved on the unit and written into the exported report &mdash; chassis, Haldex part number, tyres, tune, anything that identifies this car.</p>
+                <textarea id="longLearnNotes" class="ll-notes" rows="3" maxlength="200" placeholder="e.g. 2015 Golf R Mk7, 0CQ 554K, 235/35R19, Stage 1"></textarea>
+                <div class="button-row">
+                    <button class="btn-secondary" id="longLearnExport" type="button">Export report (.txt)</button>
+                </div>
+            </section>
+
+            <section class="card" id="gen5CalibrationCard">
+                <h2>Gen 5 Lock Calibration</h2>
+                <p class="hint">Per-car tuning for Gen5 (0CQ/VAQ). Both apply only to Gen5 packing; defaults leave behaviour unchanged.</p>
+
+                <div class="cal-row">
+                    <div class="cal-row-head">
+                        <span class="toggle-label">Lock Calibration (Nm)</span>
+                        <span class="cal-row-value"><span id="bpkCeilingValue">220</span> Nm</span>
+                    </div>
+                    <input type="range" id="bpkCeilingRange" min="10" max="500" step="5" value="220" class="slider cal-slider">
+                </div>
+                <p class="hint">BPK ceiling the spoof frame claims at full command. Not a strength dial — run a Learn and nudge until commanded lock matches delivered (Sent vs Returned on the 1:1 line). Only active with Fix Hunting on.</p>
+                <div class="button-row">
+                    <button class="btn" id="bpkCeilingResetBtn" type="button">Reset to default (220 Nm)</button>
+                </div>
+
+                <div class="cal-row">
+                    <div class="cal-row-head">
+                        <span class="toggle-label">Launch PWM Floor (%)</span>
+                        <span class="cal-row-value"><span id="esp14MinFloorValue">0</span> %</span>
+                    </div>
+                    <input type="range" id="esp14MinFloorRange" min="0" max="100" step="5" value="0" class="slider cal-slider">
+                </div>
+                <p class="hint">Experimental. Raises the ESP_14 minimum clutch PWM while lock is commanded, for a firmer launch. 0% = off. Collapses off-throttle/FWD/coasting and is clamped below the commanded max.</p>
+                <div class="button-row">
+                    <button class="btn" id="esp14MinFloorResetBtn" type="button">Reset to default (0 %)</button>
                 </div>
             </section>
 
@@ -428,6 +588,16 @@
                         <span class="toggle-slider"></span>
                         <span class="toggle-label">Broadcast over CAN</span>
                     </label>
+                    <label class="toggle">
+                        <input type="checkbox" id="dangerZoneEnabled">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Danger Zone (full-duty 50:50)</span>
+                    </label>
+                    <p class="hint">On a full 50:50 request, demands maximum clutch duty by giving the Haldex no
+                        room to modulate. Maximum clamping force, but the <strong>Returned %</strong> will read
+                        <em>lower</em> (bench: ~99% pump duty and ~10.5 A, reporting in the 80s, versus ~56% duty
+                        reporting ~98% with this off) — the Haldex backs its own estimate off once the pressure
+                        relief valve opens. Increases pump load and current draw considerably. Off by default.</p>
                     <label class="toggle">
                         <input type="checkbox" id="analyzerMode">
                         <span class="toggle-slider"></span>
@@ -560,6 +730,30 @@
                 </div>
             </section>
 
+            <section class="card">
+                <h2>Lock Map Surface</h2>
+                <p class="hint">Read-only 3D view of the lock table — speed and throttle on the ground, lock % as height. The dot rides the live operating point. Editing the grid above redraws it.</p>
+                <div class="tune-chart" id="tuneChart"></div>
+                <div class="chart-legend" id="tuneChartLegend"></div>
+            </section>
+
+            <section class="card" id="steeringScaleCard">
+                <h2>Steering-Angle Lock Scale</h2>
+                <p class="hint">Reduces overall lock as steering-wheel angle increases (FWD bias). 100% = full lock. Applies to Gen2, Gen4, Gen5 (0CQ) and VAQ.</p>
+                <div class="toggle-group">
+                    <label class="toggle">
+                        <input type="checkbox" id="steeringScaleEnabled" checked>
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Enable Steering-Angle Scaling</span>
+                    </label>
+                </div>
+                <table id="steeringScaleTable" class="steering-scale-table"></table>
+                <div class="map-controls">
+                    <button class="btn-secondary" id="saveSteeringScale">Save Steering Scale</button>
+                    <button class="btn-secondary" id="restoreSteeringScale">Restore Defaults</button>
+                </div>
+            </section>
+
             <div id="editModal" class="modal">
                 <div class="modal-content">
                     <h3 id="editModalTitle">Edit Lock %</h3>
@@ -597,6 +791,14 @@
                     <div class="diag-item">
                         <span class="diag-label">Speed:</span>
                         <span class="diag-value"><span id="diagSpeed">--</span> km/h</span>
+                    </div>
+                    <div class="diag-item">
+                        <span class="diag-label">Steering Health:</span>
+                        <span class="diag-value" id="diagSteeringHealth">--</span>
+                    </div>
+                    <div class="diag-item">
+                        <span class="diag-label">Steering Angle:</span>
+                        <span class="diag-value"><span id="diagSteeringAngle">--</span> °</span>
                     </div>
                     <div class="diag-item">
                         <span class="diag-label">ASR:</span>
@@ -639,7 +841,7 @@
                     <div class="diag-item">
                         <span class="diag-label">Handbrake (CAN):</span>
                         <span class="diag-value" id="diagHandbrakeFromCAN">--</span>
-                        <span class="diag-label" id="diagHandbrakeFromCANNote" style="font-size:0.75em;color:#888;">(Gen5 MQB only)</span>
+                        <span class="diag-label" id="diagHandbrakeFromCANNote" style="font-size:0.75em;color:#888;">(Gen2/4 PQ, Gen5 MQB)</span>
                     </div>
                 </div>
             </section>
@@ -701,12 +903,63 @@
                         <span class="diag-label">Firmware:</span>
                         <span class="diag-value" id="FW_VERSION">--</span>
                     </div>
+                    <div class="diag-item">
+                        <span class="diag-label">Board:</span>
+                        <span class="diag-value" id="BOARD_REV">--</span>
+                    </div>
                 </div>
             </section>
         </div>
 
-        <script src="./app.js?v=8.00.3" type="text/javascript"></script>
-        <!-- add version query param to force cache refresh on updates-->
+        <div class="page" id="ota-page">
+            <section class="card">
+                <h2>Device Information</h2>
+                <div class="ota-info">
+                    <div><span>Firmware</span><strong id="otaFwVersion">--</strong></div>
+                    <div><span>Chip</span><strong id="otaChip">--</strong></div>
+                    <div><span>Partition</span><strong id="otaPartition">--</strong></div>
+                </div>
+            </section>
+            <section class="card">
+                <h2>Update Safety</h2>
+                <div class="sysgrid" id="otaSafety"></div>
+                <p class="hint">Firmware updates are blocked while the vehicle is moving or the CAN
+                    bus is unhealthy. This is a safety feature and cannot be overridden.</p>
+            </section>
+            <section class="card">
+                <h2>OTA Update</h2>
+                <p class="hint"><strong>Filesystem</strong> updates the web interface (littlefs.bin).
+                    <strong>Firmware</strong> updates the application (firmware.bin). Update the
+                    filesystem first, then the firmware. The device reboots automatically once the
+                    firmware upload completes.</p>
+                <div class="ota-steps" id="otaSteps">
+                    <div class="ota-step" data-step="filesystem"><span class="ota-step-num">1</span> Filesystem</div>
+                    <div class="ota-step" data-step="firmware"><span class="ota-step-num">2</span> Firmware</div>
+                </div>
+                <div class="input-group">
+                    <label>Update Type</label>
+                    <select id="otaType" class="input-select">
+                        <option value="filesystem">Filesystem (web UI)</option>
+                        <option value="firmware">Firmware (application)</option>
+                    </select>
+                </div>
+                <div class="input-group">
+                    <label>Binary (.bin)</label>
+                    <input id="otaBin" type="file" accept=".bin,application/octet-stream">
+                </div>
+                <div class="ota-progress" id="otaProgressWrap" hidden>
+                    <div class="ota-progress-bar" id="otaProgressBar"></div>
+                    <span class="ota-progress-label" id="otaProgressLabel">0%</span>
+                </div>
+                <div class="button-row">
+                    <button id="otaUploadBtn" class="btn primary">Upload</button>
+                </div>
+                <div id="otaStatus" class="status-line">Idle</div>
+            </section>
+        </div>
+
+        <script src="./app.js?v=openhaldex-9.00.0" type="text/javascript"></script>
+        <!-- bump this version string each release to force a cache refresh -->
 </body>
 
 </html>

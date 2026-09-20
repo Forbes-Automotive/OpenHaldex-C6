@@ -1,4 +1,5 @@
 #include <OpenHaldexC6_UDS.h>
+#include <OpenHaldexC6_can.h> // canTransmit
 
 using namespace OpenHaldexC6;
 
@@ -20,7 +21,7 @@ static bool udsSendFrame(uint32_t canId, const uint8_t *payload, uint8_t payload
     msg.data[0] = uint8_t(0x00 | payloadLen); // SF PCI byte
     memcpy(&msg.data[1], payload, payloadLen);
     for (uint8_t i = payloadLen + 1; i < 8; i++) msg.data[i] = 0xAA; // ISO-TP padding
-    return (twai_transmit_v2(twai_bus_1, &msg, pdMS_TO_TICKS(10)) == ESP_OK);
+    return canTransmit(twai_bus_1, &msg);
 }
 
 static void udsDecodeDID(uint16_t did, const twai_message_t &frame)
@@ -86,12 +87,115 @@ static void udsDecodeDID(uint16_t did, const twai_message_t &frame)
     }
 }
 
+// Outcome of one ReadDataByIdentifier exchange (see udsPollDid).
+enum UdsPollResult : uint8_t
+{
+    UDS_POLL_OK = 0,      // positive 0x62 response for the requested DID
+    UDS_POLL_NRC_SESSION, // 0x7F with a session/security NRC - needs extended session
+    UDS_POLL_NRC_OTHER,   // 0x7F with any other NRC (DID unknown, busy, ...)
+    UDS_POLL_TIMEOUT,     // nothing matching inside the window
+};
+
+// Send one RDBI for `did` and drain udsRxQueue until the matching positive
+// response, a negative response for service 0x22, or the window expires.
+// Positive responses for OTHER DIDs that land meanwhile are still decoded, so
+// an out-of-order / stale reply is never wasted. TesterPresent acks and any
+// other frames are discarded.
+static UdsPollResult udsPollDid(uint32_t reqId, uint16_t did, uint32_t windowMs)
+{
+    const uint8_t rdbiReq[] = {0x22, (uint8_t)(did >> 8), (uint8_t)(did & 0xFF)};
+    if (!udsSendFrame(reqId, rdbiReq, sizeof(rdbiReq))) return UDS_POLL_TIMEOUT;
+
+    const uint32_t deadline = millis() + windowMs;
+    twai_message_t rsp;
+    for (;;)
+    {
+        const uint32_t now = millis();
+        if ((int32_t)(deadline - now) <= 0) break;
+        const uint32_t remaining = deadline - now;
+        if (xQueueReceive(udsRxQueue, &rsp, pdMS_TO_TICKS(remaining < 50 ? remaining : 50)) != pdTRUE)
+            continue;
+        if ((rsp.data[0] & 0xF0) != 0x00 || rsp.data_length_code < 4) continue; // not a single frame we care about
+
+        if (rsp.data[1] == 0x62)
+        {
+            const uint16_t respDID = ((uint16_t)rsp.data[2] << 8) | rsp.data[3];
+            udsDecodeDID(respDID, rsp);
+            if (respDID == did) return UDS_POLL_OK;
+            continue; // reply to an earlier request - keep waiting for ours
+        }
+        if (rsp.data[1] == 0x7F && rsp.data[2] == 0x22)
+        {
+            // ISO 14229 NRCs that mean "not in this session": 0x7E subFunction /
+            // 0x7F serviceNotSupportedInActiveSession, 0x33 securityAccessDenied.
+            // 0x22 conditionsNotCorrect is about vehicle state (speed etc.), not
+            // the session, so it must NOT push us into extended. 0x78 (response
+            // pending) is not final - keep waiting for the real answer.
+            const uint8_t nrc = rsp.data[3];
+            if (nrc == 0x78) continue;
+            if (nrc == 0x7E || nrc == 0x7F || nrc == 0x33) return UDS_POLL_NRC_SESSION;
+            return UDS_POLL_NRC_OTHER;
+        }
+        // 0x7E TesterPresent ack, 0x50 session ack, anything else: discard
+    }
+    return UDS_POLL_TIMEOUT;
+}
+
+// DiagnosticSessionControl. Waits for the 0x50 ack (or NRC) so the queue is
+// clean before polling starts. Returns true on a positive response.
+static bool udsSessionControl(uint32_t reqId, uint8_t session, uint32_t windowMs)
+{
+    const uint8_t sessReq[] = {0x10, session};
+    if (!udsSendFrame(reqId, sessReq, sizeof(sessReq))) return false;
+
+    const uint32_t deadline = millis() + windowMs;
+    twai_message_t rsp;
+    for (;;)
+    {
+        const uint32_t now = millis();
+        if ((int32_t)(deadline - now) <= 0) return false;
+        const uint32_t remaining = deadline - now;
+        if (xQueueReceive(udsRxQueue, &rsp, pdMS_TO_TICKS(remaining < 50 ? remaining : 50)) != pdTRUE)
+            continue;
+        if ((rsp.data[0] & 0xF0) != 0x00 || rsp.data_length_code < 3) continue;
+        if (rsp.data[1] == 0x50 && rsp.data[2] == session) return true;
+        if (rsp.data[1] == 0x7F && rsp.data[2] == 0x10) return false;
+    }
+}
+
+void udsApplyDefaultIds()
+{
+    if (udsIdsManual) return; // pinned from the serial lab (DIAGID) - leave alone
+    if (haldexGeneration == 52)
+    {
+        udsHaldexReqId  = ISO_QUERSPERRE_REQ;  // 0x71E
+        udsHaldexRespId = ISO_QUERSPERRE_RESP; // 0x788
+    }
+    else
+    {
+        udsHaldexReqId  = ISO_ALLRAD_REQ;  // 0x70F
+        udsHaldexRespId = ISO_ALLRAD_RESP; // 0x779
+    }
+}
+
+static void udsClearValues()
+{
+    udsTerminalVoltage = 0.0f;
+    udsModuleTemp      = 0.0f;
+    udsClutchTemp      = 0.0f;
+    udsCoolingFinTemp  = 0.0f;
+    udsClutchCurrent   = 0.0f;
+    udsClutchPWM       = 0;
+    udsClutchVoltage   = 0.0f;
+    udsBlockagePct     = 0;
+}
+
 void udsMQBTask(void *arg)
 {
-    static constexpr uint32_t kReqId  = 0x70FU; // physical request to Haldex ECU on Bus 1
-    // VCDS uses 0x70F on Bus 0 which OpenHaldex bridges to Bus 1; the Haldex ECU
-    // listens on 0x70F and responds at 0x779 — confirmed from SavvyCAN capture.
-    // Response 0x779 is routed from parseCAN_hdx into udsRxQueue
+    // Request/response pair comes from udsHaldexReqId / udsHaldexRespId (defs.h):
+    // Haldex 0x70F -> 0x779 (VCDS uses 0x70F on Bus 0, bridged to Bus 1; response
+    // confirmed from a SavvyCAN capture), VAQ 0x71E -> 0x788 per the K-matrix.
+    // parseCAN_hdx routes udsHaldexRespId frames into udsRxQueue.
 
     static constexpr uint16_t kDIDs[] = {
         0x0286, // Terminal Voltage
@@ -104,43 +208,85 @@ void udsMQBTask(void *arg)
     };
     static constexpr uint8_t kDIDCount = sizeof(kDIDs) / sizeof(kDIDs[0]);
 
+    // Timing. Temperatures / voltages move slowly, so one DID every 500 ms
+    // (full cycle ~3.5 s) is plenty and cuts diagnostic traffic ~3x versus the
+    // old 150 ms cadence. TesterPresent is only needed in extended session and
+    // just has to beat the 5 s S3 timer.
+    static constexpr uint32_t kPollGapMs   = 500;  // idle gap between DID requests
+    static constexpr uint32_t kRespWindow  = 500;  // max wait for one response
+    static constexpr uint32_t kTesterMs    = 2000; // TesterPresent period (extended session only)
+
+    // Session strategy. Try plain RDBI in the default session first - no
+    // session change, no TesterPresent, nothing for the module to time out of.
+    // Only if the module answers with a session-related NRC do we open the
+    // extended session (0x03), and then we hand it back (0x01) on exit instead
+    // of leaving the module to drop it on S3 timeout. Once extended is known to
+    // be required it is used directly on later reconnects.
+    static bool preferExtended = false;
+
     udsRxQueue = xQueueCreate(8, sizeof(twai_message_t));
+
+    auto pollAllowed = []() -> bool {
+        // Gen5 family: MQB 0CQ (50), PQ-derived 0AY (51), VAQ (52) - same UDS stack.
+        return liveDiagEnabled && !externalDiagActive() && hasCANHaldex &&
+               isGen5Family() && !analyzerMode && !analyzerSerial;
+    };
 
     while (1)
     {
-        // Gen5 covers both MQB (50) and 0AY PQ-derived 0AY (51) - both use the same UDS stack.
-        if (!liveDiagEnabled || externalDiagActive() || !hasCANHaldex || (haldexGeneration != 50 && haldexGeneration != 51) || analyzerMode || analyzerSerial)
+        if (!pollAllowed())
         {
             vTaskDelay(pdMS_TO_TICKS(500));
             continue;
         }
 
-        xQueueReset(udsRxQueue); // flush any stale frames before opening session
+        xQueueReset(udsRxQueue); // flush any stale frames before opening the channel
+        udsApplyDefaultIds();    // generation may have changed since the last connect
+        const uint32_t kReqId = udsHaldexReqId;
+        udsPollActive = true;    // from here on 0x779 replies are ours - keep them off Bus 0
 
-        // Open extended diagnostic session (DiagnosticSessionControl 0x03)
-        const uint8_t sessReq[] = {0x10, 0x03};
-        udsSendFrame(kReqId, sessReq, sizeof(sessReq));
+        uint8_t session = preferExtended ? 0x03 : 0x01;
+        bool sessionOk = false;
 
-        twai_message_t sessResp;
-        if (xQueueReceive(udsRxQueue, &sessResp, pdMS_TO_TICKS(2000)) != pdTRUE)
+        if (session == 0x01)
         {
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            continue; // no response - retry
-        }
-        // Verify positive session response [xx 50 03 ...]
-        if (sessResp.data_length_code < 3 || sessResp.data[1] != 0x50 || sessResp.data[2] != 0x03)
-        {
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            continue;
+            // Probe: one RDBI in the default session.
+            const UdsPollResult r = udsPollDid(kReqId, kDIDs[0], kRespWindow);
+            if (r == UDS_POLL_OK || r == UDS_POLL_NRC_OTHER)
+            {
+                sessionOk = true; // module talks to us without a session change
+            }
+            else if (r == UDS_POLL_NRC_SESSION)
+            {
+                DEBUG("UDS - RDBI refused in default session (NRC), falling back to extended");
+                preferExtended = true;
+                session = 0x03;
+            }
+            // TIMEOUT: module silent - retry below
         }
 
-        // Session open - poll DIDs round-robin, sending TesterPresent every 375 ms
+        if (session == 0x03)
+        {
+            sessionOk = udsSessionControl(kReqId, 0x03, 2000);
+        }
+
+        if (!sessionOk)
+        {
+            udsPollActive = false;
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue; // no usable channel yet - retry
+        }
+
+        udsSessionMode = session;
+        DEBUG("UDS - polling Haldex in %s session", session == 0x03 ? "extended" : "default");
+
         uint32_t lastTP = millis();
-        uint8_t  didIdx = 0;
+        uint8_t  didIdx = (session == 0x01) ? 1 : 0; // default-session probe already read kDIDs[0]
+        bool     needExtended = false;
 
-        while (liveDiagEnabled && !externalDiagActive() && hasCANHaldex && (haldexGeneration == 50 || haldexGeneration == 51) && !analyzerMode && !analyzerSerial)
+        while (pollAllowed())
         {
-            if ((millis() - lastTP) >= 375U)
+            if (session == 0x03 && (millis() - lastTP) >= kTesterMs)
             {
                 // TesterPresent with suppress-positive-response bit set (0x80) - no reply expected
                 const uint8_t tpReq[] = {0x3E, 0x80};
@@ -148,52 +294,37 @@ void udsMQBTask(void *arg)
                 lastTP = millis();
             }
 
-            const uint16_t did = kDIDs[didIdx];
-            const uint8_t rdbiReq[] = {0x22, (uint8_t)(did >> 8), (uint8_t)(did & 0xFF)};
-            udsSendFrame(kReqId, rdbiReq, sizeof(rdbiReq));
-
-            // Drain-and-match: keep consuming frames until we get a positive RDBI
-            // response or the window expires. This discards TesterPresent acks
-            // (0x7E) and any other stale frames that can land before the DID reply.
+            const UdsPollResult r = udsPollDid(kReqId, kDIDs[didIdx], kRespWindow);
+            if (r == UDS_POLL_NRC_SESSION && session == 0x01)
             {
-                const uint32_t kWindow = 500; // ms total receive window per DID
-                uint32_t deadline = millis() + kWindow;
-                twai_message_t rsp;
-                for (;;)
-                {
-                    uint32_t elapsed = millis();
-                    if (elapsed >= deadline) break;
-                    uint32_t remaining = deadline - elapsed;
-                    if (xQueueReceive(udsRxQueue, &rsp, pdMS_TO_TICKS(remaining < 50 ? remaining : 50)) == pdTRUE)
-                    {
-                        // Only process positive single-frame RDBI responses
-                        if ((rsp.data[0] & 0xF0) == 0x00 && rsp.data[1] == 0x62 && rsp.data_length_code >= 4)
-                        {
-                            // Decode by the DID actually echoed in the response, not by `did`.
-                            // This handles out-of-order or stale frames: if the response belongs
-                            // to a DIFFERENT DID we still decode it, but keep waiting for `did`.
-                            const uint16_t respDID = ((uint16_t)rsp.data[2] << 8) | rsp.data[3];
-                            udsDecodeDID(respDID, rsp);
-                            if (respDID == did) break; // got the one we were waiting for
-                        }
-                        // Else: TP ack, NRC, or other frame — discard and keep waiting
-                    }
-                }
+                // A DID the probe did not cover needs the extended session after all.
+                needExtended = true;
+                break;
             }
 
             didIdx = (didIdx + 1) % kDIDCount;
-            vTaskDelay(pdMS_TO_TICKS(150)); // ~150 ms between polls -> full 9-DID cycle ≈ 1.35 s
+            vTaskDelay(pdMS_TO_TICKS(kPollGapMs));
+        }
+
+        // Leaving the channel. Return the module to its default session
+        // ourselves rather than letting S3 expire - but not if a real tool has
+        // just appeared on Bus 0: it may already own a session of its own.
+        if (session == 0x03 && !externalDiagActive())
+        {
+            udsSessionControl(kReqId, 0x01, 300);
+        }
+        udsSessionMode = 0;
+        udsPollActive = false;
+
+        if (needExtended)
+        {
+            DEBUG("UDS - DID refused in default session, switching to extended");
+            preferExtended = true;
+            continue; // reconnect straight away in the extended session
         }
 
         // Session ended or conditions changed - clear all UDS data
-        udsTerminalVoltage = 0.0f;
-        udsModuleTemp      = 0.0f;
-        udsClutchTemp      = 0.0f;
-        udsCoolingFinTemp = 0.0f;
-        udsClutchCurrent   = 0.0f;
-        udsClutchPWM       = 0;
-        udsClutchVoltage   = 0.0f;
-        udsBlockagePct     = 0;
+        udsClearValues();
     }
 }
 
@@ -241,7 +372,7 @@ static bool tp20SendRaw(uint32_t canId, const uint8_t *data, uint8_t len)
     msg.rtr = 0;
     msg.data_length_code = len;
     memcpy(msg.data, data, len);
-    return (twai_transmit_v2(twai_bus_1, &msg, pdMS_TO_TICKS(20)) == ESP_OK);
+    return canTransmit(twai_bus_1, &msg);
 }
 
 // Receive the next TP2.0 frame matching expectedId, waiting until the absolute
@@ -554,8 +685,8 @@ void kwpTp20Task(void *arg)
     }
 }
 
-UDS::UDS(twai_handle_t canBus)
-    : _canBus(canBus)
+UDS::UDS(twai_handle_t canBus, QueueHandle_t rxQueue)
+    : _canBus(canBus), _rxQueue(rxQueue)
 {
 }
 
@@ -572,7 +703,7 @@ bool UDS::sendSingleFrame(uint32_t canId, const uint8_t *payload, uint8_t length
     msg.data[0] = uint8_t(0x00 | length);
     memcpy(&msg.data[1], payload, length);
 
-    return (twai_transmit_v2(_canBus, &msg, 10 / portTICK_PERIOD_MS) == ESP_OK);
+    return canTransmit(_canBus, &msg);
 }
 
 bool UDS::sendFirstFrame(uint32_t canId, const uint8_t *payload, uint16_t length)
@@ -589,7 +720,7 @@ bool UDS::sendFirstFrame(uint32_t canId, const uint8_t *payload, uint16_t length
     msg.data[1] = uint8_t(length & 0xFF);
     memcpy(&msg.data[2], payload, 6);
 
-    return (twai_transmit_v2(_canBus, &msg, 10 / portTICK_PERIOD_MS) == ESP_OK);
+    return canTransmit(_canBus, &msg);
 }
 
 bool UDS::sendConsecutiveFrame(uint32_t canId, const uint8_t *payload, uint8_t sequenceCounter, uint8_t length)
@@ -605,7 +736,7 @@ bool UDS::sendConsecutiveFrame(uint32_t canId, const uint8_t *payload, uint8_t s
     msg.data[0] = uint8_t(0x20 | (sequenceCounter & 0x0F));
     memcpy(&msg.data[1], payload, length);
 
-    return (twai_transmit_v2(_canBus, &msg, 10 / portTICK_PERIOD_MS) == ESP_OK);
+    return canTransmit(_canBus, &msg);
 }
 
 bool UDS::sendFlowControl(uint32_t canId, uint8_t flowStatus, uint8_t blockSize, uint8_t stMin)
@@ -619,11 +750,20 @@ bool UDS::sendFlowControl(uint32_t canId, uint8_t flowStatus, uint8_t blockSize,
     msg.data[1] = blockSize;
     msg.data[2] = stMin;
 
-    return (twai_transmit_v2(_canBus, &msg, 10 / portTICK_PERIOD_MS) == ESP_OK);
+    return canTransmit(_canBus, &msg);
 }
 
 bool UDS::receiveFrame(twai_message_t &frame, uint32_t timeoutMs)
 {
+    // Queue mode: frames are copied here by the parse task for the selected bus
+    // (already filtered to the response ID). Reading the TWAI driver directly
+    // would make this a second consumer racing the gateway parse task - every
+    // frame this side won was consumed and never forwarded to the Haldex.
+    if (_rxQueue != nullptr)
+    {
+        return xQueueReceive(_rxQueue, &frame, pdMS_TO_TICKS(timeoutMs)) == pdTRUE;
+    }
+
     uint32_t start = millis();
     while ((millis() - start) < timeoutMs)
     {
@@ -644,6 +784,12 @@ bool UDS::sendRequest(uint32_t requestId,
 {
     if (requestData == nullptr || responseBuf == nullptr || responseLen == 0)
         return false;
+
+    // responseLen carries the buffer capacity on entry and the received length
+    // on return; capture the capacity before responseLen is reused as the
+    // output below, otherwise every copy is bounded by 0 and the read returns
+    // no data.
+    const size_t capacity = responseLen;
 
     // Send the request (single or multi-frame)
     if (requestLen <= 7)
@@ -715,7 +861,7 @@ bool UDS::sendRequest(uint32_t requestId,
     {
         // Single Frame
         uint8_t dataLen = frame.data[0] & 0x0F;
-        size_t copyLen = min<size_t>(dataLen, responseLen);
+        size_t copyLen = min<size_t>(dataLen, capacity);
         memcpy(responseBuf, &frame.data[1], copyLen);
         responseLen = copyLen;
         return true;
@@ -726,7 +872,7 @@ bool UDS::sendRequest(uint32_t requestId,
         // First Frame
         uint16_t totalLength = ((frame.data[0] & 0x0F) << 8) | frame.data[1];
         size_t bytesCopied = min<size_t>(6, totalLength);
-        if (bytesCopied > responseLen)
+        if (bytesCopied > capacity)
             return false; // buffer too small
 
         memcpy(responseBuf, &frame.data[2], bytesCopied);
@@ -745,7 +891,7 @@ bool UDS::sendRequest(uint32_t requestId,
             if ((frame.data[0] & 0xF0) != 0x20)
                 return false;
             uint8_t payloadLen = min<uint8_t>(7, totalLength - receivedTotal);
-            if (payloadLen > responseLen - receivedTotal)
+            if (payloadLen > capacity - receivedTotal)
                 return false;
 
             memcpy(responseBuf + receivedTotal, &frame.data[1], payloadLen);

@@ -57,6 +57,15 @@ void Gen5_0CQ_frames100();
 void Gen5_0CQ_frames200();
 void Gen5_0CQ_frames1000();
 
+// Gen5 (0CQ) VAQ standalone frames - MQB front-diff controller.
+// Starting base clones 0CQ output; specialise these to diverge from 0CQ later.
+void Gen5_0CQ_VAQ_frames10();
+void Gen5_0CQ_VAQ_frames20();
+void Gen5_0CQ_VAQ_frames25();
+void Gen5_0CQ_VAQ_frames100();
+void Gen5_0CQ_VAQ_frames200();
+void Gen5_0CQ_VAQ_frames1000();
+
 // Gen5 (0AY) standalone frames - 0AY controller (starter copy of Gen4 standalone)
 void Gen5_0AY_frames10();
 void Gen5_0AY_frames20();

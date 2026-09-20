@@ -93,6 +93,25 @@
 #define gpio_brake_in 0  // gpio for brake signal in
 #define gpio_brake_out 1 // gpio for brake signal out
 
+// Board revision ID. One GPIO, read once at boot by readBoardRev() before
+// anything else is configured:
+//   rev 1 (original TWAI PCB) : pin unconnected -> reads HIGH against the
+//                               internal pull-up
+//   rev 2 (CAN FD / SPI PCB)  : 4k7 pull-down to GND -> reads LOW (0.3 V
+//                               against the ~45 k internal pull-up)
+// GPIO4 was chosen because it is free on the current PCB, is not a strapping
+// pin (an external pull-down on 8/9/15 would change boot mode) and is
+// ADC-capable, so a later revision can move to a resistor-divider ladder read
+// as voltage bands without changing the concept. The pull-up is released
+// straight after the read so a 4k7 to ground does not sit across it (0.7 mA,
+// which low-power mode would notice). Placeholder pin - move it when the PCB
+// pin-out is final.
+#define BOARD_ID_PIN 4
+#define BOARD_REV_TWAI 1  // native TWAI transceivers on CAN0/CAN1 pins
+#define BOARD_REV_CANFD 2 // SPI CAN FD controllers
+extern uint8_t boardRev;
+void readBoardRev();
+
 // led settings
 #define led_channel 0              // channel for led
 #define led_brightness_default 255 // compile-time default
@@ -247,6 +266,24 @@ extern uint16_t received_vehicle_speed;
 extern uint16_t received_vehicle_rpm;
 extern uint16_t received_vehicle_boost;
 extern uint8_t haldexGeneration;
+// Steering-wheel angle magnitude (deg, abs) decoded from chassis CAN + last-seen time.
+extern float received_steering_angle;
+extern uint32_t received_steering_ms;
+// Steering direction sign (true = negative/left, from the LWI_01/LW_1 sign bit) for slip geometry.
+extern bool received_steering_negative;
+// Per-corner raw wheel speeds [FL, FR, RL, RR] (ESP_19 units, 0.0075 km/h/bit) + freshness.
+extern uint16_t wheelSpeedRaw[4];
+extern uint32_t lastWheelSpeedResponse;
+// Geometry-compensated per-corner slip [FL, FR, RL, RR] as signed % (-128 = no data) + freshness.
+extern int8_t cornerSlip[4];
+extern uint32_t lastCornerSlipMs;
+// Per-car slip geometry (Audi TT Mk3 defaults; want on-car calibration).
+// Slip geometry model adopted from OpenHaldex-Edge by Rekt (Kile Thomson).
+extern float slipSteeringRatio;
+extern uint16_t slipWheelbaseMm;
+extern uint16_t slipTrackFrontMm;
+extern uint16_t slipTrackRearMm;
+extern uint16_t slipMinSpeedRaw;
 extern uint8_t tcForceModeValue;
 extern uint8_t hazardForceModeValue;
 extern uint8_t extBtnForceModeValue;
@@ -280,6 +317,79 @@ extern bool disableOnboardButton;
 extern bool disableExternalButton;
 
 extern bool fixHunting; // Motor_11: false=V3 packing, true=BPK packing
+
+// ---- Motor_11 BPK packing tunables ------------------------------------------
+// Every field the BPK packer puts on the wire, exposed at runtime so the serial
+// lab can massage them live instead of needing a reflash per experiment. All
+// default to the values that were previously hardcoded, so an untouched build
+// behaves exactly as before. None are persisted - they reset on boot.
+extern uint16_t bpkFloorNm;  // 10   - Nm claimed at zero command
+extern uint16_t bpkSlewIst;  // 8    - Nm/cycle ramp on MO_Mom_Ist_Summe
+extern uint16_t bpkSlewSolf; // 32   - Nm/cycle ramp on MO_Mom_Soll_gefiltert
+extern uint16_t bpkTraegRaw; // 509  - MO_Mom_Traegheit_Summe raw (509 = 0 Nm)
+extern uint16_t bpkSchubRaw; // 487  - MO_Mom_Schub raw (487 = -22 Nm)
+// Byte 7 status bits. 0x20 = MO_Status_Normalbetrieb_01 (bit 61) only. Per the
+// MQB DBC, MO_QBit_Motormomente - the quality bit qualifying the whole Motor_11
+// torque set - is bit 63 = 0x80, so the historical 0x20 has always sent these
+// values as NOT qualified despite the old comment claiming otherwise.
+extern uint8_t bpkStatusFl;  // 0x20
+// Force Ist / Soll_gefiltert to a fixed Nm instead of the slewed target, to
+// test whether the Haldex keys off one field rather than another. -1 = auto.
+extern int32_t bpkForceIstNm;
+extern int32_t bpkForceSolfNm;
+// Last Motor_11 payload actually transmitted, for telemetry.
+extern volatile uint8_t bpkLastFrame[8];
+
+// Danger Zone: at a full 50:50 request, pin the ESP_14 coupling-range minimum
+// to the maximum so the Haldex is given no room to modulate and drives the pump
+// to full duty. Measured on the bench: ~99% PWM and ~10.5 A, versus ~56% PWM at
+// the same request with this off. Maximum clamping force, but the Haldex's
+// REPORTED engagement reads LOWER (80s rather than ~98%) because its estimate
+// backs off once the pressure relief valve opens. Off by default; persisted.
+extern bool dangerZoneEnabled;
+
+// ---- Serial lab byte overrides ----------------------------------------------
+// Force an individual byte of any generated standalone frame, so each byte's
+// effect can be measured one at a time. Applied in standaloneTx() just before
+// transmit; the frame's checksum is recomputed afterwards for the IDs that
+// carry one, so an overridden frame is still accepted by the Haldex.
+// Test-only: not persisted, cleared on boot.
+#define LAB_OVR_MAX 12
+struct LabOverride
+{
+  uint16_t canId;  // 0 = slot unused
+  uint8_t byteIdx; // 0..7
+  uint8_t value;
+};
+extern LabOverride labOverrides[LAB_OVR_MAX];
+
+// ---- ESP_19 wheel-speed tunables --------------------------------------------
+// Also runtime, to test whether the Haldex's hunting tracks the simulated wheel
+// speed changing. Defaults reproduce the legacy free-running counter exactly.
+extern bool wsFreeze;            // true = stop advancing the counters (static speed)
+extern uint16_t wsBaseRaw;       // 0 = legacy counter behaviour; else fixed raw per corner
+extern uint16_t wsDitherRaw;     // alternating +/- dither applied when wsBaseRaw > 0
+extern int32_t wsFrontDeltaRaw;  // extra raw counts on the front axle (VL/VR); 0 = none
+extern int32_t wsLeftRightDeltaRaw; // front left-vs-right split in raw counts (VL - VR); 0 = none. VAQ lever.
+
+// Per-car Gen5 BPK lock calibration: Nm the spoof frame claims at full command.
+// Not a strength dial - shifts the calibration so commanded lock matches delivered.
+extern uint16_t bpkCeilingNm;
+// ESP_14 launch PWM floor (0-100%): raises BR_Vorg_*_Min while lock is commanded,
+// clamped strictly below Max. 0 = off (upstream behaviour).
+// Adopted from OpenHaldex-Edge by Rekt (Kile Thomson) - see THIRD_PARTY_NOTICES.md.
+extern uint8_t esp14MinFloorPct;
+
+// ---- BPK serial lab (diagnostic harness) ------------------------------------
+// Last values the Motor_11 BPK packer computed, captured each cycle by
+// bpkLogSample() from both BPK code paths (standalone generation and
+// normal-mode in-place editing). Read by the serial lab task, which streams
+// them out over USB alongside what the Haldex is reporting back so a host
+// script can correlate "what we sent" against "what came back" in real time.
+// Zero when Fix Hunting is off (V3 packing computes no Nm values).
+extern volatile uint16_t bpkLastTorqueNm; // raw feedforward target (Nm, unslewed)
+extern volatile uint16_t bpkLastIstNm;    // slewed MO_Mom_Ist value sent (Nm)
+extern volatile uint16_t bpkLastSolfNm;   // slewed MO_Mom_Soll_gefiltert sent (Nm)
 
 // ---- Frame-edit gating (per-CAN-ID passthrough toggles) --------------------
 // In normal (non-standalone) mode getLockData() overwrites specific bytes of
@@ -372,8 +482,11 @@ extern uint16_t lpWakeThresholdFps; // runtime wake threshold (fps), adjustable 
 #define ANALYZER_PROTOCOL_LAWICEL 1
 extern uint8_t analyzerProtocol;
 
-// UDS MQB diagnostic polling (Gen 5 only)
-// Requests go to 0x771 on Bus 1; responses come from 0x779 on Bus 1.
+// UDS MQB diagnostic polling (Gen 5 family only)
+// Requests go to 0x70F on Bus 1; responses come from 0x779 on Bus 1.
+// The whole Gen5 family - 0CQ MQB (50), 0AY PQ-derived (51) and VAQ (52) -
+// shares the same UDS stack and DIDs, so every UDS gate uses this predicate.
+inline bool isGen5Family() { return haldexGeneration == 50 || haldexGeneration == 51 || haldexGeneration == 52; }
 extern bool liveDiagEnabled;     // master live-diagnostics enable (persisted, default off);
                                  // gates UDS (Gen5) and TP2.0 (Gen2/4) so it never blocks real tools unless opted in
 // Auto-pause: while liveDiagEnabled, if an external scanner (VCDS/ODIS) is seen
@@ -384,6 +497,77 @@ extern bool liveDiagEnabled;     // master live-diagnostics enable (persisted, d
 extern volatile uint32_t externalDiagLastMs;
 bool externalDiagActive();
 extern QueueHandle_t udsRxQueue; // parseCAN_hdx pushes 0x779 frames here
+// True while udsMQBTask owns the Haldex diagnostic channel (probe/session open
+// through to loop exit). parseCAN_hdx uses it to keep the Haldex's 0x779 replies
+// to OUR requests off Bus 0 - the car never asked, so the gateway/OBD side
+// should not see them. Replies are still forwarded whenever an external tool is
+// active, so VCDS / gauges keep working.
+extern volatile bool udsPollActive;
+// Session the poller is currently using: 0 = none, 0x01 = default (plain RDBI,
+// no TesterPresent), 0x03 = extended (fallback when the module refuses RDBI in
+// default session). Reported on the API for diagnosis.
+extern volatile uint8_t udsSessionMode;
+
+// /api/uds/read helper: the parse task for the selected bus COPIES frames
+// matching udsWebRespId into udsWebRxQueue (the frame still flows down the
+// normal gateway path). The endpoint sets udsWebRespId/udsWebBus for the
+// duration of one read, then clears udsWebRespId. Never read the TWAI driver
+// directly from the web task - it would steal bridge frames.
+extern QueueHandle_t udsWebRxQueue;
+extern volatile uint32_t udsWebRespId; // 0 = no read in flight
+extern volatile uint8_t udsWebBus;     // 0 = chassis (Bus 0), 1 = Haldex (Bus 1)
+
+// ---- Haldex-bus diagnostic addressing ---------------------------------------
+// The Gen5 family answers UDS on different ISO-TP pairs: Haldex/Allrad on
+// 0x70F -> 0x779, the VAQ/Quersperre on 0x71E -> 0x788 (MQB FCAN K-matrix). The
+// live-diag poller, the parse-task tap and the serial lab all address the module
+// through these two so one switch moves everything. udsApplyDefaultIds() picks
+// the pair from haldexGeneration unless the serial lab has pinned one manually
+// (DIAGID) - the bench is where "which pair does this unit really use" gets
+// answered, so it must be changeable without a reflash.
+extern uint32_t udsHaldexReqId;  // UDS physical request ID on Bus 1
+extern uint32_t udsHaldexRespId; // matching response ID on Bus 1
+extern bool udsIdsManual;        // true = pinned by the serial lab, auto-pick disabled
+void udsApplyDefaultIds();       // set the pair from haldexGeneration (no-op when pinned)
+
+// ---- Haldex-bus RX census (serial lab RXIDS) --------------------------------
+// Every frame received on Bus 1 is tallied per CAN ID: count, last payload, and
+// the interval between the last two. In standalone the only other node on Bus 1
+// is the module under test, so this table IS the list of what the unit transmits
+// (feedback frames, network management, diagnostic replies) - the first thing to
+// establish on an unknown unit like the VAQ. Small and fixed so it costs nothing.
+#define HDX_RX_STATS_MAX 16
+struct HdxRxStat
+{
+  uint32_t id;       // 0 = slot unused
+  uint32_t count;
+  uint32_t lastMs;
+  uint16_t periodMs; // interval between the last two frames of this ID
+  uint8_t dlc;
+  uint8_t extd;
+  uint8_t data[8];
+};
+extern HdxRxStat hdxRxStats[HDX_RX_STATS_MAX];
+extern volatile uint32_t hdxRxDroppedIds; // frames whose ID found no free slot
+
+// Last engagement/feedback frame the per-generation decoder accepted (0x118
+// Allrad_03, 0x137 Quersperre_03, 0x2C0 Allrad_1, ...), raw, for the serial
+// lab's FB telemetry line: what the module said, next to what we sent.
+extern volatile uint32_t hdxFbMs;
+extern volatile uint32_t hdxFbId;
+extern volatile uint8_t hdxFbDlc;
+extern volatile uint8_t hdxFbData[8];
+// VAQ Quersperre_03 (0x137) state fields, K-matrix names:
+//   QUER_Sta_Quersperre b1[4..6]: 0 rule mode, 1 driver-activated, 2 error open,
+//                                 3 error closed, 4 temporary shutdown, 5 comms disturbed
+//   QUER_Gleichlauf     b1[7]   : 0 no synchronism, 1 synchronised
+extern uint8_t received_quer_state;
+extern uint8_t received_quer_sync;
+
+
+// Transmit-failure counters maintained by canTransmit() (see OpenHaldexC6_can.h).
+extern volatile uint32_t canTxDropBus0;
+extern volatile uint32_t canTxDropBus1;
 extern float udsTerminalVoltage; // 0x0286: raw × 0.1 V
 extern float udsModuleTemp;      // 0x028D: raw − 55 °C  (1 byte, offset 55)
 extern float udsClutchTemp;      // 0x2BF1: LE16 (D6×256+D5 − 22767)/100 °C
@@ -466,6 +650,7 @@ extern float lock_target;
 // Settings
 extern float lockReleaseRatePerSec;
 extern bool lockReleaseEnabled;  // when false, lock target changes are instantaneous
+extern bool steeringScaleEnabled; // when false, steering-angle lock scaling is bypassed
 extern uint8_t forceModesPriority; // 0=Haz>TC>Ext, 1=TC>Haz>Ext, 2=Haz>Ext>TC, 3=TC>Ext>Haz, 4=Ext>TC>Haz, 5=Ext>Haz>TC
 extern uint32_t lastABSResponse;
 extern bool isABSValid;
@@ -478,6 +663,15 @@ extern uint32_t absTimeout;
 extern uint16_t speedArray[speedArrayCount];
 extern uint8_t throttleArray[throttleArrayCount];
 extern uint8_t lockArray[throttleArrayCount][speedArrayCount];
+
+// Steering-angle third axis (FWD-bias): 1D scaling curve applied to the
+// computed lock target. steeringArray holds steering-wheel angle breakpoints
+// (deg, magnitude), steeringLockScaleArray the matching 0-100% lock multiplier.
+// Only gens with a steering source (2/4/50/52) use it; others = no reduction.
+#define steeringArrayCount 5   // 0, 45, 90, 180, 360 deg
+#define steeringStaleMs 500    // steering considered stale/unhealthy after this (ms)
+extern uint16_t steeringArray[steeringArrayCount];
+extern uint8_t steeringLockScaleArray[steeringArrayCount];
 
 // for running through vars to see effects
 extern uint8_t tempCounter;
