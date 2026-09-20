@@ -1,6 +1,6 @@
 {
   "name": "OpenHaldex-C6",
-  "version": "8.00.2",
+  "version": "9.00.0",
   "builds": [
     {
       "chipFamily": "ESP32-C6",
