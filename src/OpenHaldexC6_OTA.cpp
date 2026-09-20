@@ -2,6 +2,16 @@
 #include <Update.h>
 #include <LittleFS.h>
 #include <mbedtls/sha256.h>
+extern "C" {
+#include <esp_littlefs.h> // esp_littlefs_mounted()
+}
+
+// Filesystem / upload diagnostics: on with the WiFi debug flags, silent otherwise
+#if enableDebug || detailedDebugWiFi
+#define OTA_DEBUG(...) DEBUG(__VA_ARGS__)
+#else
+#define OTA_DEBUG(...)
+#endif
 
 #define OTA_PASSWORD "haldex"
 
@@ -57,46 +67,32 @@ bool otaWebClientActive() {
   return lastWebActivityMs != 0 && (millis() - lastWebActivityMs) < OTA_WEB_ACTIVE_WINDOW_MS;
 }
 
-// Optional integrity check: the uploader (guided OTA) passes the expected
-// SHA-256 as ?sha256=<64 hex>; the handler hashes chunks as they arrive and
-// refuses to activate the image on mismatch. Manual uploads with no hash are
-// accepted as before.
-static mbedtls_sha256_context otaSha;
-static bool otaShaActive = false;
-static char otaShaExpected[65] = "";
+// No integrity hash on the upload stream: the chip validates a firmware
+// image itself (esp_ota_end) and a filesystem image is validated by mounting
+// it. A SHA-256 gate against the release index was tried and dropped - a
+// rebuilt .bin with a stale index failed every update for no real gain.
 
-static void otaShaBegin(AsyncWebServerRequest *request) {
-  otaShaActive = false;
-  otaShaExpected[0] = '\0';
-  const AsyncWebParameter *p = request->hasParam("sha256") ? request->getParam("sha256") : nullptr;
-  if (p == nullptr || p->value().length() != 64) return;
-  strncpy(otaShaExpected, p->value().c_str(), 64);
-  otaShaExpected[64] = '\0';
-  for (char *c = otaShaExpected; *c; ++c) *c = tolower(*c);
-  mbedtls_sha256_init(&otaSha);
-  mbedtls_sha256_starts(&otaSha, 0);
-  otaShaActive = true;
-}
-
-static void otaShaUpdate(const uint8_t *data, size_t len) {
-  if (otaShaActive && len) mbedtls_sha256_update(&otaSha, data, len);
-}
-
-// Returns true when no hash was requested or the computed hash matches.
-static bool otaShaFinishOk() {
-  if (!otaShaActive) return true;
+// Diagnostic: SHA-256 of the first `len` bytes of a partition as read back
+// from flash (what actually got written, not what was received). 720 kB
+// takes ~100 ms.
+static String partitionSha256(const esp_partition_t *p, size_t len) {
+  if (!p) return "";
+  mbedtls_sha256_context ctx;
+  mbedtls_sha256_init(&ctx);
+  mbedtls_sha256_starts(&ctx, 0);
+  static uint8_t buf[1024];
+  for (size_t off = 0; off < len; off += sizeof(buf)) {
+    size_t n = min(sizeof(buf), len - off);
+    if (esp_partition_read(p, off, buf, n) != ESP_OK) { mbedtls_sha256_free(&ctx); return ""; }
+    mbedtls_sha256_update(&ctx, buf, n);
+  }
   uint8_t digest[32];
-  mbedtls_sha256_finish(&otaSha, digest);
-  mbedtls_sha256_free(&otaSha);
-  otaShaActive = false;
+  mbedtls_sha256_finish(&ctx, digest);
+  mbedtls_sha256_free(&ctx);
   char hex[65];
   for (int i = 0; i < 32; ++i) sprintf(hex + i * 2, "%02x", digest[i]);
   hex[64] = '\0';
-  bool ok = (strcmp(hex, otaShaExpected) == 0);
-#if enableDebug || detailedDebugWiFi
-  DEBUG("[OTA] SHA-256 %s (got %s)", ok ? "OK" : "MISMATCH", hex);
-#endif
-  return ok;
+  return String(hex);
 }
 
 // Read the web UI's own version string from /version.json on LittleFS
@@ -112,6 +108,89 @@ static String readFsVersion() {
   int q2 = q1 >= 0 ? body.indexOf('"', q1 + 1) : -1;
   if (q1 < 0 || q2 < 0) return "--";
   return body.substring(q1 + 1, q2);
+}
+
+// ============================================================================
+// Web UI filesystem guards
+// ============================================================================
+// LittleFS is built with CONFIG_LITTLEFS_ASSERTS=y, and the panic handler
+// reboots. Feed lfs a partition that is half one image and half another (a
+// filesystem OTA that stopped part-way, or was rejected after the partition
+// had already been rewritten) and it can trip an assert while walking the
+// directory tree - at boot, every boot: a boot loop with no web server to
+// recover from. So:
+//   - the partition is only ever handed to lfs after a look at the superblock
+//     pair (the "littlefs" magic and a geometry that fits this partition);
+//   - a filesystem upload that fails for any reason erases that superblock
+//     pair, so what's left can never be mistaken for a filesystem;
+//   - the web server always starts; with no usable filesystem "/" serves a
+//     built-in recovery page (see setupWebServer) with the two upload forms.
+// ============================================================================
+static const esp_partition_t *fsPartition() {
+  return esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, NULL);
+}
+
+static String hex32(const uint8_t *b) {
+  char s[65];
+  for (int i = 0; i < 32; i++) sprintf(s + i * 2, "%02x", b[i]);
+  s[64] = '\0';
+  return String(s);
+}
+
+// LittleFS superblock: revision(4) tag(4) "littlefs"(8) tag(4) version(4)
+// block_size(4) block_count(4) ... - the pair lives in blocks 0 and 1 and
+// either one may be the current copy.
+static bool fsSuperblockLooksValid(const esp_partition_t *p) {
+  if (!p) return false;
+  const uint32_t blockSize = 4096;
+  for (int b = 0; b < 2; b++) {
+    uint8_t head[32];
+    if (esp_partition_read(p, (size_t)b * blockSize, head, sizeof(head)) != ESP_OK) continue;
+    uint32_t bs, bc;
+    memcpy(&bs, head + 24, 4);
+    memcpy(&bc, head + 28, 4);
+    OTA_DEBUG("[FS] block %d: %s | magic %s block_size %lu block_count %lu (partition %lu bytes)", b, hex32(head).c_str(),
+          memcmp(head + 8, "littlefs", 8) == 0 ? "ok" : "MISSING", (unsigned long)bs, (unsigned long)bc, (unsigned long)p->size);
+    if (memcmp(head + 8, "littlefs", 8) != 0) continue;
+    if (bs == blockSize && bc > 0 && (uint64_t)bc * bs <= p->size) return true;
+  }
+  return false;
+}
+
+bool fsMountSafe() {
+  const esp_partition_t *p = fsPartition();
+  if (!p) {
+    OTA_DEBUG("[FS] no data/spiffs partition in the table");
+    return false;
+  }
+  if (fsMounted()) return true;
+  if (!fsSuperblockLooksValid(p)) {
+    OTA_DEBUG("[FS] No LittleFS superblock on '%s' - not mounting (upload littlefs.bin from the recovery page)", p->label);
+    return false;
+  }
+  bool ok = LittleFS.begin(false);
+  OTA_DEBUG("[FS] LittleFS.begin -> %s; index.html %s, app.js %s, version.json %s", ok ? "mounted" : "FAILED",
+        ok && LittleFS.exists("/index.html") ? "present" : "missing",
+        ok && LittleFS.exists("/app.js") ? "present" : "missing",
+        ok && LittleFS.exists("/version.json") ? "present" : "missing");
+  return ok;
+}
+
+bool fsMounted() {
+  return esp_littlefs_mounted("spiffs");
+}
+
+bool fsUiAvailable() {
+  return fsMounted() && LittleFS.exists("/index.html") && LittleFS.exists("/app.js");
+}
+
+void fsInvalidate() {
+  LittleFS.end();
+  const esp_partition_t *p = fsPartition();
+  if (p) esp_partition_erase_range(p, 0, 2 * 4096);
+#if enableDebug || detailedDebugWiFi
+  DEBUG("[FS] Superblock pair erased - filesystem partition marked empty");
+#endif
 }
 
 // ============================================================================
@@ -212,177 +291,222 @@ bool needsFirmwareConfirmation() {
 }
 
 // ============================================================================
+// Upload results
+// ============================================================================
+// The upload callbacks below NEVER call request->send(). The body is still
+// streaming in while they run; a response written mid-body makes the browser
+// treat the upload as finished and drop the connection under the parser -
+// AsyncTCP then touches the freed pcb (Guru Meditation in tcp_output) and a
+// half-written partition is left behind. The old handlers answered "200 OK"
+// on every chunk, so no upload through this UI ever completed. Outcome is
+// recorded here and sent by the request handler once the body has ended;
+// the first outcome recorded wins, later chunks are just drained.
+// ============================================================================
+struct OtaResult {
+  bool set = false;
+  int code = 0;
+  String msg;
+};
+static OtaResult fwResult, fsResult;
+static bool fwRebootPending = false;
+
+static void otaSetResult(OtaResult &r, int code, const String &msg) {
+  if (r.set) return;
+  r.set = true;
+  r.code = code;
+  r.msg = msg;
+  OTA_DEBUG("[OTA] result %d: %s", code, msg.c_str());
+}
+
+static void otaSendResult(AsyncWebServerRequest *request, OtaResult &r, const char *noFileMsg) {
+  if (!r.set) { r.code = 400; r.msg = noFileMsg; }
+  request->send(r.code, "text/plain", r.msg);
+  r.set = false;
+}
+
+// ============================================================================
 // OTA Update Handler - SAFETY-CRITICAL: Blocks unsafe updates
 // ============================================================================
-//        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
-
 void handleOTAUpdate(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
   otaNoteWebActivity();
+  static bool fwStarted = false;
+  if (index == 0) { fwResult.set = false; fwStarted = false; }
+  if (fwResult.set) return; // outcome already decided - drain the rest of the body
+
   // SAFETY CHECK: Block update if system is not safe
   if (!isSystemSafeForOTA()) {
-    if (index == 0) {
-      // First chunk - reject immediately
-      request->send(403, "text/plain", "OTA BLOCKED: System not in safe state. Vehicle must be stationary, CAN initialized, outputs safe, no faults.");
-#if enableDebug || detailedDebugWiFi
-      DEBUG("[OTA SAFETY] Update rejected - system not safe");
-#endif
-    }
+    if (fwStarted) { esp_ota_abort(otaHandle); otaUpdateInProgress = false; fwStarted = false; }
+    otaSetResult(fwResult, 403, "OTA BLOCKED: System not in safe state. Vehicle must be stationary, CAN initialized, outputs safe, no faults.");
     return;
   }
 
   // First chunk - initialize OTA
   if (index == 0) {
-    otaUpdateInProgress = true;
-
-    // Get next OTA partition
     otaPartition = esp_ota_get_next_update_partition(NULL);
     if (otaPartition == NULL) {
-      request->send(500, "text/plain", "OTA ERROR: No OTA partition found. Check partition table.");
-      otaUpdateInProgress = false;
+      otaSetResult(fwResult, 500, "OTA ERROR: No OTA partition found. Check partition table.");
       return;
     }
-
-#if enableDebug || detailedDebugWiFi
-    DEBUG("[OTA] Starting update to partition: %s", otaPartition->label);
-#endif
-
-    // Begin OTA update
+    OTA_DEBUG("[OTA] Starting firmware update: %s -> %s", filename.c_str(), otaPartition->label);
     esp_err_t err = esp_ota_begin(otaPartition, OTA_SIZE_UNKNOWN, &otaHandle);
     if (err != ESP_OK) {
-      request->send(500, "text/plain", "OTA ERROR: Failed to begin update");
-      otaUpdateInProgress = false;
+      otaSetResult(fwResult, 500, "OTA ERROR: Failed to begin update");
       return;
     }
-    otaShaBegin(request);
+    fwStarted = true;
+    otaUpdateInProgress = true;
   }
 
   // Write data chunk
-  otaShaUpdate(data, len);
-  esp_err_t err = esp_ota_write(otaHandle, data, len);
-  if (err != ESP_OK) {
-    request->send(500, "text/plain", "OTA ERROR: Write failed");
+  if (len && esp_ota_write(otaHandle, data, len) != ESP_OK) {
     esp_ota_abort(otaHandle);
     otaUpdateInProgress = false;
+    fwStarted = false;
+    otaSetResult(fwResult, 500, "OTA ERROR: Write failed");
     return;
   }
 
-  // Final chunk - finish OTA
+  // Final chunk - finish OTA (esp_ota_end validates the image before it can boot)
   if (final) {
-    // Integrity: hash must match before the image is allowed to boot
-    if (!otaShaFinishOk()) {
-      request->send(400, "text/plain", "OTA ERROR: SHA-256 mismatch - image discarded");
+    fwStarted = false;
+    esp_err_t err = esp_ota_end(otaHandle);
+    if (err != ESP_OK) {
       esp_ota_abort(otaHandle);
       otaUpdateInProgress = false;
+      otaSetResult(fwResult, err == ESP_ERR_OTA_VALIDATE_FAILED ? 400 : 500,
+                   err == ESP_ERR_OTA_VALIDATE_FAILED ? "OTA ERROR: Image validation failed - is that a firmware.bin?" : "OTA ERROR: End failed");
       return;
     }
-    err = esp_ota_end(otaHandle);
-    if (err != ESP_OK) {
-      if (err == ESP_ERR_OTA_VALIDATE_FAILED) {
-        request->send(400, "text/plain", "OTA ERROR: Image validation failed");
-      } else {
-        request->send(500, "text/plain", "OTA ERROR: End failed");
-      }
-      esp_ota_abort(otaHandle);
+    if (esp_ota_set_boot_partition(otaPartition) != ESP_OK) {
       otaUpdateInProgress = false;
+      otaSetResult(fwResult, 500, "OTA ERROR: Failed to set boot partition");
       return;
     }
-
-    // Set boot partition to new firmware
-    err = esp_ota_set_boot_partition(otaPartition);
-    if (err != ESP_OK) {
-      request->send(500, "text/plain", "OTA ERROR: Failed to set boot partition");
-      otaUpdateInProgress = false;
-      return;
-    }
-
-#if enableDebug || detailedDebugWiFi
-    DEBUG("[OTA] Update complete. Rebooting...");
-    DEBUG("[OTA SAFETY] New firmware will require confirmation on boot");
-#endif
-
-    request->send(200, "text/plain", "OTA update complete. Rebooting... Firmware will be confirmed after safety checks pass.");
-
-    // Small delay to allow response to be sent
-    delay(1000);
-
-    for (int i = 0; i <= 8; i++) {
-      strip.setLedColorData(led_channel, ledBrightness/2, ledBrightness/2, ledBrightness/2);  // red
-      strip.show();
-      delay(50);
-      strip.setLedColorData(led_channel, 0, 0, 0);  // red
-      strip.show();
-      delay(50);
-    }
-
-    // Reboot
-    ESP.restart();
-  } else {
-    // Progress update
-    request->send(200, "text/plain", "OK");
+    OTA_DEBUG("[OTA] Firmware written to %s. Rebooting once the response is out; the new image must confirm itself.", otaPartition->label);
+    otaSetResult(fwResult, 200, "OTA update complete. Rebooting... Firmware will be confirmed after safety checks pass.");
+    fwRebootPending = true; // otaUpdateInProgress stays set until the reboot
   }
+}
+
+// Runs after the body: send the outcome, then reboot if a firmware image was
+// just installed.
+static void finishFirmwareRequest(AsyncWebServerRequest *request) {
+  otaSendResult(request, fwResult, "No file received - pick firmware.bin first.");
+  if (!fwRebootPending) return;
+  delay(1000); // let the response leave
+  for (int i = 0; i <= 8; i++) {
+    strip.setLedColorData(led_channel, ledBrightness / 2, ledBrightness / 2, ledBrightness / 2);
+    strip.show();
+    delay(50);
+    strip.setLedColorData(led_channel, 0, 0, 0);
+    strip.show();
+    delay(50);
+  }
+  ESP.restart();
 }
 
 // ============================================================================
 // Filesystem (LittleFS) Update Handler - writes littlefs.bin to the "spiffs"
 // data partition via the Arduino Update library (U_SPIFFS). Same safety gate
 // as the firmware path. Used by the OTA page "Filesystem (web UI)" option.
+//
+// The firmware keeps running throughout (it lives in ota_0/ota_1, not here)
+// and there is NO reboot at the end. LittleFS is unmounted before the first
+// byte is written - it used to stay mounted while the partition was rewritten
+// underneath it, so any page load during or after the upload walked the old
+// directory tree over new blocks. Any failure (write error, client gone,
+// short upload, SHA mismatch, image that won't mount) ends with
+// fsInvalidate(), leaving a partition that cannot be mounted rather than a
+// hybrid of two images; the web server then serves the recovery page.
 // ============================================================================
+static size_t fsBytesReceived = 0;
+static uint8_t fsHeadRx[32]; // first bytes as received - compared with the flash read-back on failure
+static size_t fsHeadRxLen = 0;
+
+// `wipe` = false only when nothing has been written yet (the old image is
+// intact, so put it back rather than erase it).
+static void fsUpdateFail(int code, const String &msg, bool wipe = true) {
+  Update.abort();
+  if (wipe) fsInvalidate(); else fsMountSafe();
+  otaUpdateInProgress = false;
+  otaSetResult(fsResult, code, msg);
+}
+
 void handleFSUpdate(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
   otaNoteWebActivity();
+  if (index == 0) { fsResult.set = false; fsBytesReceived = 0; fsHeadRxLen = 0; }
+  if (fsResult.set) return; // outcome already decided - drain the rest of the body
+
   // SAFETY CHECK: Block update if system is not safe
   if (!isSystemSafeForOTA()) {
-    if (index == 0) {
-      request->send(403, "text/plain", "OTA BLOCKED: System not in safe state.");
-    }
+    if (index == 0) otaSetResult(fsResult, 403, "OTA BLOCKED: System not in safe state."); // nothing written
+    else fsUpdateFail(403, "OTA BLOCKED: system left the safe state mid-upload - re-upload the filesystem");
     return;
   }
 
   // First chunk - begin filesystem update
   if (index == 0) {
+    if (Update.isRunning()) Update.abort(); // an earlier upload that never finished
     otaUpdateInProgress = true;
-#if enableDebug || detailedDebugWiFi
-    DEBUG("[OTA] Starting filesystem update: %s", filename.c_str());
-#endif
+    OTA_DEBUG("[OTA] Starting filesystem update: %s (%s bytes expected)", filename.c_str(),
+          request->hasParam("size") ? request->getParam("size")->value().c_str() : "?");
+    LittleFS.end(); // nothing may read the partition while it is being rewritten
     if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_SPIFFS)) {
-      request->send(500, "text/plain", "OTA ERROR: Failed to begin filesystem update");
-      otaUpdateInProgress = false;
+      fsUpdateFail(500, "OTA ERROR: Failed to begin filesystem update", false);
       return;
     }
-    otaShaBegin(request);
+    // Phone wandered off mid-upload: don't leave half an image behind.
+    request->onDisconnect([]() {
+      if (otaUpdateInProgress && Update.isRunning()) fsUpdateFail(0, "client disconnected mid-upload");
+    });
   }
 
   // Write data chunk
-  otaShaUpdate(data, len);
+  if (fsHeadRxLen < sizeof(fsHeadRx) && len) {
+    size_t n = min(len, sizeof(fsHeadRx) - fsHeadRxLen);
+    memcpy(fsHeadRx + fsHeadRxLen, data, n);
+    fsHeadRxLen += n;
+  }
+  fsBytesReceived += len;
   if (len && Update.write(data, len) != len) {
-    request->send(500, "text/plain", "OTA ERROR: Filesystem write failed");
-    Update.abort();
-    otaUpdateInProgress = false;
+    fsUpdateFail(500, "OTA ERROR: Filesystem write failed");
     return;
   }
 
   // Final chunk - finish filesystem update
   if (final) {
-    if (!Update.end(true)) {
-      request->send(500, "text/plain", "OTA ERROR: Filesystem update failed");
-      otaUpdateInProgress = false;
+    // Expected length, when the uploader says (?size=): a short body still
+    // arrives with final=true, and Update.end(true) would happily accept it.
+    size_t expect = 0;
+    if (request->hasParam("size")) expect = (size_t)request->getParam("size")->value().toInt();
+    if (expect && fsBytesReceived != expect) {
+      fsUpdateFail(400, "OTA ERROR: Filesystem upload was short (" + String(fsBytesReceived) + " of " + String(expect) + " bytes) - re-upload the filesystem");
       return;
     }
-    // Integrity: the partition is already written, but nothing boots from it -
-    // report the mismatch so the UI retries step 1 before flashing firmware.
-    if (!otaShaFinishOk()) {
-      request->send(400, "text/plain", "OTA ERROR: Filesystem SHA-256 mismatch - re-upload the filesystem");
-      otaUpdateInProgress = false;
+    if (!Update.end(true)) {
+      fsUpdateFail(500, "OTA ERROR: Filesystem update failed");
+      return;
+    }
+    // Mount what was written. If it doesn't come up as a filesystem holding
+    // the web UI there's no point keeping it. The read-back in the message
+    // lets the uploader compare against the file it sent.
+    if (!fsMountSafe() || !fsUiAvailable()) {
+      uint8_t flashHead[32] = {0};
+      esp_partition_read(fsPartition(), 0, flashHead, sizeof(flashHead));
+      String msg = "OTA ERROR: Filesystem written but does not mount (";
+      msg += fsMounted() ? "mounted, web UI files missing" : "mount failed";
+      msg += "). Received " + String(fsBytesReceived) + " bytes. First 32 bytes received: " + hex32(fsHeadRx) +
+             " | in flash: " + hex32(flashHead) + " | read-back sha256: " + partitionSha256(fsPartition(), fsBytesReceived);
+      fsUpdateFail(500, msg);
       return;
     }
 
-#if enableDebug || detailedDebugWiFi
-    DEBUG("[OTA] Filesystem update complete. No reboot (upload firmware next).");
-#endif
+    OTA_DEBUG("[OTA] Filesystem update complete: %u bytes, web UI v%s. No reboot (upload firmware next).", (unsigned)fsBytesReceived, readFsVersion().c_str());
 
     // Filesystem does NOT reboot: the two-step OTA flow uploads the filesystem
     // first (step 1), then the firmware (step 2) reboots at the end.
     otaUpdateInProgress = false;
-    request->send(200, "text/plain", "Filesystem update complete.");
+    otaSetResult(fsResult, 200, "Filesystem update complete.");
 
     // brief green confirmation flash
     for (int i = 0; i <= 4; i++) {
@@ -393,8 +517,6 @@ void handleFSUpdate(AsyncWebServerRequest *request, String filename, size_t inde
       strip.show();
       delay(40);
     }
-  } else {
-    request->send(200, "text/plain", "OK");
   }
 }
 
@@ -455,15 +577,45 @@ void setupOTA() {
       request->send(409, "application/json", "{\"ok\":false,\"error\":\"update in progress\"}");
       return;
     }
-    LittleFS.end();
-    bool mounted = LittleFS.begin(false);
+    // The upload handler already remounted; only try again if it isn't up.
+    bool mounted = fsMounted() || fsMountSafe();
     String fsVer = mounted ? readFsVersion() : "--";
-    bool hasIndex = mounted && LittleFS.exists("/index.html") && LittleFS.exists("/app.js");
+    bool hasIndex = mounted && fsUiAvailable();
     String json = "{";
     json += "\"ok\":" + String((mounted && hasIndex) ? "true" : "false") + ",";
     json += "\"mounted\":" + String(mounted ? "true" : "false") + ",";
     json += "\"fsVersion\":\"" + fsVer + "\",";
     json += "\"fwVersion\":\"" + String(FW_VERSION) + "\"";
+    json += "}";
+    request->send(200, "application/json", json);
+  });
+
+  // Diagnostic: what is physically in the filesystem partition. ?len=N hashes
+  // the first N bytes (default: whole partition) so it can be compared with
+  // `sha256sum littlefs.bin` on the PC. Also on the recovery page.
+  webServer.on("/ota/fsdiag", HTTP_GET, [](AsyncWebServerRequest *request) {
+    otaNoteWebActivity();
+    const esp_partition_t *p = fsPartition();
+    if (!p) { request->send(500, "application/json", "{\"error\":\"no spiffs partition\"}"); return; }
+    size_t len = p->size;
+    if (request->hasParam("len")) { long l = request->getParam("len")->value().toInt(); if (l > 0 && (size_t)l <= p->size) len = (size_t)l; }
+    uint8_t head[32];
+    String hex = "";
+    if (esp_partition_read(p, 0, head, sizeof(head)) == ESP_OK) {
+      char h[3];
+      for (int i = 0; i < 32; i++) { sprintf(h, "%02x", head[i]); hex += h; }
+    }
+    uint32_t bs = 0, bc = 0;
+    memcpy(&bs, head + 24, 4);
+    memcpy(&bc, head + 28, 4);
+    String json = "{";
+    json += "\"partition\":\"" + String(p->label) + "\",\"address\":" + String(p->address) + ",\"size\":" + String(p->size) + ",";
+    json += "\"head\":\"" + hex + "\",\"magic\":" + String(memcmp(head + 8, "littlefs", 8) == 0 ? "true" : "false") + ",";
+    json += "\"blockSize\":" + String(bs) + ",\"blockCount\":" + String(bc) + ",";
+    json += "\"mounted\":" + String(fsMounted() ? "true" : "false") + ",";
+    json += "\"ui\":" + String(fsUiAvailable() ? "true" : "false") + ",";
+    json += "\"fsVersion\":\"" + (fsMounted() ? readFsVersion() : String("--")) + "\",";
+    json += "\"hashLen\":" + String(len) + ",\"sha256\":\"" + partitionSha256(p, len) + "\"";
     json += "}";
     request->send(200, "application/json", json);
   });
@@ -506,31 +658,18 @@ void setupOTA() {
   // NOTE: must be registered BEFORE "/ota/update" - AsyncWebServer matches a
   // handler on "<uri>/..." prefixes too, so the firmware handler would otherwise
   // swallow filesystem uploads (same rule as /api/wifi/ssid in _API.cpp).
+  // The request lambdas run once the whole body has been parsed; that is the
+  // only place a response may be sent (see "Upload results" above).
   webServer.on(
     "/ota/update/fs", HTTP_POST,
-    [](AsyncWebServerRequest *request) {
-      if (!isSystemSafeForOTA()) {
-        request->send(403, "application/json", "{\"error\":\"OTA BLOCKED: System not in safe state\"}");
-        return;
-      }
-      request->send(200, "text/plain", "Ready for upload");
-    },
+    [](AsyncWebServerRequest *request) { otaSendResult(request, fsResult, "No file received - pick littlefs.bin first."); },
     handleFSUpdate);
 
-  // SAFETY-CRITICAL: OTA update endpoint (no auth - see note above)
+  // SAFETY-CRITICAL: OTA update endpoint (no auth: the safety gate - stationary,
+  // CAN healthy - is the control, and the chip validates the image itself)
   webServer.on(
     "/ota/update", HTTP_POST,
-    [](AsyncWebServerRequest *request) {
-      // No password: the safety gate (stationary, CAN healthy) and the SHA-256
-      // check are the controls. Runs after the upload completes.
-      // SAFETY CHECK: Block if system not safe
-      if (!isSystemSafeForOTA()) {
-        request->send(403, "application/json", "{\"error\":\"OTA BLOCKED: System not in safe state\"}");
-        return;
-      }
-
-      request->send(200, "text/plain", "Ready for upload");
-    },
+    finishFirmwareRequest,
     handleOTAUpdate);
 
   // Legacy endpoint for AsyncElegantOTA compatibility (redirects to new endpoint)

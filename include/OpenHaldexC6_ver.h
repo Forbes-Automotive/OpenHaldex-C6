@@ -2,7 +2,7 @@
 #include <OpenHaldexC6_defs.h>
 
 // Current firmware version
-#define FW_VERSION "9.00.0" // also bump data/version.json ("fs") and the ?v= cache-busters in data/index.html
+#define FW_VERSION "9.00.0" // also bump data/version.json ("fs")
 
 /*
 Version Control:
@@ -127,15 +127,47 @@ V9.00.0 - shared Forbes Automotive UI theme; automatic product web-asset
         - Release list = Releases/releases.json 
         - Rollback allowed (tick "Show
           beta / older versions"); the confirm warns that older releases may
-          not have this page. Option 2 (install from files already on the
-          phone, content-sniffed) kept for no-internet installs; the manual
-          single-file upload card stays as "Manual Upload".
+          not have this page. Two routes only: GitHub, or "Update from Files"
+          (littlefs.bin then firmware.bin, the original safety-gated upload
+          card). A content-sniffing multi-file picker was tried and dropped
+          as noise.
+        - Check button reports each stage with elapsed time (1/2 controller,
+          2/2 GitHub) so a hang is distinguishable from a dead link.
+        - ROOT CAUSE of OTA never completing (firmware or filesystem): both
+          upload callbacks answered "200 OK" on every non-final chunk. The
+          browser took the first one as the end of the upload and closed the
+          connection while the body was still streaming - AsyncTCP then used
+          the freed pcb (Guru Meditation in tcp_output, Load access fault)
+          and a partly-written partition was left behind. Upload callbacks
+          now never send(); the outcome is recorded (first one wins) and the
+          request handler sends it once the body has ended. Firmware reboot
+          moved there too, after the response.
+        - Filesystem OTA hardened after a failed update boot-looped a unit:
+          LittleFS is unmounted before the partition is rewritten (it used to
+          stay mounted underneath the write); any failure - write error,
+          client gone, short body (?size= from the uploader), SHA mismatch,
+          image that won't mount - erases the superblock pair so a hybrid of
+          two images can never be handed to lfs (CONFIG_LITTLEFS_ASSERTS=y
+          + panic-reboot = boot loop). Boot only mounts after a superblock
+          sanity check, and the web server ALWAYS starts: with no usable UI
+          "/" is a built-in recovery page with the two upload forms. A
+          filesystem update never reboots; the firmware runs from ota_x and
+          does not need the filesystem.
+        - Upload-stream SHA-256 gate removed: the chip validates firmware
+          (esp_ota_end) and the filesystem is validated by mounting; the gate
+          only ever failed updates when a .bin was rebuilt in place without
+          re-running make_release.py. GET /ota/fsdiag reports what is
+          physically in the filesystem partition (superblock fields, mounted,
+          files, read-back sha256) - also shown on the recovery page.
         - Low-power AP shutdown now also holds off while a browser is polling
           the UI (otaWebClientActive(): /api/dashboard, /api/wifi/sta, /ota/*
           within 30 s, or an upload in progress). Before, only stations joined
           to our own AP counted, so a phone working through the home router on
           the bench (Bench Mode off) could have WiFi cut from under it mid-OTA.
-        - both ?v= cache-busters in index.html track FW_VERSION (style.css's was stuck at 8.00.5).
+        - app.js/style.css now served with Cache-Control: no-cache (ETag
+          revalidation, 304 when unchanged) instead of max-age=1y + a hand-
+          bumped ?v= that kept being forgotten - phones were running a stale
+          app.js against new HTML, so buttons on new cards did nothing.
 
 */
 

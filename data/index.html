@@ -9,7 +9,7 @@
     <meta http-equiv="Expires" content="0">
 
     <title>OpenHaldex-C6</title>
-    <link rel="stylesheet" href="style.css?v=openhaldex-9.00.0">
+    <link rel="stylesheet" href="style.css?v=20260920">
 </head>
 
 <body>
@@ -971,29 +971,26 @@
                 <p class="hint">Firmware updates are blocked while the vehicle is moving or the CAN
                     bus is unhealthy. This is a safety feature and cannot be overridden.</p>
             </section>
-            <!-- Two routes to the same guided sequence: straight from GitHub when
-                 this browser has internet (normally: controller on the home router
-                 via bridge mode, phone on the same network), or from files already
-                 on the phone when it doesn't. Both share the step tracker below. -->
+            <!-- Guided update straight from GitHub. Needs internet in this
+                 browser while it can still reach the controller: controller on
+                 the home router via bridge mode, phone on the same network. -->
             <section class="card">
-                <h2>Update</h2>
+                <h2>Update from GitHub</h2>
                 <div class="ota-info">
                     <div><span>Installed</span><strong id="updInstalled">--</strong></div>
                     <div><span>Latest</span><strong id="updLatest">--</strong></div>
                     <div><span>Status</span><strong id="updState">Not checked</strong></div>
                 </div>
-
-                <h3 class="upd-sub">Option 1 &middot; Straight from GitHub</h3>
-                <p class="hint">Needs internet <em>in this browser</em> while it can still reach the controller.
-                    The reliable way: connect the controller to your home router (<a href="#" id="updGoBridge">Home
-                    WiFi card below</a>), join this phone to the same network and open the address that card shows.
-                    On the OpenHaldex‑C6 access point alone, most phones drop mobile data. Older versions can be
-                    installed to roll back. Keep this page open and the screen on until the device has rebooted.</p>
+                <p class="hint">This browser needs internet while it can still reach the controller: join the
+                    controller to your router in <a href="#otaWifiStaCard" id="updGoBridge">Home WiFi</a> below, put this
+                    phone on the same network and open the address that card shows. On the OpenHaldex‑C6 access point
+                    alone most phones drop mobile data. Keep this page open until the device has rebooted.</p>
                 <div class="button-row">
                     <button id="updCheckBtn" class="btn primary">Check for updates</button>
                     <button id="updBridgeBtn" class="btn" hidden>Set up Home WiFi</button>
                     <label class="upd-beta"><input type="checkbox" id="updShowAll"> Show beta / older versions</label>
                 </div>
+                <div id="updStatus" class="status-line">Idle</div>
                 <div id="updPicker" hidden>
                     <div class="input-group">
                         <label>Version</label>
@@ -1004,28 +1001,6 @@
                         <button id="updInstallBtn" class="btn primary">Install selected</button>
                     </div>
                 </div>
-
-                <h3 class="upd-sub">Option 2 &middot; From files, no internet needed</h3>
-                <p class="hint">If Option 1 can't reach GitHub, do it in two passes:</p>
-                <ol class="upd-offline">
-                    <li>Somewhere with signal, off the OpenHaldex WiFi, open
-                        <a href="https://github.com/Forbes-Automotive/OpenHaldex-C6/tree/main/Releases"
-                            target="_blank" rel="noopener">the Releases folder on GitHub</a>.</li>
-                    <li>Open the newest <code>V…</code> folder and download both <code>littlefs.bin</code> and
-                        <code>firmware.bin</code> &mdash; use GitHub's <strong>Download raw file</strong> button.</li>
-                    <li>Reconnect to the OpenHaldex WiFi, come back here and pick both files.</li>
-                </ol>
-                <div class="input-group">
-                    <label>Release files (.bin)</label>
-                    <input id="updFiles" type="file" multiple accept=".bin,application/octet-stream">
-                </div>
-                <div id="updFilesList" class="upd-files"></div>
-                <p class="hint">Each file is identified by its contents, so the order you pick them in and whatever
-                    the browser named them doesn't matter. Both files should come from the same release folder.</p>
-                <div class="button-row">
-                    <button id="updInstallFilesBtn" class="btn primary" disabled>Install picked files</button>
-                </div>
-
                 <div class="ota-steps" id="updSteps">
                     <div class="ota-step" data-step="dlfs"><span class="ota-step-num">1</span> Get FS</div>
                     <div class="ota-step" data-step="fs"><span class="ota-step-num">2</span> Flash FS</div>
@@ -1038,16 +1013,14 @@
                     <div class="ota-progress-bar" id="updProgressBar"></div>
                     <span class="ota-progress-label" id="updProgressLabel">0%</span>
                 </div>
-                <div id="updStatus" class="status-line">Idle</div>
             </section>
             <!-- Same card as on Diagnostics (shared initWifiSta() with an id prefix)
                  so the router can be joined from here without leaving the tab. -->
             <section class="card" id="otaWifiStaCard">
                 <h2>Home WiFi (Bridge Mode)</h2>
-                <p class="hint">For <strong>Option 1</strong>: join the controller to your home or garage router. Its own
-                    access point keeps running. Once it shows <em>Connected</em>, put this phone on the same network,
-                    open the address shown and press <strong>Check for updates</strong> again &mdash; the phone keeps its
-                    normal internet and can still reach the controller. The controller stays awake while this page is open.</p>
+                <p class="hint">Join the controller to your home or garage router; its own access point keeps running.
+                    Once it shows <em>Connected</em>, put this phone on the same network, open the address shown and
+                    press <strong>Check for updates</strong> again.</p>
                 <p class="hint" id="otaWifiStaStatus">--</p>
                 <div class="wifi-password-row">
                     <input type="text" id="otaWifiStaSsidInput" placeholder="Home network name" class="input-wifi-password" maxlength="32" autocomplete="off" spellcheck="false" list="otaWifiStaSsidList">
@@ -1064,11 +1037,13 @@
                 </div>
             </section>
             <section class="card">
-                <h2>Manual Upload</h2>
-                <p class="hint"><strong>Filesystem</strong> updates the web interface (littlefs.bin).
-                    <strong>Firmware</strong> updates the application (firmware.bin). Update the
-                    filesystem first, then the firmware. The device reboots automatically once the
-                    firmware upload completes.</p>
+                <h2>Update from Files</h2>
+                <p class="hint">No internet needed here. Download <code>littlefs.bin</code> and <code>firmware.bin</code>
+                    from the newest <code>V…</code> folder in
+                    <a href="https://github.com/Forbes-Automotive/OpenHaldex-C6/tree/main/Releases" target="_blank"
+                        rel="noopener">Releases on GitHub</a>, then upload them here: <strong>Filesystem</strong>
+                    (littlefs.bin, the web interface) first, then <strong>Firmware</strong> (firmware.bin). The device
+                    reboots once the firmware upload completes.</p>
                 <div class="ota-steps" id="otaSteps">
                     <div class="ota-step" data-step="filesystem"><span class="ota-step-num">1</span> Filesystem</div>
                     <div class="ota-step" data-step="firmware"><span class="ota-step-num">2</span> Firmware</div>
@@ -1095,8 +1070,10 @@
             </section>
         </div>
 
-        <script src="./app.js?v=openhaldex-9.00.0" type="text/javascript"></script>
-        <!-- bump this version string each release to force a cache refresh -->
+        <script src="./app.js?v=20260920" type="text/javascript"></script>
+        <!-- The device now serves app.js/style.css with Cache-Control: no-cache
+             (ETag revalidation), so this ?v= no longer needs bumping. It was
+             changed once to escape the year-long cache older builds handed out. -->
 </body>
 
 </html>

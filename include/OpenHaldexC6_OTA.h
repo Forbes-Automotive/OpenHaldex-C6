@@ -18,3 +18,12 @@ String getFirmwareVersion();
 // request has been seen recently or an upload is being written.
 void otaNoteWebActivity();
 bool otaWebClientActive();
+
+// Web UI filesystem (LittleFS on the "spiffs" partition) helpers - see the
+// notes above fsMountSafe() in _OTA.cpp. The firmware never needs the
+// filesystem to run; it only holds the web UI, so a broken one must degrade
+// to the built-in recovery page, never to a crash or a dead web server.
+bool fsMountSafe();      // mount only if the superblock looks like a LittleFS image that fits the partition
+bool fsMounted();
+bool fsUiAvailable();    // mounted and index.html + app.js present
+void fsInvalidate();     // erase the superblock pair so a half-written image can never be mounted

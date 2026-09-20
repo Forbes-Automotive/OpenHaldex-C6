@@ -1886,8 +1886,8 @@ function initWifi() {
 // Check for Updates (guided OTA)
 // The page - not the controller - fetches the release list and the .bin files
 // from GitHub, then pushes each image through the same safety-gated /ota
-// endpoints as a manual upload, with its SHA-256 so the device can refuse a
-// corrupt or tampered image.
+// endpoints as a manual upload. The device validates each image itself
+// (esp_ota_end for firmware, a mount for the filesystem) - no hash gate.
 //
 // Where the internet comes from: the intended route is bridge mode - the
 // controller joins the home router (Home WiFi card, duplicated on this tab)
@@ -1901,10 +1901,10 @@ function initWifi() {
 //
 // Two sources are merged:
 //   1. Releases/releases.json - the index tools/make_release.py writes: notes,
-//      date, channel, ota flag, size + SHA-256 per image.
+//      date, channel, ota flag per release.
 //   2. The Releases/ folder listing from the GitHub API - so a V<x.y.z> folder
 //      that has just been dropped in shows up even before the index is
-//      regenerated (marked unverified: no checksum, no notes).
+//      regenerated (no notes).
 // Two mirrors are tried for the index and the images. raw.githubusercontent
 // is the source of truth; jsDelivr serves the same repo and gets through on
 // networks that block or mangle raw.githubusercontent. Whichever answers
@@ -1947,12 +1947,10 @@ function initUpdateCheck() {
   const checkBtn = $("updCheckBtn"), installBtn = $("updInstallBtn"), showAll = $("updShowAll"), bridgeBtn = $("updBridgeBtn");
   const picker = $("updPicker"), sel = $("updVersion"), notes = $("updNotes"), status = $("updStatus");
   const wrap = $("updProgressWrap"), bar = $("updProgressBar"), label = $("updProgressLabel");
-  const fileIn = $("updFiles"), fileList = $("updFilesList"), fileBtn = $("updInstallFilesBtn");
   if (!checkBtn || !sel) return;
 
   let index = null;   // merged release list: { latest, releases[] }
   let busy = false;
-  let picked = { filesystem: null, firmware: null }; // offline install, by content sniff
 
   const setStatus = (msg, cls) => { status.textContent = msg; status.className = "status-line" + (cls ? " " + cls : ""); };
   const setState = (msg, cls) => { const e = $("updState"); if (e) { e.textContent = msg; e.className = cls || ""; } };
@@ -1997,7 +1995,7 @@ function initUpdateCheck() {
       const tags = [];
       if (r.version === index.latest) tags.push("latest");
       if (r.channel === "beta") tags.push("beta");
-      if (r.unindexed) tags.push("unverified");
+      if (r.unindexed) tags.push("not in index");
       const c = updCompareVersions(r.version, cur);
       if (c === 0) tags.push("installed");
       else if (c < 0) tags.push("rollback");
@@ -2011,7 +2009,7 @@ function initUpdateCheck() {
       if (!all && otaCandidates().length) {
         setStatus("Nothing newer than the installed version. Tick “Show beta / older versions” to roll back.");
       } else {
-        setStatus("No installable releases listed. Use Option 2 or the manual upload below.", "error");
+        setStatus("No installable releases listed. Use “Update from Files” below.", "error");
       }
       return;
     }
@@ -2040,7 +2038,7 @@ function initUpdateCheck() {
         if (byVer[v]) return;
         byVer[v] = {
           version: v, channel: "stable", ota: true, unindexed: true,
-          notes: "Not in the release index yet: no notes, and the download can't be checked against a published SHA-256. The device still validates the image itself.",
+          notes: "Not in the release index yet - no release notes.",
           firmware: { path: "V" + v + "/firmware.bin" },
           filesystem: { path: "V" + v + "/littlefs.bin" },
         };
@@ -2114,20 +2112,28 @@ function initUpdateCheck() {
     }
     return ["This browser has no internet while on the OpenHaldex WiFi" + why + ". Connect the controller to your home router in the " +
       "Home WiFi (Bridge Mode) card below, join this phone to that same network, open the address the card shows and press Retry. " +
-      "No router available? Use Option 2 - it needs no internet here.", true];
+      "No router available? Use “Update from Files” below - it needs no internet here.", true];
   }
 
   async function check() {
     if (busy) return;
+    const t0 = Date.now();
+    const secs = () => ((Date.now() - t0) / 1000).toFixed(1) + " s";
     checkBtn.disabled = true;
+    checkBtn.textContent = "Checking…";
     if (bridgeBtn) bridgeBtn.hidden = true;
     picker.hidden = true;
     index = null;
+    const finish = (needBridge) => {
+      checkBtn.textContent = needBridge === undefined ? "Check for updates" : "Retry";
+      if (needBridge !== undefined) showRetry(needBridge);
+      checkBtn.disabled = false;
+    };
 
     // 1. The controller must be reachable from here before anything else.
     // Also refreshes "Installed" from the device itself so the comparison is
     // against what is really running, not whatever loadInfo() saw at page load.
-    setStatus("Checking the controller…");
+    setStatus("1/2 Contacting the controller…");
     setState("Checking…");
     let info = null;
     try {
@@ -2136,11 +2142,10 @@ function initUpdateCheck() {
     } catch (e) { /* unreachable - handled below */ }
     if (!info || !info.version) {
       setState("Controller unreachable", "upd-bad");
-      setStatus("Can't reach the controller from this browser. Stay on the OpenHaldex‑C6 WiFi - or, if you're using the home router, " +
+      setStatus("Can't reach the controller from this browser (gave up after " + secs() + "). Stay on the OpenHaldex‑C6 WiFi - or, if you're using the home router, " +
         "make sure the Home WiFi card shows Connected and that you opened this page at the address it gives. The controller also " +
         "switches WiFi off after 5 minutes with no CAN traffic unless Bench Mode is on. Then press Retry.", "error");
-      showRetry(false);
-      checkBtn.disabled = false;
+      finish(false);
       return;
     }
     window._otaInstalledVersion = info.version;
@@ -2148,8 +2153,9 @@ function initUpdateCheck() {
     set("updInstalled", "v" + info.version);
     set("otaFwVersion", info.version + (info.fsVersion && info.fsVersion !== "--" && info.fsVersion !== info.version ? " (web UI " + info.fsVersion + ")" : ""));
 
-    // 2. Release index + folder listing, in parallel.
-    setStatus("Checking internet access…");
+    // 2. Release index + folder listing, in parallel. Each mirror gets 12 s,
+    // so a phone with no route can sit here a while - say so.
+    setStatus("2/2 Contacting GitHub for the release list… (controller answered in " + secs() + "; this can take up to 30 s with no internet)");
     const [ir, fr] = await Promise.all([fetchIndex(), fetchFolders()]);
 
     if (!ir.index && !fr.dirs) {
@@ -2159,47 +2165,43 @@ function initUpdateCheck() {
       if (ir.reached || fr.reached) {
         setState("Release list unavailable", "upd-bad");
         setStatus("The phone is online but the release list could not be read: " + (ir.reached || fr.reached) +
-          ". Nothing is wrong with the controller or the phone - the published releases are missing or broken. Use Option 2 below.", "error");
-        showRetry(false);
+          ". Nothing is wrong with the controller or the phone - the published releases are missing or broken. Use “Update from Files” below.", "error");
+        finish(false);
       } else {
         setState("No internet access", "upd-bad");
-        const adv = await offlineAdvice(ir.netErr || fr.netErr);
+        const adv = await offlineAdvice((ir.netErr || fr.netErr || "") + ", after " + secs());
         setStatus(adv[0], "error");
-        showRetry(adv[1]);
+        finish(adv[1]);
       }
-      checkBtn.disabled = false;
       return;
     }
 
     index = mergeSources(ir.index, fr.dirs);
-    checkBtn.textContent = "Check for updates";
     const cur = installed();
     const latest = index.latest || "";
     set("updLatest", latest ? "v" + latest : "--");
     const c = updCompareVersions(latest, cur);
-    const srcNote = !ir.index ? " (release index unavailable - folder listing only, no checksums)"
+    const srcNote = !ir.index ? " (release index unavailable - folder listing only, no release notes)"
       : !fr.dirs ? " (folder listing unavailable - " + (fr.reached || fr.netErr || "no answer") + "; showing the index only)" : "";
-    if (c > 0) { setState("Update available", "upd-available"); setStatus("v" + latest + " is available (installed v" + cur + ")." + srcNote); }
-    else if (c === 0) { setState("Up to date", "upd-current"); setStatus("You are on the latest release." + srcNote); }
-    else { setState("Ahead of release", "upd-current"); setStatus("Installed v" + cur + " is newer than the published v" + latest + "." + srcNote); }
+    const via = " Release list from " + UPD_MIRRORS.filter((m) => m.base === UPD_RELEASES_BASE).map((m) => m.name).join("") + " in " + secs() + ".";
+    if (c > 0) { setState("Update available", "upd-available"); setStatus("v" + latest + " is available (installed v" + cur + ")." + srcNote + via); }
+    else if (c === 0) { setState("Up to date", "upd-current"); setStatus("You are on the latest release." + srcNote + via); }
+    else { setState("Ahead of release", "upd-current"); setStatus("Installed v" + cur + " is newer than the published v" + latest + "." + srcNote + via); }
     renderPicker();
-    checkBtn.disabled = false;
+    finish();
   }
 
   // streamed download with progress; returns a Blob and checks size when known
   async function download(rel, part, stepId) {
     const info = rel[part];
-    // Offline install: the file is already on the phone, nothing to fetch.
-    if (rel._local) {
-      setStep(stepId, "done");
-      return rel._blobs[part];
-    }
-    const url = /^https?:\/\//i.test(info.path) ? info.path : UPD_RELEASES_BASE + info.path;
+    const url =/^https?:\/\//i.test(info.path) ? info.path : UPD_RELEASES_BASE + info.path;
     setStep(stepId, "active");
     setStatus("Downloading " + part + " (v" + rel.version + ")…");
     const res = await fetch(url, { cache: "no-store", mode: "cors" });
     if (!res.ok) throw new Error("Download failed: HTTP " + res.status + " for " + info.path);
-    const total = info.size || parseInt(res.headers.get("content-length") || "0", 10) || 0;
+    // Progress against what the server says it is sending; the index's size
+    // is only a hint (it goes stale when a .bin is rebuilt in place).
+    const total = parseInt(res.headers.get("content-length") || "0", 10) || info.size || 0;
     const chunks = [];
     let got = 0;
     if (res.body && res.body.getReader) {
@@ -2216,7 +2218,8 @@ function initUpdateCheck() {
       chunks.push(new Uint8Array(buf));
       got = buf.byteLength;
     }
-    if (info.size && got !== info.size) throw new Error(part + " size mismatch (" + got + " vs " + info.size + " bytes).");
+    const cl = parseInt(res.headers.get("content-length") || "0", 10) || 0;
+    if (cl && got !== cl) throw new Error(part + " download was cut short (" + got + " of " + cl + " bytes).");
     if (!got) throw new Error(part + " download was empty.");
     setPct(1, "Download");
     setStep(stepId, "done");
@@ -2229,7 +2232,6 @@ function initUpdateCheck() {
     setPct(0, "Flash");
     const blob = rel._blobs[part];
     await window.otaUploadBlob(type, blob, part === "filesystem" ? "littlefs.bin" : "firmware.bin", {
-      sha256: rel[part].sha256,
       onProgress: (f) => setPct(f, "Flash"),
     });
     setPct(1, "Flash");
@@ -2253,15 +2255,13 @@ function initUpdateCheck() {
           const set = (id, v) => { const e = $(id); if (e) e.textContent = v || "--"; };
           set("updInstalled", "v" + i.version);
           set("otaFwVersion", i.version);
-          // A local install may not know what version it was holding, in which
-          // case whatever came back is the answer rather than a mismatch.
-          if (!rel.version || i.version === rel.version) {
+          if (i.version === rel.version) {
             setState("Installed v" + i.version, "upd-current");
             setStatus("Update complete: now running v" + i.version + ". Reload the page to pick up the new web UI.", "ok");
             setTimeout(() => location.reload(), 2500);
           } else {
             setState("Rolled back", "upd-bad");
-            setStatus("Device came back on v" + i.version + " instead of v" + rel.version + " - the new image was rejected or rolled back. Try again or use the manual upload.", "error");
+            setStatus("Device came back on v" + i.version + " instead of v" + rel.version + " - the new image was rejected or rolled back. Try again or use “Update from Files”.", "error");
           }
           return;
         }
@@ -2271,65 +2271,59 @@ function initUpdateCheck() {
     setStatus("Device didn't respond within 90 s. Reconnect to the OpenHaldex WiFi (or the home network) and reload this page.", "error");
   }
 
-  // Shared install sequence. `rel` is either a release from the list (whose
-  // parts get downloaded) or a synthetic local one whose blobs are already in
-  // hand (rel._local). Missing parts are skipped, so a filesystem-only or
-  // firmware-only install walks the same safety-gated path.
+  // Install sequence for a release from the list: web UI first (downloaded,
+  // flashed, verified), then firmware, then wait for the reboot.
   async function runInstall(rel) {
     busy = true;
     checkBtn.disabled = true;
     if (installBtn) installBtn.disabled = true;
-    if (fileBtn) fileBtn.disabled = true;
     sel.disabled = true;
     resetSteps();
     if (wrap) wrap.hidden = false;
     setPct(0);
+    let stage = "check";
     try {
       const safe = await fetchJson("/ota/check");
       if (!safe || !safe.allowed) throw new Error("Blocked: " + ((safe && safe.reason) || "system not safe for update."));
 
-      if (rel.filesystem) {
-        rel._blobs.filesystem = await download(rel, "filesystem", "dlfs");
-        await flash(rel, "filesystem", "filesystem", "fs");
+      stage = "dlfs";
+      rel._blobs.filesystem = await download(rel, "filesystem", "dlfs");
+      stage = "fs";
+      await flash(rel, "filesystem", "filesystem", "fs");
 
-        // verify: device remounts LittleFS and reports the web UI version it holds
-        setStep("verify", "active");
-        setStatus("Verifying filesystem…");
-        const fsi = await fetchJson("/ota/fsinfo");
-        if (!fsi || !fsi.ok) throw new Error("Filesystem verification failed (" + ((fsi && fsi.error) || "not mounted") + "). Retry the update.");
-        if (rel._local) {
-          // A picked file carries no version of its own - take it from the
-          // filesystem we just mounted so the post-reboot check has something
-          // real to compare the firmware against.
-          if (fsi.fsVersion && fsi.fsVersion !== "--") rel.version = fsi.fsVersion;
-        } else if (fsi.fsVersion && fsi.fsVersion !== "--" && fsi.fsVersion !== rel.version) {
-          throw new Error("Filesystem reports v" + fsi.fsVersion + ", expected v" + rel.version + ". Retry the update.");
-        }
-        setStep("verify", "done");
-        rel._blobs.filesystem = null;
+      // verify: the device has already remounted; check the web UI version it holds
+      stage = "verify";
+      setStep("verify", "active");
+      setStatus("Verifying filesystem…");
+      const fsi = await fetchJson("/ota/fsinfo");
+      if (!fsi || !fsi.ok) throw new Error("Filesystem verification failed (" + ((fsi && fsi.error) || "not mounted") + "). Retry the update.");
+      if (fsi.fsVersion && fsi.fsVersion !== "--" && fsi.fsVersion !== rel.version) {
+        throw new Error("Filesystem reports v" + fsi.fsVersion + ", expected v" + rel.version + ". Retry the update.");
       }
+      setStep("verify", "done");
+      rel._blobs.filesystem = null;
 
-      if (rel.firmware) {
-        rel._blobs.firmware = await download(rel, "firmware", "dlfw");
-        await flash(rel, "firmware", "firmware", "fw");
-        rel._blobs.firmware = null;
-        await waitForReboot(rel);
-      } else {
-        // Filesystem on its own - the device does not reboot for that one.
-        setPct(1, "Done");
-        setStatus("Web UI updated" + (rel.version ? " to v" + rel.version : "") +
-          ". Reloading the page… the firmware is unchanged, so upload firmware.bin next if you have it.", "ok");
-        setTimeout(() => location.reload(), 3000);
-      }
+      stage = "dlfw";
+      rel._blobs.firmware = await download(rel, "firmware", "dlfw");
+      stage = "fw";
+      await flash(rel, "firmware", "firmware", "fw");
+      rel._blobs.firmware = null;
+      await waitForReboot(rel);
     } catch (e) {
-      setStatus(e.message, "error");
+      let msg = e.message;
+      if (stage === "fs" || stage === "verify") {
+        // The device wipes a rejected filesystem image, so the firmware keeps
+        // running but this web UI is gone until littlefs.bin goes on again.
+        msg += " The controller is still running v" + installed() + "; the web UI partition was cleared. Press Install again " +
+          "(or upload littlefs.bin under “Update from Files”). If this page won't load, the controller now shows a recovery page at its address.";
+      }
+      setStatus(msg, "error");
       if (wrap) wrap.hidden = true;
     }
     rel._blobs = null;
     busy = false;
     checkBtn.disabled = false;
     if (installBtn) installBtn.disabled = false;
-    if (fileBtn) fileBtn.disabled = false;
     sel.disabled = false;
   }
 
@@ -2341,81 +2335,8 @@ function initUpdateCheck() {
     const what = dir < 0 ? "roll back to v" + rel.version : (dir === 0 ? "re-install v" + rel.version : "update to v" + rel.version);
     let msg = "This will " + what + " (currently v" + cur + ").\n\nThe web UI is replaced first, then the firmware, then the device reboots. Keep this page open.";
     if (dir < 0) msg += "\n\nRolling back: older releases may not have this update page, so coming forward again could mean a USB flash. Settings may also be reset - export a backup first (Diagnostics tab).";
-    if (rel.unindexed) msg += "\n\nThis version isn't in the release index yet, so the download can't be checked against a published SHA-256.";
     if (!confirm(msg + "\n\nContinue?")) return;
     rel._blobs = {};
-    runInstall(rel);
-  }
-
-  // -------------------------------------------------------------------------
-  // Install from files already on the phone
-  // This is the route that always works: the phone only needs internet at the
-  // point the .bin files are downloaded, somewhere with signal, and needs none
-  // at all here. Pick both files and the sequence above runs itself rather than
-  // making anyone upload twice and remember which order.
-  // -------------------------------------------------------------------------
-
-  // ESP32 app images open with 0xE9; littlefs images carry "littlefs" at offset
-  // 8 of the superblock. Sniffing the content beats trusting a name the browser
-  // may have mangled into "firmware(1).bin" on download.
-  async function classifyBin(file) {
-    try {
-      const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
-      if (head.length >= 1 && head[0] === 0xe9) return "firmware";
-      let tag = "";
-      for (let i = 8; i < 16 && i < head.length; i++) tag += String.fromCharCode(head[i]);
-      if (tag === "littlefs") return "filesystem";
-    } catch (e) { /* unreadable header - fall back to the filename */ }
-    const n = (file.name || "").toLowerCase();
-    if (n.indexOf("littlefs") >= 0 || n.indexOf("spiffs") >= 0 || n.indexOf("filesystem") >= 0) return "filesystem";
-    if (n.indexOf("firmware") >= 0 || n.indexOf("app") >= 0) return "firmware";
-    return "";
-  }
-
-  const kb = (n) => Math.round(n / 1024) + " kB";
-
-  async function onFilesPicked() {
-    picked = { filesystem: null, firmware: null };
-    if (fileList) fileList.textContent = "";
-    const files = fileIn && fileIn.files ? Array.prototype.slice.call(fileIn.files) : [];
-    for (const f of files) {
-      const kind = await classifyBin(f);
-      const row = document.createElement("div");
-      row.className = "upd-file";
-      if (kind && !picked[kind]) {
-        picked[kind] = f;
-        row.textContent = (kind === "filesystem" ? "Web UI (filesystem)" : "Firmware") + " — " + f.name + " (" + kb(f.size) + ")";
-      } else if (kind) {
-        row.className += " bad";
-        row.textContent = "Ignored, already have a " + kind + " image — " + f.name;
-      } else {
-        row.className += " bad";
-        row.textContent = "Not an OpenHaldex image — " + f.name;
-      }
-      if (fileList) fileList.appendChild(row);
-    }
-    if (fileBtn) {
-      fileBtn.disabled = busy || (!picked.filesystem && !picked.firmware);
-      fileBtn.textContent = picked.filesystem && picked.firmware ? "Install both files"
-        : picked.filesystem ? "Install web UI only"
-        : picked.firmware ? "Install firmware only" : "Install picked files";
-    }
-    if (files.length && !picked.filesystem && !picked.firmware) {
-      setStatus("Those files aren't OpenHaldex images. Pick littlefs.bin and firmware.bin from the release folder.", "error");
-    }
-  }
-
-  function installFromFiles() {
-    if (busy) return;
-    if (!picked.filesystem && !picked.firmware) { setStatus("Pick littlefs.bin and/or firmware.bin first.", "error"); return; }
-    const parts = [];
-    if (picked.filesystem) parts.push("the web UI (" + picked.filesystem.name + ")");
-    if (picked.firmware) parts.push("the firmware (" + picked.firmware.name + ")");
-    if (!confirm("Install " + parts.join(", then ") + "?\n\nCurrently running v" + installed() +
-      ".\nThese files are not version-checked - make sure they came from the same release folder. Keep this page open.")) return;
-    const rel = { version: "", _local: true, _blobs: {} };
-    if (picked.filesystem) { rel.filesystem = { path: picked.filesystem.name, size: picked.filesystem.size }; rel._blobs.filesystem = picked.filesystem; }
-    if (picked.firmware) { rel.firmware = { path: picked.firmware.name, size: picked.firmware.size }; rel._blobs.firmware = picked.firmware; }
     runInstall(rel);
   }
 
@@ -2424,8 +2345,6 @@ function initUpdateCheck() {
   const goLink = $("updGoBridge");
   if (goLink) goLink.addEventListener("click", goBridge);
   if (installBtn) installBtn.addEventListener("click", install);
-  if (fileIn) fileIn.addEventListener("change", onFilesPicked);
-  if (fileBtn) fileBtn.addEventListener("click", installFromFiles);
   sel.addEventListener("change", renderNotes);
   if (showAll) showAll.addEventListener("change", () => { if (index) renderPicker(); });
 }
@@ -2490,14 +2409,13 @@ function initOtaPage() {
   }
 
   // Upload core: POSTs a Blob to the safety-gated OTA endpoint and resolves on
-  // 200 / rejects with a user-facing message otherwise. `sha256` (optional) is
-  // passed to the device, which hashes the stream and refuses to activate an
-  // image that doesn't match.
+  // 200 / rejects with a user-facing message otherwise. `size` lets the device
+  // spot a short upload, which would otherwise leave half an image in the
+  // filesystem partition.
   function otaUploadBlob(type, blob, filename, opts) {
     opts = opts || {};
     const isFs = type === "filesystem";
-    let url = isFs ? "/ota/update/fs" : "/ota/update";
-    if (opts.sha256) url += "?sha256=" + encodeURIComponent(opts.sha256);
+    const url = (isFs ? "/ota/update/fs" : "/ota/update") + "?size=" + blob.size;
     const data = new FormData();
     data.append(isFs ? "filesystem" : "firmware", blob, filename);
     return new Promise((resolve, reject) => {

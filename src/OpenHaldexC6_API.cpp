@@ -829,29 +829,78 @@ static void tuneIncoming(AsyncWebServerRequest *request, const String &body)
     sendJSON(request, 200, resp);
 }
 
+// Served at "/" when the web UI filesystem is missing, broken or empty (a
+// filesystem OTA that failed, a fresh chip with only firmware on it). Needs
+// nothing from LittleFS: two uploads straight to the OTA endpoints, web UI
+// first. Deliberately plain - it has to work from any phone browser.
+static const char RECOVERY_HTML[] PROGMEM = R"HTML(<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenHaldex-C6 recovery</title><style>body{font-family:sans-serif;background:#111;color:#eee;margin:0;padding:16px;max-width:520px}
+h1{font-size:20px}p{line-height:1.5;color:#bbb}code{color:#fff}section{border:1px solid #333;border-radius:10px;padding:14px;margin:14px 0}
+input[type=file]{display:block;margin:10px 0;max-width:100%}button{background:#2a6df4;color:#fff;border:0;border-radius:8px;padding:10px 16px;font-size:15px}
+button:disabled{opacity:.5}.s{margin-top:8px;font-size:14px;color:#9c9}.e{color:#f77}.bar{height:6px;background:#333;border-radius:3px;margin-top:8px}.bar i{display:block;height:100%;width:0;background:#2a6df4;border-radius:3px}</style></head>
+<body><h1>OpenHaldex-C6 &middot; web UI missing</h1>
+<p>The controller is running (firmware <code>%FW%</code>) but its web-interface partition holds no usable filesystem - usually a filesystem update that stopped part-way. Nothing else is affected. Upload the two files from the release folder on GitHub (<code>Releases/V&hellip;/</code>): the web UI first, then the firmware if you were mid-update.</p>
+<section><strong>1. Web UI</strong> &mdash; <code>littlefs.bin</code><input type="file" id="fs" accept=".bin"><button id="fsb">Upload web UI</button><div class="bar"><i id="fsp"></i></div><div class="s" id="fss"></div></section>
+<section><strong>2. Firmware</strong> &mdash; <code>firmware.bin</code> (optional; reboots when done)<input type="file" id="fw" accept=".bin"><button id="fwb">Upload firmware</button><div class="bar"><i id="fwp"></i></div><div class="s" id="fws"></div></section>
+<section><strong>Partition diagnostics</strong> <button id="dgb" style="float:right;padding:6px 10px;font-size:13px">Refresh</button><pre id="dg" style="white-space:pre-wrap;word-break:break-all;font-size:12px;color:#bbb;margin:10px 0 0">loading&hellip;</pre></section>
+<script>
+function diag(){var x=new XMLHttpRequest();x.open('GET','/ota/fsdiag');x.onload=function(){try{var d=JSON.parse(x.responseText),o='';for(var k in d)o+=k+': '+d[k]+'\n';document.getElementById('dg').textContent=o}catch(e){document.getElementById('dg').textContent=x.responseText}};x.send()}
+document.getElementById('dgb').onclick=diag;diag();
+function up(k,url,field,done,then){var f=document.getElementById(k).files[0],b=document.getElementById(k+'b'),s=document.getElementById(k+'s'),p=document.getElementById(k+'p');
+if(!f){s.textContent='Pick the file first.';s.className='s e';return}b.disabled=true;s.className='s';s.textContent='Uploading…';
+var d=new FormData();d.append(field,f,f.name);var x=new XMLHttpRequest();x.open('POST',url+'?size='+f.size);
+x.upload.onprogress=function(e){if(e.lengthComputable)p.style.width=Math.round(e.loaded/e.total*100)+'%'};
+x.onload=function(){if(x.status===200){s.textContent=done;if(then)then()}else{s.className='s e';s.textContent=x.responseText||('Failed ('+x.status+')');b.disabled=false}};
+x.onerror=function(){s.className='s e';s.textContent='Upload failed - check the connection and retry.';b.disabled=false};x.send(d)}
+document.getElementById('fsb').onclick=function(){up('fs','/ota/update/fs','filesystem','Web UI installed - opening it…',function(){setTimeout(function(){location.reload()},1500)})};
+document.getElementById('fwb').onclick=function(){up('fw','/ota/update','firmware','Firmware installed - rebooting. Reload this page in ~20 s.')};
+</script></body></html>)HTML";
+
 // setup webserver function
 void setupWebServer()
 {
-    if (!LittleFS.begin(false))
+    // The firmware never depends on the filesystem - it only holds the web UI.
+    // Mount it if it looks sane (fsMountSafe: a LittleFS superblock that fits
+    // the partition, so a half-written image can't trip an lfs assert and
+    // boot-loop us), and start the server either way: without a UI, "/" is
+    // the recovery page and the /ota/* and /api/* endpoints all still work.
+    if (fsMountSafe() && fsUiAvailable())
     {
-        DEBUG("LittleFS mount failed!"); // littleFS didn't mount
-        // add a warning visual - flashing LED?
-        return;
+        DEBUG("LittleFS mounted successfully");
     }
-    DEBUG("LittleFS mounted successfully");
+    else
+    {
+        DEBUG("LittleFS: no usable web UI - serving the recovery page at /");
+    }
 
     // index.html streamed from LittleFS (chunked, low-heap) with no-cache
-    // headers. The asset URLs carry a hardcoded ?v= version so app.js/style.css
-    // refresh on release; index.html itself must never be cached.
+    // headers; it must never be cached. Decided per request, so a filesystem
+    // upload from the recovery page switches straight over to the real UI.
     webServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
                  {
-        AsyncWebServerResponse *res = request->beginResponse(LittleFS, "/index.html", "text/html");
+        AsyncWebServerResponse *res;
+        if (fsUiAvailable()) {
+            res = request->beginResponse(LittleFS, "/index.html", "text/html");
+        } else {
+            String html = FPSTR(RECOVERY_HTML);
+            html.replace("%FW%", FW_VERSION);
+            res = request->beginResponse(200, "text/html", html);
+        }
         res->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
         res->addHeader("Pragma", "no-cache");
         request->send(res); });
 
-    // Other assets are versioned via the query string, so cache them hard.
-    webServer.serveStatic("/", LittleFS, "/").setDefaultFile("index.html").setCacheControl("max-age=31536000");
+    // app.js / style.css: "no-cache" means the browser keeps a copy but asks
+    // every time (If-None-Match against the ETag the handler derives from the
+    // file's LittleFS mtime/size) and gets a 304 unless the file changed.
+    // Previously max-age=1y with a hand-bumped ?v= in index.html - which got
+    // forgotten, so phones ran a stale app.js against new HTML and buttons
+    // on new cards did nothing.
+    // The filter keeps the handler out of the way while nothing is mounted -
+    // otherwise every /api request first asks LittleFS.exists() and logs an
+    // "File system is not mounted" error.
+    webServer.serveStatic("/", LittleFS, "/").setDefaultFile("index.html").setCacheControl("no-cache")
+        .setFilter([](AsyncWebServerRequest *request) { return fsMounted(); });
 
     webServer.begin(); // begin the webServer
     DEBUG("Web server started");
