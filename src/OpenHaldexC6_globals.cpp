@@ -1,4 +1,5 @@
 #include <OpenHaldexC6_defs.h>
+#include <OpenHaldexC6_Calculations.h> // LearnScore / LongLearnSweep types for the Long Learn globals
 
 // TWAI handles
 twai_handle_t twai_bus_0; // for ESP32 C6 CANBUS 0
@@ -74,6 +75,20 @@ bool received_kickdown = false;
 // values received from Chassis CAN
 float received_pedal_value = 0;
 uint16_t received_vehicle_speed = 0;
+float received_steering_angle = 0; // steering-wheel angle magnitude (deg, abs)
+uint32_t received_steering_ms = 0; // millis() of last decoded steering frame (0 = never)
+bool received_steering_negative = false; // steering direction sign for slip geometry
+
+// Per-corner slip (Phase F): raw wheel speeds, computed slip, and per-car geometry.
+uint16_t wheelSpeedRaw[4] = {0, 0, 0, 0}; // [FL, FR, RL, RR], ESP_19 units (0.0075 km/h/bit)
+uint32_t lastWheelSpeedResponse = 0;       // millis() of last ESP_19 frame (0 = never)
+int8_t cornerSlip[4] = {-128, -128, -128, -128}; // [FL, FR, RL, RR] signed %, -128 = no data
+uint32_t lastCornerSlipMs = 0;             // millis() of last slip computation (0 = never)
+float slipSteeringRatio = 15.0f;           // steering-wheel:road-wheel ratio (Audi TT Mk3)
+uint16_t slipWheelbaseMm = 2505;           // wheelbase
+uint16_t slipTrackFrontMm = 1572;          // front track
+uint16_t slipTrackRearMm = 1543;           // rear track
+uint16_t slipMinSpeedRaw = 667;            // ~5 km/h floor below which slip is untrustworthy
 uint16_t received_vehicle_rpm;
 uint16_t received_vehicle_boost;
 uint8_t haldexGeneration;
@@ -105,10 +120,10 @@ volatile uint32_t lpHaldexFrameCount = 0;  // incremented by haldex CAN task; us
 char wifiPassword[65] = ""; // WiFi AP password - empty string = open network
 char wifiSsid[33] = wifiHostNameDefault; // runtime AP SSID (factory default, overridden from EEPROM)
 
-char wifiStaSsid[33] = "";     // home-network (bridge mode) SSID - empty = disabled, AP-only
-char wifiStaPassword[65] = ""; // home-network password - empty string = open network
-bool wifiStaConnected = false; // runtime: currently associated to the home network + got an IP
-char wifiStaIP[16] = "";       // runtime: dotted-quad IP once connected, "" otherwise
+char wifiStaSsid[33] = "";     // bridge mode: home-network SSID - empty = disabled, AP only
+char wifiStaPassword[65] = ""; // bridge mode: home-network password - empty = open network
+bool wifiStaConnected = false; // runtime: associated to the home network with an IP
+char wifiStaIP[16] = "";       // runtime: dotted quad once connected, "" otherwise
 
 bool hazardForceMode = false;     // setting: use hazard lights to activate force mode
 bool hazardForceModeFlag = false; // runtime: hazard lights are currently on
@@ -138,6 +153,35 @@ bool disableOnboardButton = false;
 bool disableExternalButton = false;
 
 bool fixHunting = false; // when true, Motor_11 uses BPK packing instead of V3
+
+uint16_t bpkCeilingNm = 220; // per-car Gen5 BPK ceiling (Nm at 100% command); default preserves prior fixed value
+uint8_t esp14MinFloorPct = 0; // ESP_14 launch PWM floor (%); 0 = unchanged
+
+// BPK packing tunables - defaults are the previously hardcoded values.
+uint16_t bpkFloorNm = 10;
+uint16_t bpkSlewIst = 8;
+uint16_t bpkSlewSolf = 32;
+uint16_t bpkTraegRaw = 509; // = 0 Nm
+uint16_t bpkSchubRaw = 487; // = -22 Nm
+uint8_t bpkStatusFl = 0x20; // Normalbetrieb only; 0x80 would add MO_QBit_Motormomente
+int32_t bpkForceIstNm = -1;
+int32_t bpkForceSolfNm = -1;
+volatile uint8_t bpkLastFrame[8] = {0};
+
+bool dangerZoneEnabled = false; // full-duty 50:50 (see defs.h) - off by default
+
+LabOverride labOverrides[LAB_OVR_MAX] = {};
+
+// ESP_19 wheel-speed tunables - defaults reproduce the legacy counter exactly.
+bool wsFreeze = false;
+uint16_t wsBaseRaw = 0;
+uint16_t wsDitherRaw = 0;
+int32_t wsFrontDeltaRaw = 0;
+int32_t wsLeftRightDeltaRaw = 0; // VAQ bench: +n raises VL and lowers VR by n/2 each (front L/R slip)
+
+volatile uint16_t bpkLastTorqueNm = 0;
+volatile uint16_t bpkLastIstNm = 0;
+volatile uint16_t bpkLastSolfNm = 0;
 
 // ---- Frame-edit gating (per-CAN-ID passthrough toggles) --------------------
 // Bit layout per generation matches the order the cases appear in getLockData().
@@ -266,6 +310,8 @@ int frameEditGenIdx(uint8_t generation)
         return FE_GEN_4;
     case 50:
         return FE_GEN_50;
+    case 52:
+        return FE_GEN_50; // Gen5 0CQ VAQ shares 0CQ frame-edit toggles (clone base)
     case 51:
         return FE_GEN_51;
     default:
@@ -300,7 +346,7 @@ void resetFrameEditMask()
 
 bool canSleepEnabled = true;
 bool canSleepAggressive = false; // opt-in: transceiver standby + DFS floor 10MHz + low WiFi TX power
-bool benchMode = false;          // opt-in: suppress CAN-wake WiFi sleep until real CAN traffic is seen (bench testing)
+bool benchMode = false;          // opt-in: hold WiFi up on the bench until real CAN traffic is seen
 volatile bool canWakeRequest = false; // ISR-set wake flag when transceivers in standby see bus activity
 uint16_t lpWakeThresholdFps = 1100; // wake threshold fps; default 1100 — user adjustable via UI
 
@@ -314,6 +360,29 @@ bool analyzerSerial = false; // Serial GVRET (SavvyCAN Serial Connection)
 bool liveDiagEnabled = false;             // master live-diagnostics enable; gates UDS (Gen5) + TP2.0 (Gen2/4)
 volatile uint32_t externalDiagLastMs = 0; // last time an external scanner request was seen on Bus 0 (0 = never)
 QueueHandle_t udsRxQueue = nullptr;
+volatile bool udsPollActive = false;      // poller owns the Haldex diag channel -> 0x779 replies stay off Bus 0
+volatile uint8_t udsSessionMode = 0;      // 0 none, 0x01 default session, 0x03 extended session
+QueueHandle_t udsWebRxQueue = nullptr;    // /api/uds/read responses, tapped (copied) by the parse task
+volatile uint32_t udsWebRespId = 0;       // response ID /api/uds/read waits for; 0 = no read in flight
+volatile uint8_t udsWebBus = 0;           // bus the in-flight /api/uds/read is using
+
+// Haldex-bus diagnostic addressing (see defs.h). Defaults are the Haldex pair;
+// udsApplyDefaultIds() swaps to the VAQ pair for generation 52.
+uint32_t udsHaldexReqId = ISO_ALLRAD_REQ;
+uint32_t udsHaldexRespId = ISO_ALLRAD_RESP;
+bool udsIdsManual = false;
+
+// Haldex-bus RX census + last feedback frame (serial lab RXIDS / FB).
+HdxRxStat hdxRxStats[HDX_RX_STATS_MAX] = {};
+volatile uint32_t hdxRxDroppedIds = 0;
+volatile uint32_t hdxFbMs = 0;
+volatile uint32_t hdxFbId = 0;
+volatile uint8_t hdxFbDlc = 0;
+volatile uint8_t hdxFbData[8] = {0};
+uint8_t received_quer_state = 0;
+uint8_t received_quer_sync = 0;
+volatile uint32_t canTxDropBus0 = 0;      // canTransmit() failures on Bus 0 (chassis)
+volatile uint32_t canTxDropBus1 = 0;      // canTransmit() failures on Bus 1 (Haldex)
 float udsTerminalVoltage = 0.0f;
 float udsModuleTemp = 0.0f;
 float udsClutchTemp = 0.0f;
@@ -381,6 +450,7 @@ float lock_target = 0;
 
 float lockReleaseRatePerSec = 120.0f;
 bool lockReleaseEnabled = true;  // when false, lock target changes are instantaneous
+bool steeringScaleEnabled = true; // when false, steering-angle lock scaling is bypassed (full lock)
 uint8_t forceModesPriority = 0; // 0=Haz>TC>Ext, 1=TC>Haz>Ext, 2=Haz>Ext>TC, 3=TC>Ext>Haz, 4=Ext>TC>Haz, 5=Ext>Haz>TC
 
 // setup - main inputs
@@ -397,6 +467,10 @@ uint8_t lockArray[throttleArrayCount][speedArrayCount] = {
     {80, 80, 80, 80, 80, 80, 80},
     {80, 80, 80, 80, 80, 80, 80}};
 
+// Steering-angle lock-scale curve: angle breakpoints (deg) -> lock multiplier (%).
+uint16_t steeringArray[steeringArrayCount] = {0, 45, 90, 180, 360};
+uint8_t steeringLockScaleArray[steeringArrayCount] = {100, 100, 80, 50, 20};
+
 // for running through vars to see effects
 uint8_t tempCounter;
 
@@ -407,6 +481,33 @@ volatile bool haldexLearnActive = false;
 volatile bool haldexLearnCancel = false;
 volatile uint8_t haldexLearnStep = 0;   // 0-100 = current step, 101 = complete
 volatile uint8_t haldexLearnCF = 0;     // current correction factor override during learn
+
+// Long Learn state (see Calculations.h). Results persist in RAM until the next
+// run so the UI can show / export them after completion.
+volatile bool longLearnActive = false;
+volatile bool longLearnCancel = false;
+volatile uint8_t longLearnPhase = LL_IDLE;
+volatile uint8_t longLearnSweepIdx = 0;
+volatile uint8_t longLearnSweepTotal = 0;
+volatile int16_t longLearnCurrentBit = -1;
+uint8_t longLearnGenIdx = 0;
+uint8_t longLearnGeneration = 0;
+bool longLearnTestAll = false;
+uint8_t longLearnBlockResult[64];
+LearnScore longLearnBaseline;
+LearnScore longLearnFinal;
+bool longLearnBaselineValid = false;
+bool longLearnFinalValid = false;
+uint8_t longLearnFloorStart = 0;
+uint8_t longLearnFloorResult = 0;
+uint64_t longLearnMaskStart = 0;
+uint16_t longLearnBpkStart = 0;
+bool longLearnBpkAdjusted = false;
+LongLearnSweep longLearnSweeps[LL_MAX_SWEEPS];
+uint8_t longLearnSweepCount = 0;
+uint32_t longLearnStartMs = 0;
+uint32_t longLearnEndMs = 0;
+char longLearnNotes[LL_NOTES_LEN + 1] = "";
 uint8_t tempCounter1;
 uint16_t tempCounter2;
 
@@ -612,11 +713,17 @@ extern uint8_t calcChecksum(uint8_t *frame, const uint8_t *idSeq)
     uint8_t counter = frame[1] & 0x0F; // extract alive counter from B1
     uint8_t crcInput[8];
 
-    crcInput[0] = idSeq[counter]; // prepend DataID byte
+    // VW E2E profile: CRC-8 (0x2F) over B1..B7 with the counter-indexed
+    // DataID byte APPENDED last. Verified 2026-09-17 against a real MQB
+    // capture: 4,400+ frames on 13 IDs (086 0A7 0A8 0AD 0FD 101 104 106 116
+    // 121 392 3BE 641 65D) match 100 % with the DataID last and 0 % with it
+    // first. The Gen5 Haldex never rejected the old (wrong) checksum; the
+    // VAQ does check at least some frames.
     for (uint8_t i = 1; i < 8; i++)
     {
-        crcInput[i] = frame[i]; // B1..B7
+        crcInput[i - 1] = frame[i]; // B1..B7
     }
+    crcInput[7] = idSeq[counter]; // DataID byte last
 
     return crc8_autosar(crcInput, 8);
 }

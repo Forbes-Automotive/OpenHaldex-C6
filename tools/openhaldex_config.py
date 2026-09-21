@@ -1,184 +1,216 @@
 #!/usr/bin/env python3
 """
-Export/import OpenHaldex-C6 configuration (Expert tune table, general settings,
-and WiFi AP identity) over the device's HTTP API, so a firmware update never
-has to mean re-typing the Expert grid by hand again.
+Back up and restore an OpenHaldex-C6 over its HTTP API - the command-line twin of
+the "Backup & Restore" card in the web UI (Settings tab). Files are interchangeable:
+a backup exported here imports in the web UI and vice versa.
 
-Talks to the endpoints in src/OpenHaldexC6_API.cpp (as of origin/main):
-  GET  /api/settings        -> full settings blob incl. throttleArray/speedArray/lockArray
-  POST /api/settings        -> write back the general settings
-  POST /api/tune            -> write back throttleArray/speedArray/lockArray
-  GET  /api/wifi/ssid       -> {ssid, default}
-  POST /api/wifi/ssid       -> {ssid}
-  GET  /api/wifi            -> {passwordSet}   (password itself is write-only, by design)
-  POST /api/wifi            -> {password}      (8-64 chars, or "" to clear -> open network)
-  GET  /api/wifi/sta        -> {ssid, passwordSet, connected, ip}   (bridge mode: optional home-network client)
-  POST /api/wifi/sta        -> {ssid, password}  (empty ssid disables bridge mode)
+What is saved: the Expert tune (lock table + steering scale), general settings,
+per-frame edit switches, and the WiFi names. WiFi *passwords* are never saved -
+the device only lets them be written, never read - so import asks for them once
+(not echoed). Nothing secret is written to the backup file unless you answer 'y'
+to the "remember it" question, in which case that file is chmod 600.
 
-Usage:
-  # while your Mac is joined to the OpenHaldex-C6 WiFi AP:
-  python3 openhaldex_config.py export  backup.json
-  python3 openhaldex_config.py import  backup.json
-  python3 openhaldex_config.py import  backup.json --tune-only   # just the Expert grid
+Usage (the computer must reach the controller: join its WiFi AP, or be on the same
+network when bridge mode is on - then use --host openhaldex.local or its IP):
 
-The AP password is never read from or written to the backup file in plaintext
-handling from chat/scripts; on import, if the backup says a password was set,
-you'll be prompted for it live in the terminal (getpass, not echoed) rather
-than it ever being stored. If you want it remembered for future imports,
-answer 'y' when asked and it's saved to backup.json with mode 0600 -- keep
-that file private (it's already covered by tools/.gitignore).
+  python3 tools/openhaldex_config.py export  my-backup.json
+  python3 tools/openhaldex_config.py import  my-backup.json
+  python3 tools/openhaldex_config.py import  my-backup.json --tune-only
+  python3 tools/openhaldex_config.py --host openhaldex.local export my-backup.json
+
+Do an export BEFORE re-flashing: a full USB flash / filesystem erase wipes the saved
+settings, and this is how you get them back.
+
+Endpoints used (src/OpenHaldexC6_API.cpp): GET/POST /api/settings, POST /api/tune,
+GET/POST /api/wifi/ssid, /api/wifi and /api/wifi/sta, plus GET /ota/health.
 """
 import argparse
 import getpass
+import http.client
 import json
+import os
 import sys
 import time
 import urllib.error
 import urllib.request
 
-DEFAULT_HOST = "192.168.1.1"  # OpenHaldex-C6 softAP gateway IP; use --host openhaldex.local if on mDNS
+DEFAULT_HOST = "192.168.1.1"  # the controller's own access point
+
+# Keep in sync with BACKUP_GENERAL_KEYS in data/app.js (the web UI's restore list).
+BACKUP_GENERAL_KEYS = [
+    "haldexGeneration", "isStandalone", "useCANifAvailable", "broadcastOpenHaldexOverCAN", "disableController",
+    "disengageUnderSpeed", "disengageAboveSpeed", "disableThrottle",
+    "tcForceMode", "tcForceModeValue", "hazardForceMode", "hazardForceModeValue",
+    "extButtonForceMode", "extBtnForceModeValue", "disableOnboardButton", "disableExternalButton",
+    "followBrake", "invertBrake", "followHandbrake", "invertHandbrake",
+    "fixHunting", "dangerZoneEnabled", "esp14MinFloorPct", "bpkCeilingNm",
+    "steeringScaleEnabled", "liveDiagEnabled", "ledBrightness",
+    "canSleepEnabled", "canSleepAggressive", "benchMode", "lpWakeThresholdFps",
+    "longLearnNotes",
+]
+
+# Connection-level failures worth retrying: the controller drops its WiFi for a couple
+# of seconds every time an SSID/password is changed, and now and then a request is reset.
+# (HTTPError is a URLError subclass, so it is caught separately, first.)
+TRANSIENT = (urllib.error.URLError, http.client.RemoteDisconnected, ConnectionError, TimeoutError)
 
 
-def api(host, path, method="GET", payload=None, timeout=5):
+def api(host, path, method="GET", payload=None, timeout=5, retry_seconds=15):
     url = f"http://{host}{path}"
     data = json.dumps(payload).encode() if payload is not None else None
-    req = urllib.request.Request(url, data=data, method=method)
-    if data is not None:
-        req.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = resp.read()
-            return json.loads(body) if body else {}
-    except urllib.error.URLError as e:
-        sys.exit(f"Couldn't reach {url}: {e}\n"
-                 f"Is this Mac joined to the OpenHaldex-C6 WiFi network (or on the same LAN)?")
+    deadline = time.time() + retry_seconds
+    while True:
+        req = urllib.request.Request(url, data=data, method=method)
+        if data is not None:
+            req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                body = resp.read()
+                return json.loads(body) if body else {}
+        except urllib.error.HTTPError as e:
+            # Something answered, but with an error. A 406 HTML page means this address
+            # is a different device (e.g. your router), not the controller.
+            sys.exit(f"{method} {url} -> HTTP {e.code}. "
+                     f"Is {host} really the OpenHaldex-C6? (a router answering there gives 406)")
+        except TRANSIENT as e:
+            if time.time() >= deadline:
+                sys.exit(f"Couldn't reach {url}: {e}\n"
+                         "Is this computer on the controller's WiFi (or on the same network in bridge mode)?")
+            time.sleep(1)
+
+
+def wait_until_up(host, seconds=30):
+    """After a WiFi change the controller restarts its radio - wait for it to come back."""
+    time.sleep(2)
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(f"http://{host}/ota/health", timeout=3):
+                return True
+        except TRANSIENT:
+            time.sleep(1)
+    return False
+
+
+def write_private(path, obj):
+    with open(path, "w") as f:
+        json.dump(obj, f, indent=2)
+    os.chmod(path, 0o600)
 
 
 def cmd_export(args):
     settings = api(args.host, "/api/settings")
-    wifi_ssid = api(args.host, "/api/wifi/ssid")
-    wifi_pw_state = api(args.host, "/api/wifi")
-    wifi_sta = api(args.host, "/api/wifi/sta")
+    ap_ssid = api(args.host, "/api/wifi/ssid")
+    ap_pw = api(args.host, "/api/wifi")
+    sta = api(args.host, "/api/wifi/sta")
 
     backup = {
-        "_exported_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "_fw_version": settings.get("FW_VERSION"),
+        "_exportedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "_fwVersion": settings.get("FW_VERSION"),
         "settings": settings,
-        "wifi": {
-            "ssid": wifi_ssid.get("ssid"),
-            "passwordSet": wifi_pw_state.get("passwordSet", False),
-            "password": None,  # never populated automatically -- API is write-only for the password
-        },
-        "wifiSta": {
-            "ssid": wifi_sta.get("ssid") or None,
-            "passwordSet": wifi_sta.get("passwordSet", False),
-            "password": None,  # never populated automatically -- API is write-only for the password
-        },
+        "wifi": {"ssid": ap_ssid.get("ssid"), "passwordSet": bool(ap_pw.get("passwordSet"))},
+        "wifiSta": {"ssid": sta.get("ssid") or None, "passwordSet": bool(sta.get("passwordSet"))},
     }
-
     with open(args.file, "w") as f:
         json.dump(backup, f, indent=2)
 
     print(f"Exported to {args.file}")
-    print(f"  Firmware: {backup['_fw_version']}")
-    print(f"  AP SSID: {backup['wifi']['ssid']}  (password set: {backup['wifi']['passwordSet']})")
+    print(f"  Firmware:    {backup['_fwVersion']}")
+    print(f"  AP name:     {backup['wifi']['ssid']}  (password set: {backup['wifi']['passwordSet']})")
     if backup["wifiSta"]["ssid"]:
-        print(f"  Bridge mode: joined to \"{backup['wifiSta']['ssid']}\" (password set: {backup['wifiSta']['passwordSet']})")
+        print(f"  Bridge mode: \"{backup['wifiSta']['ssid']}\"  (password set: {backup['wifiSta']['passwordSet']})")
     else:
-        print("  Bridge mode: disabled (AP only)")
+        print("  Bridge mode: off")
     if backup["wifi"]["passwordSet"] or backup["wifiSta"]["passwordSet"]:
-        print("  NOTE: passwords can't be read back from the device (by design, write-only).")
-        print("        Run this script's 'import' after your next update and it'll ask")
-        print("        you to re-enter them once, then remember them for next time if you want.")
+        print("  Note: WiFi passwords can't be read back from the controller, so they are not in")
+        print("        this file - import will ask for them again.")
+
+
+def password_for(section, what):
+    """Password from the backup file if it was remembered there, else ask (not echoed)."""
+    if not section.get("passwordSet"):
+        return ""
+    return section.get("password") or getpass.getpass(
+        f"Backup says {what} had a password. Enter it to restore (blank = skip): ")
 
 
 def cmd_import(args):
     with open(args.file) as f:
         backup = json.load(f)
+    s = backup.get("settings") or {}
+    if not all(isinstance(s.get(k), list) for k in ("throttleArray", "speedArray", "lockArray")):
+        sys.exit("This file has no Expert tune table - is it a backup made by this tool or the web UI?")
 
-    settings = backup["settings"]
+    host = args.host
+    print(f"Restoring to {host}  (backup from firmware {backup.get('_fwVersion', 'unknown')})")
 
-    # --- Expert tune table (throttleArray / speedArray / lockArray) ---
-    tune_payload = {
-        "throttleArray": settings["throttleArray"],
-        "speedArray": settings["speedArray"],
-        "lockArray": settings["lockArray"],
-    }
-    resp = api(args.host, "/api/tune", "POST", tune_payload)
-    print(f"Tune table restored: {resp}")
+    # 1. Generation first, so the per-frame switches below land on the right table.
+    if not args.tune_only and isinstance(s.get("haldexGeneration"), int):
+        api(host, "/api/settings", "POST", {"haldexGeneration": s["haldexGeneration"]})
 
+    # 2. Expert tune (+ steering scale when the backup has it).
+    tune = {k: s[k] for k in ("throttleArray", "speedArray", "lockArray")}
+    if isinstance(s.get("steeringArray"), list) and isinstance(s.get("steeringLockScaleArray"), list):
+        tune["steeringArray"] = s["steeringArray"]
+        tune["steeringLockScaleArray"] = s["steeringLockScaleArray"]
+    print(f"  Expert tune restored: {api(host, '/api/tune', 'POST', tune)}")
     if args.tune_only:
         return
 
-    # --- general settings ---
-    general_keys = [
-        "haldexGeneration", "forceModeValue", "disengageUnderSpeed", "disengageAboveSpeed",
-        "disableThrottle", "disableController", "isStandalone", "tcForceMode",
-        "extButtonForceMode", "disableOnboardButton", "disableExternalButton",
-        "followBrake", "invertBrake", "followHandbrake", "invertHandbrake",
-        "broadcastOpenHaldexOverCAN",
-    ]
-    general_payload = {k: settings[k] for k in general_keys if k in settings}
-    resp = api(args.host, "/api/settings", "POST", general_payload)
-    print(f"General settings restored: {resp}")
+    # 3. General settings.
+    general = {k: s[k] for k in BACKUP_GENERAL_KEYS if k in s}
+    print(f"  General settings restored: {api(host, '/api/settings', 'POST', general)}")
 
-    # --- WiFi identity ---
-    wifi = backup.get("wifi", {})
-    ssid = wifi.get("ssid")
-    if ssid:
-        resp = api(args.host, "/api/wifi/ssid", "POST", {"ssid": ssid})
-        print(f"WiFi SSID restored ({ssid}): {resp}")
+    # 4. Per-frame edit switches, one bit at a time (that is how the API takes them).
+    frames = [fb for fb in s.get("frameBlocks", [])
+              if isinstance(fb.get("bit"), int) and isinstance(fb.get("enabled"), bool)]
+    for fb in frames:
+        api(host, "/api/settings", "POST", {"frameEditBit": fb["bit"], "frameEditOn": fb["enabled"]})
+    if frames:
+        print(f"  Frame edits restored: {len(frames)} switches")
 
-    if wifi.get("passwordSet"):
-        pw = wifi.get("password")
-        if not pw:
-            pw = getpass.getpass("Backup says a WiFi AP password was set but it isn't stored. "
-                                  "Enter it now to restore (blank to skip): ")
-        if pw:
-            resp = api(args.host, "/api/wifi", "POST", {"password": pw})
-            print(f"WiFi password restored: {resp}")
-            remember = input("Save this password into the backup file for next time? [y/N] ").strip().lower()
-            if remember == "y":
-                backup["wifi"]["password"] = pw
-                with open(args.file, "w") as f:
-                    json.dump(backup, f, indent=2)
-                import os
-                os.chmod(args.file, 0o600)
-                print(f"Saved (file permissions set to 0600). Keep {args.file} private.")
+    # 5. WiFi last: every change restarts the radio, and if you're connected through the
+    #    AP itself you lose the link once its name/password change - that is expected.
+    #    Passwords are collected first so each network is written only once.
+    wifi, sta = backup.get("wifi") or {}, backup.get("wifiSta") or {}
+    sta_pw = password_for(sta, f'the home network "{sta.get("ssid")}"') if sta.get("ssid") else ""
+    ap_pw = password_for(wifi, "the controller's own access point")
 
-    # --- home WiFi (bridge mode) ---
-    wifi_sta = backup.get("wifiSta", {})
-    sta_ssid = wifi_sta.get("ssid")
-    if sta_ssid:
-        sta_pw = wifi_sta.get("password") or ""
-        if wifi_sta.get("passwordSet") and not sta_pw:
-            sta_pw = getpass.getpass(f"Backup says a password was set for home network \"{sta_ssid}\" "
-                                      "but it isn't stored. Enter it now to restore (blank to skip): ")
-        resp = api(args.host, "/api/wifi/sta", "POST", {"ssid": sta_ssid, "password": sta_pw})
-        print(f"Home WiFi (bridge mode) restored ({sta_ssid}): {resp}")
+    if sta.get("ssid"):
+        r = api(host, "/api/wifi/sta", "POST", {"ssid": sta["ssid"], "password": sta_pw})
+        print(f"  Home WiFi (bridge mode) restored: {r}")
+        wait_until_up(host)
+    if wifi.get("ssid"):
+        r = api(host, "/api/wifi/ssid", "POST", {"ssid": wifi["ssid"]})
+        print(f"  AP name restored: {r}")
+        wait_until_up(host)
+    if ap_pw:
+        r = api(host, "/api/wifi", "POST", {"password": ap_pw})
+        print(f"  AP password restored: {r}")
+
+    newly_typed = (sta_pw and not sta.get("password")) or (ap_pw and not wifi.get("password"))
+    if newly_typed and input("Remember the password(s) in the backup file for next time? [y/N] ").strip().lower() == "y":
         if sta_pw:
-            remember = input("Save this home WiFi password into the backup file for next time? [y/N] ").strip().lower()
-            if remember == "y":
-                backup["wifiSta"]["password"] = sta_pw
-                with open(args.file, "w") as f:
-                    json.dump(backup, f, indent=2)
-                import os
-                os.chmod(args.file, 0o600)
-                print(f"Saved (file permissions set to 0600). Keep {args.file} private.")
+            backup["wifiSta"]["password"] = sta_pw
+        if ap_pw:
+            backup["wifi"]["password"] = ap_pw
+        write_private(args.file, backup)
+        print(f"  Saved (chmod 600). Keep {args.file} private and out of git.")
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--host", default=DEFAULT_HOST, help=f"device address (default {DEFAULT_HOST}, or try openhaldex.local)")
+    p = argparse.ArgumentParser(description="Back up / restore an OpenHaldex-C6 (see the top of this file for details).")
+    p.add_argument("--host", default=DEFAULT_HOST,
+                   help=f"controller address (default {DEFAULT_HOST}; or openhaldex.local / its home-network IP)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    pe = sub.add_parser("export", help="pull current device config into a JSON file")
+    pe = sub.add_parser("export", help="save the controller's config to a JSON file")
     pe.add_argument("file")
     pe.set_defaults(func=cmd_export)
 
-    pi = sub.add_parser("import", help="push a JSON config file back to the device")
+    pi = sub.add_parser("import", help="restore a JSON backup onto the controller")
     pi.add_argument("file")
-    pi.add_argument("--tune-only", action="store_true", help="only restore the Expert lock table, nothing else")
+    pi.add_argument("--tune-only", action="store_true", help="restore only the Expert tune, nothing else")
     pi.set_defaults(func=cmd_import)
 
     args = p.parse_args()

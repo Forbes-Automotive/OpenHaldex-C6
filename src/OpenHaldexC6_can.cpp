@@ -3,6 +3,41 @@
 #include <OpenHaldexC6_Analyzer.h>
 #include <OpenHaldexC6_UDS.h>
 
+// Every bridge / diagnostic transmit goes through this wrapper so a failed send
+// (TX queue still full after the 10 ms wait, driver stopped / bus-off) is
+// counted instead of vanishing. Counted, not logged per-frame: at bus speed a
+// wedged transmitter would flood the log. Failures that reach the wire and error
+// out already surface via TWAI_ALERT_TX_FAILED in canBusRecovery(); these
+// counters catch the call-site failures the driver never sees. The counters are
+// bumped from several tasks without locking, so treat them as an
+// order-of-magnitude diagnostic rather than an exact tally.
+bool canTransmit(twai_handle_t bus, const twai_message_t *msg)
+{
+  if (twai_transmit_v2(bus, msg, (10 / portTICK_PERIOD_MS)) == ESP_OK)
+  {
+    return true;
+  }
+  const bool isBus0 = (bus == twai_bus_0);
+  uint32_t drops;
+  if (isBus0)
+  {
+    drops = canTxDropBus0 + 1;
+    canTxDropBus0 = drops;
+  }
+  else
+  {
+    drops = canTxDropBus1 + 1;
+    canTxDropBus1 = drops;
+  }
+  // Log the first drop and every 256th after that.
+  if ((drops & 0xFF) == 1)
+  {
+    DEBUG("CAN - TX failed on bus %d (ID 0x%03X, %lu drops total)",
+          isBus0 ? 0 : 1, (unsigned)msg->identifier, (unsigned long)drops);
+  }
+  return false;
+}
+
 void broadcastOpenHaldex(void *arg)
 {
   while (1)
@@ -33,7 +68,7 @@ void broadcastOpenHaldex(void *arg)
     broadcast_frame.data[6] = (uint8_t)state.mode;
     broadcast_frame.data[7] = (uint8_t)received_pedal_value;
 
-    twai_transmit_v2(twai_bus_0, &broadcast_frame, (10 / portTICK_PERIOD_MS));
+    canTransmit(twai_bus_0, &broadcast_frame);
 
     vTaskDelay(broadcastRefresh / portTICK_PERIOD_MS);
   }
@@ -46,7 +81,7 @@ static void transmitFrameCopy(twai_handle_t bus, const twai_message_t &src, twai
   scratch.extd = src.extd;
   scratch.rtr = src.rtr;
   scratch.data_length_code = src.data_length_code;
-  twai_transmit_v2(bus, &scratch, (10 / portTICK_PERIOD_MS));
+  canTransmit(bus, &scratch);
 }
 
 // Brake/handbrake override applied to chassis frames before forwarding to the
@@ -55,34 +90,43 @@ static void transmitFrameCopy(twai_handle_t bus, const twai_message_t &src, twai
 // invert) the live `brakeFromCAN` / `handbrakeFromCAN` value decoded by the
 // switch above. With follow=OFF the frame is forwarded untouched.
 //
-// Bit positions (verified against vw_pq.dbc / vw_mqb.dbc):
+// Bit positions (verified against vw_pq.dbc / PQ35_46 K-matrix / vw_mqb.dbc):
 //   PQ Gen2/4: Motor_2  (0x288) byte 2 bit 0  - MO2_BLS         (no CRC)
+//   PQ Gen2/4: Kombi_1  (0x320) byte 1 bit 1  - KO1_Handbremse  (no CRC)
 //   MQB Gen5:  ESP_05   (0x106) byte 3 bit 2  - ESP_Fahrer_bremst (CRC at byte 0 via ID_SEQ_106)
 //   MQB Gen5:  Kombi_01 (0x30B) byte 2 bit 7  - KBI_Handbremse   (no CRC)
 static void applyBrakeHandbrakeCANOverride(twai_message_t &m)
 {
   switch (haldexGeneration)
   {
-  case 2: // handbrake via. CAN?, brake still physical
-  case 4: // handbrake and brake via. CAN? 
-  case 51:
+  case 2:  // PQ35 (1K0): brake + handbrake both broadcast on chassis CAN
+  case 4:  // PQ35/46 (0AY): brake + handbrake both broadcast on chassis CAN
+  case 51: // 0AY variant - PQ frame set (see Gen5_0AY_frames*)
     if (followBrake && m.identifier == MOTOR2_ID && m.data_length_code >= 3)
     {
       const bool out = invertBrake ? !brakeFromCAN : brakeFromCAN;
       m.data[2] = (uint8_t)((m.data[2] & ~0x01) | (out ? 0x01 : 0x00));
     }
-    // Gen51 (0AY) also carries parking brake on Kombi_01 (0x30B) byte 2 bit 7.
-    if (m.identifier == KOMBI_01 && m.data_length_code >= 3)
+    // PQ Kombi_1 (0x320) - KO1_Handbremse: byte 1 bit 1 (PQ35/46 K-matrix
+    // "Byte 2 / Bit 1", 1 = angezogen / applied). Byte 1 bit 0 is the
+    // brake-fluid warning (KO1_Bremsinfo) and is left untouched. No CRC.
+    if (followHandbrake && m.identifier == mKombi_1 && m.data_length_code >= 2)
     {
-      if (followHandbrake && haldexGeneration == 51)
-      {
-        const bool out = invertHandbrake ? !handbrakeFromCAN : handbrakeFromCAN;
-        m.data[2] = (uint8_t)((m.data[2] & ~0x80) | (out ? 0x80 : 0x00));
-      }
+      const bool out = invertHandbrake ? !handbrakeFromCAN : handbrakeFromCAN;
+      m.data[1] = (uint8_t)((m.data[1] & ~0x02) | (out ? 0x02 : 0x00));
+    }
+    // Gen51 (0AY) may also see MQB Kombi_01 (0x30B) byte 2 bit 7 - kept for
+    // that variant in case it is fitted to an MQB-era loom.
+    if (followHandbrake && haldexGeneration == 51 &&
+        m.identifier == KOMBI_01 && m.data_length_code >= 3)
+    {
+      const bool out = invertHandbrake ? !handbrakeFromCAN : handbrakeFromCAN;
+      m.data[2] = (uint8_t)((m.data[2] & ~0x80) | (out ? 0x80 : 0x00));
     }
     break;
 
   case 50:
+  case 52: // Gen5 0CQ VAQ - copies 0CQ brake/handbrake overrides
     if (followBrake && m.identifier == ESP_05 && m.data_length_code >= 8)
     {
       const bool out = invertBrake ? !brakeFromCAN : brakeFromCAN;
@@ -287,6 +331,18 @@ void parseCAN_chs(void *arg)
         }
       }
 
+      // /api/uds/read tap (Bus 0 reads): COPY the response frame into the web
+      // helper's queue - the frame continues down the normal gateway path below,
+      // so the helper can never starve the bridge of chassis frames.
+      if (udsWebRespId != 0 && udsWebBus == 0 && udsWebRxQueue != nullptr &&
+          rx_message_chs.identifier == udsWebRespId)
+      {
+        if (xQueueSend(udsWebRxQueue, &rx_message_chs, 0) != pdTRUE)
+        {
+          DEBUG("CAN - UDS web tap queue full, dropped frame 0x%03X", (unsigned)rx_message_chs.identifier);
+        }
+      }
+
       tx_message_hdx.identifier = rx_message_chs.identifier;
 
       // Gen41 Haldex-originated Bus0 heartbeats - capture presence & timestamp.
@@ -310,6 +366,118 @@ void parseCAN_chs(void *arg)
       {
         analyzerQueueFrame(rx_message_chs, 0);
         transmitFrameCopy(twai_bus_1, rx_message_chs, tx_message_hdx);
+        continue;
+      }
+
+      // OpenHaldex supplier-specific UDS responders. A tester on the OBD/chassis
+      // bus (e.g. Rokketek gauge) polls the Haldex physical address 0x70F and
+      // decodes replies on 0x779; the passive 0x6B0 broadcast does not cross the
+      // gateway to the OBD port, so we answer supplier DIDs on the same pair and
+      // CONSUME the request (continue) so the real Haldex on Bus 1 never sees it.
+      if (rx_message_chs.identifier == diagnostics_5_ID &&
+          rx_message_chs.data_length_code >= 4 &&
+          (rx_message_chs.data[0] & 0xF0) == 0x00 && // ISO-TP single frame
+          (rx_message_chs.data[0] & 0x0F) >= 3 &&    // >= 3 payload bytes (SID + DID)
+          rx_message_chs.data[1] == 0x22 &&          // ReadDataByIdentifier
+          rx_message_chs.data[2] == (uint8_t)(OPENHALDEX_LOCK_DID >> 8) &&
+          rx_message_chs.data[3] == (uint8_t)(OPENHALDEX_LOCK_DID & 0xFF))
+      {
+        const float lt = lock_target;
+        const uint8_t cmd = (uint8_t)(lt < 0.0f ? 0.0f : (lt > 100.0f ? 100.0f : lt + 0.5f));
+        twai_message_t resp{};
+        resp.identifier = OPENHALDEX_UDS_RESPONSE_ID;
+        resp.extd = 0;
+        resp.rtr = 0;
+        resp.data_length_code = 8;
+        resp.data[0] = 0x06; // ISO-TP single frame, 6 payload bytes
+        resp.data[1] = 0x62; // positive RDBI response
+        resp.data[2] = (uint8_t)(OPENHALDEX_LOCK_DID >> 8);
+        resp.data[3] = (uint8_t)(OPENHALDEX_LOCK_DID & 0xFF);
+        resp.data[4] = cmd;                                        // commanded lock %, 0-100
+        resp.data[5] = (uint8_t)received_haldex_engagement_raw;    // applied engagement, raw
+        resp.data[6] = (uint8_t)state.mode;                        // live mode, so a write reads back
+        resp.data[7] = 0xAA;                                       // ISO-TP padding
+        canTransmit(twai_bus_0, &resp);
+        continue; // consume - do NOT forward to Bus 1
+      }
+
+      // Per-corner slip DID: 4 signed slip bytes [FL, FR, RL, RR]; -128 = no data
+      // (too slow, or stale wheel/steering signal) so the gauge can blank rather
+      // than draw a false zero.
+      if (rx_message_chs.identifier == diagnostics_5_ID &&
+          rx_message_chs.data_length_code >= 4 &&
+          (rx_message_chs.data[0] & 0xF0) == 0x00 &&
+          (rx_message_chs.data[0] & 0x0F) >= 3 &&
+          rx_message_chs.data[1] == 0x22 &&
+          rx_message_chs.data[2] == (uint8_t)(OPENHALDEX_SLIP_DID >> 8) &&
+          rx_message_chs.data[3] == (uint8_t)(OPENHALDEX_SLIP_DID & 0xFF))
+      {
+        int8_t slip[4] = {-128, -128, -128, -128};
+        if (lastCornerSlipMs != 0 && (millis() - lastCornerSlipMs) < 500)
+        {
+          slip[0] = cornerSlip[0];
+          slip[1] = cornerSlip[1];
+          slip[2] = cornerSlip[2];
+          slip[3] = cornerSlip[3];
+        }
+        twai_message_t resp{};
+        resp.identifier = OPENHALDEX_UDS_RESPONSE_ID;
+        resp.extd = 0;
+        resp.rtr = 0;
+        resp.data_length_code = 8;
+        resp.data[0] = 0x07; // ISO-TP single frame, 7 payload bytes (0x62 + DID + 4)
+        resp.data[1] = 0x62;
+        resp.data[2] = (uint8_t)(OPENHALDEX_SLIP_DID >> 8);
+        resp.data[3] = (uint8_t)(OPENHALDEX_SLIP_DID & 0xFF);
+        resp.data[4] = (uint8_t)slip[0];
+        resp.data[5] = (uint8_t)slip[1];
+        resp.data[6] = (uint8_t)slip[2];
+        resp.data[7] = (uint8_t)slip[3];
+        canTransmit(twai_bus_0, &resp);
+        continue;
+      }
+
+      // Drive-mode WRITE (WriteDataByIdentifier 0x2E): [len][2E][DID_hi][DID_lo][mode].
+      // Sets the mode as a head unit would; replies 0x6E on success or 0x7F/0x31
+      // (requestOutOfRange) for a bad value. Request is consumed.
+      if (rx_message_chs.identifier == diagnostics_5_ID &&
+          rx_message_chs.data_length_code >= 5 &&
+          (rx_message_chs.data[0] & 0xF0) == 0x00 &&
+          (rx_message_chs.data[0] & 0x0F) >= 4 &&
+          rx_message_chs.data[1] == 0x2E &&
+          rx_message_chs.data[2] == (uint8_t)(OPENHALDEX_MODE_DID >> 8) &&
+          rx_message_chs.data[3] == (uint8_t)(OPENHALDEX_MODE_DID & 0xFF))
+      {
+        const uint8_t requested_mode = rx_message_chs.data[4];
+        twai_message_t resp{};
+        resp.identifier = OPENHALDEX_UDS_RESPONSE_ID;
+        resp.extd = 0;
+        resp.rtr = 0;
+        resp.data_length_code = 8;
+        if (requested_mode < (uint8_t)openhaldex_mode_t_MAX)
+        {
+          state.mode = (openhaldex_mode_t)requested_mode;
+          resp.data[0] = 0x03; // ISO-TP single frame, 3 payload bytes
+          resp.data[1] = 0x6E; // positive WDBI response
+          resp.data[2] = (uint8_t)(OPENHALDEX_MODE_DID >> 8);
+          resp.data[3] = (uint8_t)(OPENHALDEX_MODE_DID & 0xFF);
+          resp.data[4] = 0xAA;
+          resp.data[5] = 0xAA;
+          resp.data[6] = 0xAA;
+          resp.data[7] = 0xAA;
+        }
+        else
+        {
+          resp.data[0] = 0x03;
+          resp.data[1] = 0x7F; // negative response
+          resp.data[2] = 0x2E; // ...to WriteDataByIdentifier
+          resp.data[3] = 0x31; // requestOutOfRange
+          resp.data[4] = 0xAA;
+          resp.data[5] = 0xAA;
+          resp.data[6] = 0xAA;
+          resp.data[7] = 0xAA;
+        }
+        canTransmit(twai_bus_0, &resp);
         continue;
       }
 
@@ -361,10 +529,26 @@ void parseCAN_chs(void *arg)
         case KOMBI_01:
           // MQB Kombi_01 (0x30B) - instrument cluster broadcast (vw_mqb.dbc):
           //   SG_ KBI_Handbremse : 23|1@1+     -> byte 2 bit 7, parking brake engaged
-          // PQ handbrake stays on the physical IO path; this case is MQB-only.
+          // MQB-only ID; PQ platforms carry the handbrake on Kombi_1 (0x320) below.
           if (rx_message_chs.data_length_code >= 3)
           {
             handbrakeFromCAN = bitRead(rx_message_chs.data[2], 7);
+          }
+          break;
+
+        case mKombi_1:
+          // PQ Kombi_1 (0x320) - instrument cluster broadcast.
+          // PQ35/46 K-matrix (V5.20.6F), message mKombi_1 0x320:
+          //   KO1_Bremsinfo  : Byte 2 / Bit 0 (1-based) -> data[1] bit 0, brake-fluid warning
+          //   KO1_Handbremse : Byte 2 / Bit 1 (1-based) -> data[1] bit 1, 1 = angezogen (applied)
+          // (vw_pq.dbc lumps both as "Bremsinfo : 8|2".) Gen2 (1K0) and Gen4 (0AY)
+          // read the handbrake from this frame, not from a physical wire. Gated to
+          // the PQ-frame generations so a foreign 0x320 on another platform can't
+          // spoof it.
+          if ((haldexGeneration == 2 || haldexGeneration == 4 || haldexGeneration == 51) &&
+              rx_message_chs.data_length_code >= 2)
+          {
+            handbrakeFromCAN = bitRead(rx_message_chs.data[1], 1);
           }
           break;
 
@@ -507,6 +691,55 @@ void parseCAN_chs(void *arg)
           received_vehicle_speed = (uint16_t)(average_wheel_speed + 0.5f);
           isABSValid = true;
           lastABSResponse = millis();
+
+          // Promote all four corners for the per-corner slip DID and dashboard.
+          // Order [FL, FR, RL, RR] = [VL, VR, HL, HR].
+          wheelSpeedRaw[0] = wheel_speed_vl_raw;
+          wheelSpeedRaw[1] = wheel_speed_vr_raw;
+          wheelSpeedRaw[2] = wheel_speed_hl_raw;
+          wheelSpeedRaw[3] = wheel_speed_hr_raw;
+          lastWheelSpeedResponse = millis();
+
+          // Geometry-compensated slip: feed steering only while fresh, else 0
+          // (straight) so it falls back to plain relative slip rather than
+          // mis-compensating on a stale angle.
+          int16_t steerTenths = 0;
+          if (received_steering_ms != 0 && (millis() - received_steering_ms) < 500)
+          {
+            int16_t mag = (int16_t)(received_steering_angle * 10.0f + 0.5f);
+            steerTenths = received_steering_negative ? (int16_t)-mag : mag;
+          }
+          if (!compute_corner_slip(wheelSpeedRaw, steerTenths, slipSteeringRatio,
+                                   slipWheelbaseMm, slipTrackFrontMm, slipTrackRearMm,
+                                   slipMinSpeedRaw, cornerSlip))
+          {
+            cornerSlip[0] = cornerSlip[1] = cornerSlip[2] = cornerSlip[3] = -128;
+          }
+          lastCornerSlipMs = millis();
+          break;
+        }
+
+        case mLW_1:
+        {
+          // PQ LW_1 (0x0C2) - steering-angle broadcast (vw_pq.dbc):
+          //   SG_ LW1_LRW : 0|15@1+ (0.04375,0) "deg" -> data[0] + data[1] bits 0..6
+          //   SG_ LW1_LRW_Sign : 15|1 -> data[1] bit 7 (ignored; we track magnitude only)
+          const uint16_t lrw_raw = (((uint16_t)(rx_message_chs.data[1] & 0x7F) << 8) | rx_message_chs.data[0]);
+          received_steering_angle = lrw_raw * 0.04375f;
+          received_steering_negative = bitRead(rx_message_chs.data[1], 7); // LW1_LRW_Sign
+          received_steering_ms = millis();
+          break;
+        }
+
+        case LWI_01:
+        {
+          // MQB LWI_01 (0x086) - steering-angle sensor (vw_mqb.dbc):
+          //   SG_ LWI_Lenkradwinkel : 16|13@1+ (0.1,0) "deg" -> data[2] + data[3] bits 0..4
+          //   SG_ LWI_VZ_Lenkradwinkel : 29|1 -> data[3] bit 5 (ignored; magnitude only)
+          const uint16_t lwi_raw = (((uint16_t)(rx_message_chs.data[3] & 0x1F) << 8) | rx_message_chs.data[2]);
+          received_steering_angle = lwi_raw * 0.1f;
+          received_steering_negative = bitRead(rx_message_chs.data[3], 5); // LWI_VZ_Lenkradwinkel
+          received_steering_ms = millis();
           break;
         }
 
@@ -595,7 +828,7 @@ void parseCAN_chs(void *arg)
           tx_message_hdx.extd = rx_message_chs.extd;
           tx_message_hdx.rtr = rx_message_chs.rtr;
           tx_message_hdx.data_length_code = rx_message_chs.data_length_code;
-          twai_transmit_v2(twai_bus_1, &tx_message_hdx, (10 / portTICK_PERIOD_MS));
+          canTransmit(twai_bus_1, &tx_message_hdx);
           break;
         }
         continue;
@@ -616,7 +849,7 @@ void parseCAN_chs(void *arg)
           // Edit the CAN frame, if not in STOCK mode (or if learn is active - learn must run regardless of mode)
           if (state.mode != MODE_STOCK || haldexLearnActive)
           {
-            if (haldexGeneration == 1 || haldexGeneration == 2 || haldexGeneration == 4 || haldexGeneration == 50 || haldexGeneration == 51 || haldexGeneration == 41)
+            if (haldexGeneration == 1 || haldexGeneration == 2 || haldexGeneration == 4 || haldexGeneration == 50 || haldexGeneration == 51 || haldexGeneration == 52 || haldexGeneration == 41)
             {
               // this is the main function that edits the CAN frame to control the Haldex. 
               // It is called when not in STOCK mode OR when learn is active.
@@ -672,11 +905,64 @@ void parseCAN_chs(void *arg)
           tx_message_hdx.extd = rx_message_chs.extd;
           tx_message_hdx.rtr = rx_message_chs.rtr;
           tx_message_hdx.data_length_code = rx_message_chs.data_length_code;
-          twai_transmit_v2(twai_bus_1, &tx_message_hdx, (10 / portTICK_PERIOD_MS));
+          canTransmit(twai_bus_1, &tx_message_hdx);
         }
       }
     } while (twai_receive_v2(twai_bus_0, &rx_message_chs, 0) == ESP_OK);
   }
+}
+
+// Tally every Bus 1 frame per ID (serial lab RXIDS). Linear scan of a 16-slot
+// table: Bus 1 carries only what the module sends (our own TX is not echoed),
+// so a handful of IDs is the norm. Called from the parse task only.
+static void hdxRxCensus(const twai_message_t &m)
+{
+  const uint32_t now = millis();
+  int slot = -1;
+  for (int i = 0; i < HDX_RX_STATS_MAX; i++)
+  {
+    if (hdxRxStats[i].id == m.identifier && hdxRxStats[i].extd == (m.extd ? 1 : 0))
+    {
+      slot = i;
+      break;
+    }
+    if (slot < 0 && hdxRxStats[i].id == 0)
+      slot = i; // first free slot, used only if no match follows
+  }
+  if (slot < 0)
+  {
+    hdxRxDroppedIds++;
+    return;
+  }
+  HdxRxStat &s = hdxRxStats[slot];
+  if (s.id != m.identifier || s.extd != (m.extd ? 1 : 0))
+  {
+    s.id = m.identifier;
+    s.extd = m.extd ? 1 : 0;
+    s.count = 0;
+    s.lastMs = now;
+    s.periodMs = 0;
+  }
+  else
+  {
+    const uint32_t dt = now - s.lastMs;
+    s.periodMs = (uint16_t)(dt > 0xFFFF ? 0xFFFF : dt);
+    s.lastMs = now;
+  }
+  s.count++;
+  s.dlc = m.data_length_code;
+  for (uint8_t i = 0; i < 8; i++)
+    s.data[i] = (i < m.data_length_code) ? m.data[i] : 0;
+}
+
+// Remember the raw frame the engagement decoder just accepted (serial lab FB line).
+static inline void hdxFbCapture(const twai_message_t &m)
+{
+  hdxFbId = m.identifier;
+  hdxFbDlc = m.data_length_code;
+  for (uint8_t i = 0; i < 8; i++)
+    hdxFbData[i] = (i < m.data_length_code) ? m.data[i] : 0;
+  hdxFbMs = millis();
 }
 
 void parseCAN_hdx(void *arg)
@@ -697,12 +983,13 @@ void parseCAN_hdx(void *arg)
     {
       lastCANHaldexTick = millis();
       ++lpHaldexFrameCount;
+      hdxRxCensus(rx_message_hdx);
 
       // Analyzer mode: queue for GVRET/SLCAN and forward untouched, skipping control logic.
       if (analyzerMode || analyzerSerial)
       {
         analyzerQueueFrame(rx_message_hdx, 1);
-        twai_transmit_v2(twai_bus_0, &rx_message_hdx, (10 / portTICK_PERIOD_MS));
+        canTransmit(twai_bus_0, &rx_message_hdx);
         continue;
       }
 
@@ -784,15 +1071,40 @@ void parseCAN_hdx(void *arg)
         break;
 
       case 50:
+      case 52:
         // Gen5 Haldex (MQB Allrad_03 / 0x118). Per MQB FCAN K-matrix:
         // SG_ ALR_Ist_Proz : 16|8@1+ (0.4,0) "%" -> byte 2
         // SG_ ALR_Charisma_FahrPr / ALR_Charisma_Status -> byte 3
         // Only update on the actual engagement frame (the ECU sends 2 different IDs).
+        // Gen52 (VAQ) accepts this too, in case the unit turns out to talk Allrad_03.
         if (rx_message_hdx.identifier == HALDEX_ID_GEN5)
         {
           received_haldex_engagement_raw = rx_message_hdx.data[2];
           received_haldex_engagement = map(received_haldex_engagement_raw, 0, 250, 0, 100);
           received_haldex_state = rx_message_hdx.data[3]; // Charisma byte (mode/status)
+          hdxFbCapture(rx_message_hdx);
+        }
+        else if (haldexGeneration == 52 && rx_message_hdx.identifier == QUERSPERRE_03)
+        {
+          // VAQ / Quersperre_03 (0x137, DLC 4) per MQB FCAN K-matrix - the
+          // front-lock counterpart of Allrad_03, same byte plan:
+          //   b1[0..3] Quersperre_03_BZ   rolling counter
+          //   b1[4..6] QUER_Sta_Quersperre 0 rule mode / 1 driver / 2 err open /
+          //                                3 err closed / 4 temp shutdown / 5 comms
+          //   b1[7]    QUER_Gleichlauf     1 = synchronised
+          //   b2       QUER_Ist_Proz       0.4 %/bit (250 = 100 %); 252 SafeState
+          //                                sensor unverified, 253 error+closed,
+          //                                254 init, 255 error -> read as 0 %
+          //   b3       Sendestatus b0, VAQ_Charisma_FahrPr b1..4, Status b5..6
+          received_haldex_engagement_raw = rx_message_hdx.data[2];
+          if (received_haldex_engagement_raw >= 252)
+            received_haldex_engagement = 0;
+          else
+            received_haldex_engagement = (uint8_t)map(received_haldex_engagement_raw > 250 ? 250 : received_haldex_engagement_raw, 0, 250, 0, 100);
+          received_haldex_state = rx_message_hdx.data[3];
+          received_quer_state = (rx_message_hdx.data[1] >> 4) & 0x07;
+          received_quer_sync = (rx_message_hdx.data[1] >> 7) & 0x01;
+          hdxFbCapture(rx_message_hdx);
         }
         break;
 
@@ -830,7 +1142,7 @@ void parseCAN_hdx(void *arg)
       //   bit 6 = Geschwindigkeitsbegrenzung       (speed limit)             -> speedLimit
       // Gen5 byte 3 holds Charisma_FahrPr/Status, not fault flags - skip for Gen5.
       // Gen41 uses dedicated state vars decoded above - skip for Gen41.
-      if (haldexGeneration != 50 && haldexGeneration != 41) // PQ (Gen1/2/4/0AY 5)
+      if (haldexGeneration != 50 && haldexGeneration != 52 && haldexGeneration != 41) // PQ (Gen1/2/4/0AY 5)
       {
         received_report_clutch1 = (received_haldex_state & (1 << 0));
         received_temp_protection = (received_haldex_state & (1 << 1));
@@ -841,7 +1153,7 @@ void parseCAN_hdx(void *arg)
         received_speed_limit = (received_haldex_state & (1 << 6));
         received_long_lock_state = 0; // not present on PQ Allrad_1
       }
-      else if (haldexGeneration == 50) // 0CQ
+      else if (haldexGeneration == 50 || haldexGeneration == 52) // 0CQ / VAQ
       {
         received_report_clutch1 = false;
         received_report_clutch2 = false;
@@ -856,13 +1168,40 @@ void parseCAN_hdx(void *arg)
         {
           received_long_lock_state = (rx_message_hdx.data[1] >> 4) & 0x03;
         }
+        else if (haldexGeneration == 52 && rx_message_hdx.identifier == QUERSPERRE_03)
+        {
+          // Same slot for the VAQ: QUER_Sta_Quersperre shares the first four
+          // meanings with ALR_Sta_Laengssperre (0 rule, 1 driver, 2/3 error).
+          received_long_lock_state = received_quer_state;
+        }
       }
 
       // UDS MQB: mirror 0x779 response frames into the UDS task queue when polling is active.
-      // Always fall through so the frame is forwarded to Bus 0 (keeps VCDS / passthrough working).
-      if (liveDiagEnabled && udsRxQueue != nullptr && rx_message_hdx.identifier == 0x779)
+      // While our poller owns the diagnostic channel and no external tool is on
+      // the chassis side, every 0x779 is a reply to a request the car never made
+      // - keep it off Bus 0 so the gateway/OBD side sees no diagnostic traffic it
+      // did not ask for. The moment a real tool is seen on Bus 0 the poller backs
+      // off and replies are forwarded again (VCDS / gauge passthrough intact).
+      bool udsSuppressForward = false;
+      if (liveDiagEnabled && udsRxQueue != nullptr && rx_message_hdx.identifier == udsHaldexRespId)
       {
-        xQueueSend(udsRxQueue, &rx_message_hdx, 0);
+        if (xQueueSend(udsRxQueue, &rx_message_hdx, 0) != pdTRUE)
+        {
+          // One missed UDS response (the poller re-requests) - log, don't block.
+          DEBUG("CAN - UDS MQB tap queue full, dropped frame 0x779");
+        }
+        udsSuppressForward = udsPollActive && !externalDiagActive();
+      }
+
+      // /api/uds/read tap (Bus 1 reads): copy, the frame still forwards below.
+      if (udsWebRespId != 0 && udsWebBus == 1 && udsWebRxQueue != nullptr &&
+          rx_message_hdx.identifier == udsWebRespId)
+      {
+        if (xQueueSend(udsWebRxQueue, &rx_message_hdx, 0) != pdTRUE)
+        {
+          DEBUG("CAN - UDS web tap queue full, dropped frame 0x%03X", (unsigned)rx_message_hdx.identifier);
+        }
+        udsSuppressForward = true; // reply to our own web request - same rule as the poller
       }
 
       // KWP2000-over-TP2.0 (Gen2/4): mirror channel-setup + negotiated data-channel
@@ -877,7 +1216,10 @@ void parseCAN_hdx(void *arg)
         }
       }
 
-      twai_transmit_v2(twai_bus_0, &rx_message_hdx, (10 / portTICK_PERIOD_MS));
+      if (!udsSuppressForward)
+      {
+        canTransmit(twai_bus_0, &rx_message_hdx);
+      }
     } while (twai_receive_v2(twai_bus_1, &rx_message_hdx, 0) == ESP_OK);
   }
 }

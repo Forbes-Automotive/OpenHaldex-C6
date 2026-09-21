@@ -1,32 +1,111 @@
 #include <OpenHaldexC6_Calculations.h>
 #include <OpenHaldexC6_tasks.h>
+#include <math.h> // tanf/sqrtf/fabsf for the per-corner slip geometry
 
-// Only executed when in MODE_FWD/MODE_5050/MODE_Expert
+// Geometry-compensated per-corner slip. Adopted from OpenHaldex-Edge by Rekt
+// (Kile Thomson) - https://github.com/Kile-Thomson/OpenHaldex-Edge - see
+// THIRD_PARTY_NOTICES.md. At steering road-wheel angle delta,
+// pure Ackermann puts the turn centre on the rear-axle line R = wheelbase /
+// tan(delta) from the centreline. Each wheel traces its own radius, so with
+// zero real slip the wheel speeds are proportional to those radii. We build the
+// four geometric radii, turn them into expected speeds sharing the measured
+// mean, and report each corner's fractional excess as slip. On a straight this
+// reduces to "speed vs. the average of the others" with no special-casing.
+bool compute_corner_slip(const uint16_t wheel_raw[4], int16_t steer_wheel_tenths,
+                         float steering_ratio, uint16_t wheelbase_mm,
+                         uint16_t track_front_mm, uint16_t track_rear_mm,
+                         uint16_t min_speed_raw, int8_t slip_out[4])
+{
+  slip_out[0] = slip_out[1] = slip_out[2] = slip_out[3] = 0;
+
+  if (wheelbase_mm == 0 || track_front_mm == 0 || track_rear_mm == 0 ||
+      steering_ratio < 1.0f)
+    return false;
+
+  const uint32_t sum_raw =
+      (uint32_t)wheel_raw[0] + wheel_raw[1] + wheel_raw[2] + wheel_raw[3];
+  const float mean_actual = sum_raw * 0.25f;
+  if (mean_actual < (float)min_speed_raw || mean_actual <= 0.0f)
+    return false;
+
+  const float L = (float)wheelbase_mm;
+  const float half_tf = (float)track_front_mm * 0.5f;
+  const float half_tr = (float)track_rear_mm * 0.5f;
+
+  const float delta_deg = ((float)steer_wheel_tenths * 0.1f) / steering_ratio;
+  const float delta = fabsf(delta_deg) * (float)M_PI / 180.0f;
+
+  float rad[4]; // [FL, FR, RL, RR]
+  const float kStraight = 0.0005f;
+  if (delta < kStraight)
+  {
+    rad[0] = rad[1] = rad[2] = rad[3] = 1.0f;
+  }
+  else
+  {
+    float R = L / tanf(delta);
+    const float min_R = (half_tf > half_tr ? half_tf : half_tr) + 1.0f;
+    if (R < min_R)
+      R = min_R;
+
+    const float r_rear_inner = R - half_tr;
+    const float r_rear_outer = R + half_tr;
+    const float r_front_inner = sqrtf(L * L + (R - half_tf) * (R - half_tf));
+    const float r_front_outer = sqrtf(L * L + (R + half_tf) * (R + half_tf));
+
+    if (delta_deg > 0.0f)
+    {
+      // Turning right: right-side wheels are inner (shorter radius, slower).
+      rad[0] = r_front_outer; // FL
+      rad[1] = r_front_inner; // FR
+      rad[2] = r_rear_outer;  // RL
+      rad[3] = r_rear_inner;  // RR
+    }
+    else
+    {
+      rad[0] = r_front_inner; // FL
+      rad[1] = r_front_outer; // FR
+      rad[2] = r_rear_inner;  // RL
+      rad[3] = r_rear_outer;  // RR
+    }
+  }
+
+  const float mean_rad = (rad[0] + rad[1] + rad[2] + rad[3]) * 0.25f;
+  if (mean_rad <= 0.0f)
+    return false;
+
+  for (int i = 0; i < 4; i++)
+  {
+    const float expected = mean_actual * (rad[i] / mean_rad);
+    if (expected <= 0.0f)
+    {
+      slip_out[i] = 0;
+      continue;
+    }
+    float slip_pct = ((float)wheel_raw[i] / expected - 1.0f) * 100.0f;
+    if (slip_pct > 127.0f)
+      slip_pct = 127.0f;
+    else if (slip_pct < -100.0f)
+      slip_pct = -100.0f;
+    slip_out[i] = (int8_t)(slip_pct < 0.0f ? slip_pct - 0.5f : slip_pct + 0.5f);
+  }
+  return true;
+}
+
+// Global lock gate: the "Disengage Under/Above Speed" and "Minimum Throttle
+// Before Lock" settings. Applies to EVERY lock-producing path - the selected
+// mode (50:50 / 60:40 / 75:25 / Expert) AND any force-mode trigger (TC,
+// hazards, external button) - so a forced 50:50 in a car park still obeys the
+// under-speed cut-off. A bound of 0 means that side of the window is disabled.
+// Expert mode used to bypass this entirely (its map has its own speed axis);
+// it is now gated too, matching the UI hint "disable ANY lock below...".
 static inline bool lock_enabled()
 {
-  bool throttle_ok = false;
-  bool speed_ok = false;
-
-  if (state.mode != MODE_EXPERT)
-  {
-    throttle_ok = (state.pedal_threshold == 0) || (int(received_pedal_value) >= state.pedal_threshold);
-    // Allow lock only within the window [disengageUnderSpeed, disengageAboveSpeed].
-    // A bound of 0 means that side of the window is disabled.
-    bool under_ok = (disengageUnderSpeed == 0) || (received_vehicle_speed >= disengageUnderSpeed);
-    bool above_ok = (disengageAboveSpeed == 0) || (received_vehicle_speed <= disengageAboveSpeed);
-    speed_ok = under_ok && above_ok;
-    return throttle_ok && speed_ok;
-  }
-
-  if (state.mode == MODE_EXPERT)
-  {
-    // todo - add in override functions?
-    throttle_ok = true;
-    speed_ok = true;
-    return throttle_ok && speed_ok;
-  }
-
-  return false;
+  const bool throttle_ok = (state.pedal_threshold == 0) || (int(received_pedal_value) >= state.pedal_threshold);
+  // Allow lock only within the window [disengageUnderSpeed, disengageAboveSpeed].
+  const bool under_ok = (disengageUnderSpeed == 0) || (received_vehicle_speed >= disengageUnderSpeed);
+  const bool above_ok = (disengageAboveSpeed == 0) || (received_vehicle_speed <= disengageAboveSpeed);
+  return throttle_ok && under_ok && above_ok;
 }
 
 static float get_expert_lock_target()
@@ -99,8 +178,75 @@ static float get_expert_lock_target()
   return int(v);            // return lock target as an integer percentage (0-100)
 }
 
+// Steering-angle third axis (FWD bias): returns a 0-100% multiplier for the
+// lock target based on |steering-wheel angle|. Max lock at low angle, reduced
+// lock as angle grows. Only gens with a steering source (2/4/50/52) use it;
+// unsupported gens or stale/absent steering data return 100 (no reduction).
+static float get_steering_lock_scale()
+{
+  const bool supported = (haldexGeneration == 2 || haldexGeneration == 4 ||
+                          haldexGeneration == 50 || haldexGeneration == 52);
+  if (!supported)
+    return 100.0f;
+  if (!steeringScaleEnabled)
+    return 100.0f; // feature disabled -> full lock, no reduction
+  if (received_steering_ms == 0 || (millis() - received_steering_ms) > steeringStaleMs)
+    return 100.0f; // no/stale steering -> full lock, bias off
+
+  float angle = fabsf(received_steering_angle);
+  angle = constrain(angle, 0, (float)steeringArray[steeringArrayCount - 1]);
+
+  if (angle >= steeringArray[steeringArrayCount - 1])
+    return constrain((float)steeringLockScaleArray[steeringArrayCount - 1], 0, 100);
+
+  for (uint8_t i = 0; i < steeringArrayCount - 1; i++)
+  {
+    if (angle <= steeringArray[i + 1])
+    {
+      const float denom = (float)steeringArray[i + 1] - (float)steeringArray[i];
+      const float ratio = (denom > 0) ? ((angle - steeringArray[i]) / denom) : 0;
+      const float v0 = steeringLockScaleArray[i];
+      const float v1 = steeringLockScaleArray[i + 1];
+      return constrain(v0 + ((v1 - v0) * ratio), 0, 100);
+    }
+  }
+  return 100.0f;
+}
+
+// Scale a lock target by the steering-angle curve. Applied to lock-producing
+// modes only (not Stock passthrough or FWD).
+// Telemetry captured for the UI engagement-split display: last requested
+// (pre-scale) and applied (post-scale) lock, and whether scaling ran this cycle.
+static float s_steer_requested = 0.0f;
+static float s_steer_applied = 0.0f;
+static bool s_steer_applied_flag = false;
+
+static inline float apply_steering_scale(float lock)
+{
+  const float scaled = lock * get_steering_lock_scale() / 100.0f;
+  s_steer_requested = lock;
+  s_steer_applied = scaled;
+  s_steer_applied_flag = true;
+  return scaled;
+}
+
+// Steering-scale telemetry accessors (used by the API live-status endpoint).
+bool steering_scale_is_active()
+{
+  return s_steer_applied_flag && (s_steer_applied + 0.5f < s_steer_requested);
+}
+uint8_t steering_scale_requested_pct()
+{
+  return (uint8_t)constrain((int)(s_steer_requested + 0.5f), 0, 100);
+}
+uint8_t steering_scale_result_pct()
+{
+  return (uint8_t)constrain((int)(s_steer_applied + 0.5f), 0, 100);
+}
+
 float get_lock_target_adjustment()
 {
+  s_steer_applied_flag = false; // reset; apply_steering_scale sets it when used this cycle
   // const MODE_NAMES = ['Stock', 'FWD', '50:50', '60:40', '75:25', 'Expert']; // mode names as Strings - just to note here
   if (extBtnForceMode || tcForceMode || hazardForceMode) // if any force-mode trigger is enabled
   {
@@ -145,6 +291,10 @@ float get_lock_target_adjustment()
 
     if (anyActive)
     {
+      // Forced lock modes go through the same speed/throttle gate as the
+      // selected mode below. Previously they returned the raw lock here, so
+      // lock_target (and the dashboard "Requested" figure) read 100% below the
+      // under-speed cut-off even though the frame values were being zeroed.
       switch (fmv)
       {
       case 0:
@@ -152,13 +302,13 @@ float get_lock_target_adjustment()
       case 1:
         return 0; // FWD
       case 2:
-        return 100; // 50:50
+        return lock_enabled() ? apply_steering_scale(100) : 0; // 50:50
       case 3:
-        return 40; // 60:40
+        return lock_enabled() ? apply_steering_scale(40) : 0; // 60:40
       case 4:
-        return 30; // 75:25
+        return lock_enabled() ? apply_steering_scale(30) : 0; // 75:25
       case 5:
-        return get_expert_lock_target(); // Expert
+        return lock_enabled() ? apply_steering_scale(get_expert_lock_target()) : 0; // Expert
       default:
         return 0; // error - zero lock
       }
@@ -177,28 +327,28 @@ float get_lock_target_adjustment()
   case MODE_5050:
     if (lock_enabled())
     {
-      return 100; // 100% lock
+      return apply_steering_scale(100); // 100% lock
     }
     return 0; // lock not enabled, zero lock
 
   case MODE_6040:
     if (lock_enabled())
     {
-      return 40; // 40% lock
+      return apply_steering_scale(40); // 40% lock
     }
     return 0; // lock not enabled, zero lock
 
   case MODE_7525:
     if (lock_enabled())
     {
-      return 30; // 30% lock
+      return apply_steering_scale(30); // 30% lock
     }
     return 0; // lock not enabled, zero lock
 
   case MODE_EXPERT:
     if (lock_enabled())
     {
-      return get_expert_lock_target();
+      return apply_steering_scale(get_expert_lock_target());
     }
     return 0; // lock not enabled, zero lock
 
@@ -281,11 +431,157 @@ uint8_t get_lock_target_adjusted_value(uint8_t value, bool invert)
   return (invert ? 0xFE : 0x00); // if lock not enabled, return 0 (or inverted)
 }
 
+void fill_esp19_wheel_speeds(uint8_t data[8])
+{
+  // Wheel speed MUST keep changing or the Haldex slowly disengages - a
+  // static value fades over time and eventually stops. This is the original,
+  // proven keep-alive dither (all 4 corners share the same small swing).
+  //
+  // A lock_target-proportional front/rear delta (simulating real slip, like
+  // the Gen42/Ford wheel-speed code does) was tried here and made things
+  // worse on real hardware - reported lock still faded from 100% and then
+  // collapsed to 0%, rather than holding. Likely reading to the Haldex as
+  // excessive/implausible sustained slip and triggering a separate
+  // protection cutoff. Reverted; do not reintroduce without confirming on
+  // the car first.
+  if (wsBaseRaw == 0)
+  {
+    // Legacy behaviour: all four corners driven from the free-running counters.
+    const uint8_t hlLo = get_lock_target_adjusted_value(ESP_19_counter2, false);
+    const uint8_t hlHi = get_lock_target_adjusted_value(ESP_19_counter, false);
+    const uint8_t vlLo = get_lock_target_adjusted_value(ESP_19_counter2 + 0xBA, false);
+
+    data[0] = hlLo; // HL (rear left) low
+    data[1] = hlHi; // HL (rear left) high
+    data[2] = hlLo; // HR (rear right) low
+    data[3] = hlHi; // HR (rear right) high
+    data[4] = vlLo; // VL (front left) low
+    data[5] = hlHi; // VL (front left) high
+    data[6] = vlLo; // VR (front right) low
+    data[7] = hlHi; // VR (front right) high
+    if (wsLeftRightDeltaRaw != 0)
+    {
+      // VAQ lever: split the front axle left vs right around the legacy value.
+      const int32_t base = (int32_t)((uint16_t)hlHi << 8 | vlLo);
+      int32_t vl = base + wsLeftRightDeltaRaw / 2;
+      int32_t vr = base - wsLeftRightDeltaRaw / 2;
+      if (vl < 0) vl = 0; if (vl > 0xFFFF) vl = 0xFFFF;
+      if (vr < 0) vr = 0; if (vr > 0xFFFF) vr = 0xFFFF;
+      data[4] = (uint8_t)(vl & 0xFF); data[5] = (uint8_t)(vl >> 8);
+      data[6] = (uint8_t)(vr & 0xFF); data[7] = (uint8_t)(vr >> 8);
+    }
+  }
+  else
+  {
+    // Explicit mode: a fixed base speed per corner, optionally dithered, with
+    // an optional front-axle offset. Lets the "does the Haldex hunt because
+    // the simulated wheel speed keeps moving?" question be tested directly -
+    // set wsDitherRaw 0 for a genuinely static speed.
+    static bool phase = false;
+    phase = !phase;
+    const int32_t dither = wsDitherRaw ? (phase ? (int32_t)wsDitherRaw : -(int32_t)wsDitherRaw) : 0;
+    int32_t rear = (int32_t)wsBaseRaw + dither;
+    int32_t front = rear + wsFrontDeltaRaw;
+    // VAQ lever: front left-vs-right split (a transverse lock reacts to VL vs VR).
+    int32_t vl = front + wsLeftRightDeltaRaw / 2;
+    int32_t vr = front - wsLeftRightDeltaRaw / 2;
+    if (rear < 0) rear = 0;
+    if (vl < 0) vl = 0;
+    if (vr < 0) vr = 0;
+    const uint16_t r = (uint16_t)(rear > 0xFFFF ? 0xFFFF : rear);
+    const uint16_t l16 = (uint16_t)(vl > 0xFFFF ? 0xFFFF : vl);
+    const uint16_t r16 = (uint16_t)(vr > 0xFFFF ? 0xFFFF : vr);
+
+    data[0] = (uint8_t)(r & 0xFF);   // HL low
+    data[1] = (uint8_t)(r >> 8);     // HL high
+    data[2] = (uint8_t)(r & 0xFF);   // HR low
+    data[3] = (uint8_t)(r >> 8);     // HR high
+    data[4] = (uint8_t)(l16 & 0xFF); // VL low
+    data[5] = (uint8_t)(l16 >> 8);   // VL high
+    data[6] = (uint8_t)(r16 & 0xFF); // VR low
+    data[7] = (uint8_t)(r16 >> 8);   // VR high
+  }
+
+  if (!wsFreeze)
+  {
+    ESP_19_counter++;
+    ESP_19_counter2++;
+    if (ESP_19_counter > 0x10)
+      ESP_19_counter = 0x0A;
+    if (ESP_19_counter2 > 0x2F)
+      ESP_19_counter2 = 0x2E;
+  }
+}
+
+void fill_motor11_bpk(uint8_t data[8], uint8_t counter)
+{
+  // DBC-correct bit packing for Motor_11 (0x0A7). Every field below is a
+  // runtime tunable (see defs.h) so the serial lab can massage the wire
+  // format live; the defaults are the values that were hardcoded here.
+  // Signals are 10-bit with offset -509, i.e. raw = Nm + 509.
+  const uint16_t ceilNm = bpkCeilingNm;
+  const uint16_t floorNm = (bpkFloorNm < ceilNm) ? bpkFloorNm : 0;
+
+  uint16_t torqueNm = get_lock_target_adjusted_value(0xFE, false);
+  torqueNm = (uint16_t)(floorNm + ((uint32_t)torqueNm * (ceilNm - floorNm)) / 0xFE);
+
+  static uint16_t prevIstNm = 0, prevSolfNm = 0;
+  auto slew = [](uint16_t cur, uint16_t target, uint16_t step) -> uint16_t
+  {
+    if (step == 0)
+      return target; // 0 = no rate limit
+    if (target > cur)
+      return ((uint32_t)cur + step >= target) ? target : (uint16_t)(cur + step);
+    if (target < cur)
+      return (cur <= step || cur - step <= target) ? target : (uint16_t)(cur - step);
+    return cur;
+  };
+  uint16_t istNm = slew(prevIstNm, torqueNm, bpkSlewIst);
+  uint16_t solfNm = slew(prevSolfNm, torqueNm, bpkSlewSolf);
+  prevIstNm = istNm;
+  prevSolfNm = solfNm;
+
+  // Optional overrides, to test which field the Haldex actually keys off.
+  if (bpkForceIstNm >= 0)
+    istNm = (uint16_t)bpkForceIstNm;
+  if (bpkForceSolfNm >= 0)
+    solfNm = (uint16_t)bpkForceSolfNm;
+
+  bpkLogSample(torqueNm, istNm, solfNm);
+
+  const uint16_t rawSollRoh = (uint16_t)(torqueNm + 509) & 0x3FF;
+  const uint16_t rawIst = (uint16_t)(istNm + 509) & 0x3FF;
+  const uint16_t rawSolf = (uint16_t)(solfNm + 509) & 0x3FF;
+  const uint16_t rawTraeg = bpkTraegRaw & 0x3FF;
+  const uint16_t rawSchub = bpkSchubRaw & 0x1FF;
+
+  data[0] = 0x00; // CRC placeholder - caller fills it
+  data[1] = (counter & 0x0F) | ((rawSollRoh & 0x000F) << 4);
+  data[2] = ((rawSollRoh >> 4) & 0x3F) | ((rawIst & 0x0003) << 6);
+  data[3] = (rawIst >> 2) & 0xFF;
+  data[4] = rawTraeg & 0xFF;
+  data[5] = ((rawTraeg >> 8) & 0x03) | ((rawSolf & 0x3F) << 2);
+  data[6] = ((rawSolf >> 6) & 0x0F) | ((rawSchub & 0x0F) << 4);
+  data[7] = ((rawSchub >> 4) & 0x1F) | bpkStatusFl;
+
+  for (uint8_t i = 0; i < 8; i++)
+    bpkLastFrame[i] = data[i];
+}
+
+void bpkLogSample(uint16_t torqueNm, uint16_t istNm, uint16_t solfNm)
+{
+  // Runs at the Motor_11 rate (~100 Hz) on both BPK paths, so it stays a
+  // plain store - the serial lab task does its own timing when it streams.
+  bpkLastTorqueNm = torqueNm;
+  bpkLastIstNm = istNm;
+  bpkLastSolfNm = solfNm;
+}
+
 void startHaldexLearn()
 {
-  if (haldexLearnActive)
+  if (haldexLearnActive || longLearnActive)
   {
-    return; // already running
+    return; // already running (Long Learn drives its own sweeps)
   }
 
   memset(haldexLearnTable, 0, sizeof(haldexLearnTable));
@@ -295,6 +591,187 @@ void startHaldexLearn()
   haldexLearnActive = true;
 
   xTaskCreate(haldexLearnTask, "haldexLearn", 4096, nullptr, 1, nullptr);
+}
+
+bool runLearnSweep(uint32_t preHoldMs)
+{
+  // Bench-measured (Gen5 0CQ): engagement needs several hundred ms to settle
+  // after a step, and a single instantaneous sample lands mid-transient - which
+  // is what made learned mid-points wander. Settle first, then AVERAGE over a
+  // short observation window, so each entry is the value actually held rather
+  // than whatever the reading was passing through. Held steady, this hardware
+  // tracks the request 1:1 with no jitter at all, so a clean sweep should come
+  // out close to an identity table.
+  const uint32_t settleMs = 400;
+  const uint32_t observeMs = 200;
+  const uint32_t sampleMs = 50;
+  uint8_t peak = 0; // highest engagement recorded so far (monotonic hold)
+
+  // The ESP_14 launch floor pins BR_Vorg_*_Min to Max, leaving the Haldex no
+  // room to modulate - it drives the pump to full duty and corrupts the top of
+  // the sweep. Always learn with it at 0 and restore afterwards. NOTE: the
+  // Motor_11 packing (fixHunting) is deliberately NOT forced here: which
+  // packing a unit needs is a per-unit trait (554K needs BPK, this 0CQ does
+  // not), and the table must describe how the car will actually be driven.
+  const uint8_t floorBeforeLearn = esp14MinFloorPct;
+  esp14MinFloorPct = 0;
+
+  memset(haldexLearnTable, 0, sizeof(haldexLearnTable));
+  haldexLearnCancel = false;
+  haldexLearnStep = 0;
+  haldexLearnCF = 0;
+  haldexLearnActive = true; // frames now carry haldexLearnCF regardless of mode
+
+  // Optional pre-hold at CF 0: wait for the clutch to release from the previous
+  // sweep (engagement <= 2 % for five consecutive 100 ms ticks) or time out.
+  if (preHoldMs > 0)
+  {
+    uint8_t releasedTicks = 0;
+    for (uint32_t held = 0; held < preHoldMs && !haldexLearnCancel; held += 100)
+    {
+      vTaskDelay(100 / portTICK_PERIOD_MS);
+      if (received_haldex_engagement <= 2)
+      {
+        if (++releasedTicks >= 5)
+          break;
+      }
+      else
+      {
+        releasedTicks = 0;
+      }
+    }
+  }
+
+  for (uint16_t cf = 0; cf <= 100; cf++)
+  {
+    if (haldexLearnCancel)
+    {
+      break;
+    }
+
+    haldexLearnStep = (uint8_t)cf;
+    haldexLearnCF = (uint8_t)cf;
+
+    vTaskDelay(settleMs / portTICK_PERIOD_MS);
+
+    // Average the settled window rather than taking one instantaneous read.
+    uint32_t sum = 0;
+    uint16_t n = 0;
+    for (uint32_t o = 0; o < observeMs && !haldexLearnCancel; o += sampleMs)
+    {
+      vTaskDelay(sampleMs / portTICK_PERIOD_MS);
+      sum += received_haldex_engagement;
+      n++;
+    }
+    uint8_t eng = n ? (uint8_t)(sum / n) : received_haldex_engagement;
+
+    // Engagement must rise (or plateau) as the requested lock climbs - it can
+    // never physically fall. A reading below the running peak is a data fault
+    // (e.g. a bad byte at the top end that returns 0 or a lower value), so hold
+    // the highest lock achieved so far instead of saving the drop. This keeps
+    // "the last available highest lock" as the learned value for higher requests.
+    if (eng < peak)
+    {
+      eng = peak; // last available highest lock remains
+    }
+    else
+    {
+      peak = eng;
+    }
+
+    haldexLearnTable[cf] = eng;
+  }
+
+  bool anyNonZero = false;
+  if (!haldexLearnCancel)
+  {
+    // only mark valid if at least one non-zero engagement was recorded
+    for (uint8_t i = 0; i <= 100; i++)
+    {
+      if (haldexLearnTable[i] > 0)
+      {
+        anyNonZero = true;
+        break;
+      }
+    }
+    haldexLearnTableValid = anyNonZero;
+    haldexLearnStep = anyNonZero ? 101 : 102; // 101 = complete OK, 102 = complete but no data
+  }
+
+  const bool ok = !haldexLearnCancel && anyNonZero;
+  haldexLearnActive = false;
+  haldexLearnCF = 0;
+  esp14MinFloorPct = floorBeforeLearn; // restore whatever the user had set
+  return ok;
+}
+
+void scoreLearnTable(const uint8_t *table, LearnScore &out)
+{
+  out.reach = table[100];
+  out.engageCF = 101;
+  for (uint8_t i = 0; i <= 100; i++)
+  {
+    if (table[i] > 0)
+    {
+      out.engageCF = i;
+      break;
+    }
+  }
+  out.engageJump = (out.engageCF <= 100) ? table[out.engageCF] : 0;
+
+  // Largest rise between consecutive steps after the first engage step. The
+  // table is monotonic (runLearnSweep holds the peak) so the delta is >= 0.
+  out.maxStep = 0;
+  for (uint16_t i = (uint16_t)out.engageCF + 1; i <= 100; i++)
+  {
+    const uint8_t d = table[i] - table[i - 1];
+    if (d > out.maxStep)
+      out.maxStep = d;
+  }
+
+  out.smooth = (out.engageCF <= LL_ENGAGE_MAX_CF) &&
+               (out.reach >= LL_REACH_MIN) &&
+               (out.maxStep <= LL_STEP_MAX);
+
+  // Composite rank: start from reach, penalise discontinuities hard and late
+  // engagement gently. A table that never engages scores 0.
+  int s = out.reach;
+  if (out.maxStep > 3)
+    s -= 4 * (out.maxStep - 3);
+  if (out.engageCF > 20)
+    s -= (out.engageCF - 20) / 2;
+  if (out.engageCF > 100)
+    s = 0;
+  out.score = (uint8_t)constrain(s, 0, 100);
+}
+
+bool startLongLearn(bool testAll)
+{
+  if (longLearnActive || haldexLearnActive)
+    return false;
+  const int gi = frameEditGenIdx(haldexGeneration);
+  if (gi < 0)
+    return false; // gen41/42 etc. have no gated blocks to bisect
+
+  longLearnGenIdx = (uint8_t)gi;
+  longLearnGeneration = haldexGeneration;
+  longLearnTestAll = testAll;
+  longLearnCancel = false;
+  longLearnPhase = LL_SWEEP;
+  longLearnSweepIdx = 0;
+  longLearnSweepTotal = 0;
+  longLearnSweepCount = 0;
+  longLearnCurrentBit = -1;
+  longLearnBaselineValid = false;
+  longLearnFinalValid = false;
+  longLearnBpkAdjusted = false;
+  longLearnStartMs = millis();
+  longLearnEndMs = 0;
+  memset(longLearnBlockResult, 0, sizeof(longLearnBlockResult));
+  longLearnActive = true;
+
+  xTaskCreate(longLearnTask, "longLearn", 6144, nullptr, 1, nullptr);
+  return true;
 }
 
 void getLockData(twai_message_t &rx_message_chs)
@@ -967,7 +1444,7 @@ void getLockData(twai_message_t &rx_message_chs)
 
   // edit the frames if configured as Gen5 (0CQ) - frames left
   // commented-out are so they can be re-enabled later if a required
-  if (haldexGeneration == 50)
+  if (haldexGeneration == 50 || haldexGeneration == 52) // 0CQ + VAQ (clone base)
   {
     switch (rx_message_chs.identifier)
     {
@@ -982,25 +1459,7 @@ void getLockData(twai_message_t &rx_message_chs)
       rx_message_chs.data[7] = 0x00;
       break;
     case ESP_19:
-      rx_message_chs.data[0] = get_lock_target_adjusted_value(ESP_19_counter2, false);        // HL - wheel speed
-      rx_message_chs.data[1] = get_lock_target_adjusted_value(ESP_19_counter, false);         // HL - wheel speed
-      rx_message_chs.data[2] = get_lock_target_adjusted_value(ESP_19_counter2, false);        // HR - wheel speed
-      rx_message_chs.data[3] = get_lock_target_adjusted_value(ESP_19_counter, false);         // HR - wheel speed
-      rx_message_chs.data[4] = get_lock_target_adjusted_value(ESP_19_counter2 + 0xBA, false); // VL - wheel speed 0xDB
-      rx_message_chs.data[5] = get_lock_target_adjusted_value(ESP_19_counter, false);         // VL - wheel speed -- affects if =0x0B
-      rx_message_chs.data[6] = get_lock_target_adjusted_value(ESP_19_counter2 + 0xBA, false); // VR - wheel speed 0xDB
-      rx_message_chs.data[7] = get_lock_target_adjusted_value(ESP_19_counter, false);         // VR - wheel speed -- affects if =0x0B
-
-      ESP_19_counter++;
-      ESP_19_counter2++;
-      if (ESP_19_counter > 0x10) // 0x1A
-      {
-        ESP_19_counter = 0x0A; // 0x10
-      }
-      if (ESP_19_counter2 > 0x2F) // 0x0E
-      {
-        ESP_19_counter2 = 0x2E; // 0x00
-      }
+      fill_esp19_wheel_speeds(rx_message_chs.data);
       break;
 
     case GETRIEBE_11:
@@ -1060,47 +1519,7 @@ void getLockData(twai_message_t &rx_message_chs)
       else
       {
         // ---- BPK packing (Fix Hunting on; needed for 554K @ partial lock) ----
-        const uint8_t BPK_CEIL = 220;     // Nm at 100% lock
-        const uint8_t BPK_SLEW_IST = 8;   // Nm/cycle, MO_Mom_Ist_Summe ramp
-        const uint8_t BPK_SLEW_SOLF = 32; // Nm/cycle, MO_Mom_Soll_gefiltert ramp
-        const uint8_t BPK_FLOOR = 10;
-
-        uint8_t torqueNm = get_lock_target_adjusted_value(0xFE, false);
-        torqueNm = (uint8_t)(BPK_FLOOR +
-                             ((uint16_t)torqueNm * (BPK_CEIL - BPK_FLOOR)) / 0xFE);
-
-        static uint8_t prevIstNm = 0, prevSolfNm = 0;
-        auto slew = [](uint8_t cur, uint8_t target, uint8_t step) -> uint8_t
-        {
-          if (target > cur)
-            return ((uint16_t)cur + step >= target) ? target : (uint8_t)(cur + step);
-          if (target < cur)
-            return (cur <= step || cur - step <= target) ? target : (uint8_t)(cur - step);
-          return cur;
-        };
-        uint8_t istNm = slew(prevIstNm, torqueNm, BPK_SLEW_IST);
-        uint8_t solfNm = slew(prevSolfNm, torqueNm, BPK_SLEW_SOLF);
-        prevIstNm = istNm;
-        prevSolfNm = solfNm;
-
-        uint16_t rawSollRoh = (uint16_t)(torqueNm + 509) & 0x3FF;
-        uint16_t rawIst = (uint16_t)(istNm + 509) & 0x3FF;
-        uint16_t rawSolf = (uint16_t)(solfNm + 509) & 0x3FF;
-
-        const uint8_t TRAEG_LO = 0xFD;
-        const uint8_t TRAEG_HI = 0x01;
-        const uint8_t SCHUB_LO = 0x07;
-        const uint8_t SCHUB_HI = 0x1E;
-        const uint8_t STATUS_FL = 0x20; // Normalbetrieb=1, QBit=valid
-
-        rx_message_chs.data[0] = 0x00; // CRC placeholder
-        rx_message_chs.data[1] = (MOTOR_11_counter & 0x0F) | ((rawSollRoh & 0x000F) << 4);
-        rx_message_chs.data[2] = ((rawSollRoh >> 4) & 0x3F) | ((rawIst & 0x0003) << 6);
-        rx_message_chs.data[3] = (rawIst >> 2) & 0xFF;
-        rx_message_chs.data[4] = TRAEG_LO;
-        rx_message_chs.data[5] = (TRAEG_HI & 0x03) | ((rawSolf & 0x3F) << 2);
-        rx_message_chs.data[6] = ((rawSolf >> 6) & 0x0F) | ((SCHUB_LO & 0x0F) << 4);
-        rx_message_chs.data[7] = (SCHUB_HI & 0x1F) | STATUS_FL;
+        fill_motor11_bpk(rx_message_chs.data, MOTOR_11_counter);
       }
 
       rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_0A7); // for 0x0A7
@@ -1117,14 +1536,44 @@ void getLockData(twai_message_t &rx_message_chs)
       rx_message_chs.data[1] = ESP_14_counter; // rolling - 0x10>0x1F
       rx_message_chs.data[2] = 0x00;           // doesn't affect
       rx_message_chs.data[3] = 0x00;           // doesn't affect sometimes 0xC0, sometimes 0x00
-      rx_message_chs.data[4] = 0x00;           // doesn't affect BR_Vorg_Quer_Min Minimum specified limit value of the clutch's operating range by the ESP MQB Haldex: 100% torque corresponds to 2000 Nm.
-      rx_message_chs.data[6] = 0x00;           // doesn't affect BR_Vorg_Allrad_Min Minimum specified limit value of the clutch's operating range by the ESP MQB Haldex: 100% torque corresponds to 2000 Nm
 
       appliedTorque = get_lock_target_adjusted_value(0xFE, false);
+
+      // Launch PWM floor: raise BR_Vorg_*_Min while lock is commanded, clamped
+      // strictly below Max so the Haldex keeps room to modulate. 0% = unchanged,
+      // and it collapses to 0 whenever Max does (off-throttle, FWD, coasting).
+      // Adopted from OpenHaldex-Edge by Rekt (Kile Thomson) - see THIRD_PARTY_NOTICES.md.
+      {
+        uint8_t esp14Floor = 0;
+        if (esp14MinFloorPct > 0 && appliedTorque > 1)
+        {
+          uint16_t f = ((uint16_t)appliedTorque * esp14MinFloorPct) / 100;
+          if (f > (uint16_t)(appliedTorque - 1))
+            f = (uint16_t)(appliedTorque - 1);
+          esp14Floor = (uint8_t)f;
+        }
+        // Danger Zone: at a full 50:50 request only, pin Min to Max so the
+        // Haldex has no modulation room and goes to full pump duty.
+        if (dangerZoneEnabled && lock_target >= 100 && appliedTorque > 1)
+          esp14Floor = (uint8_t)(appliedTorque - 1);
+        rx_message_chs.data[4] = esp14Floor; // BR_Vorg_Quer_Min
+        rx_message_chs.data[6] = esp14Floor; // BR_Vorg_Allrad_Min
+      }
 
       rx_message_chs.data[5] = appliedTorque; // BR_Vorg_Quer_Max - lock-modulated (massive effect, ported from standalone)
       rx_message_chs.data[7] = appliedTorque; // BR_Vorg_Allrad_Max - lock-modulated (massive effect)
       // massive effects (4>7)
+
+      if (haldexGeneration == 52)
+      {
+        // VAQ (bench 2026-09-17, see Gen5_0CQ_VAQ_frames10): the front lock
+        // follows BR_Vorg_Quer_Min 1:1 in plain percent (0.4 %/bit) and only
+        // while BR_Status_Quer_ESP >= 3. The Allrad bytes (b6/b7) are not read.
+        const uint8_t quer = get_lock_target_adjusted_value(250, false);
+        rx_message_chs.data[3] = quer ? 0x20 : 0x00; // 4 = ESP requests cross lock / 0 deactivated
+        rx_message_chs.data[4] = quer;               // BR_Vorg_Quer_Min
+        rx_message_chs.data[5] = quer;               // BR_Vorg_Quer_Max = Min
+      }
 
       rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_08A); // for 0x08A
 

@@ -1,6 +1,7 @@
 #include <OpenHaldexC6_IO.h>
 #include <OpenHaldexC6_can.h>
 #include <OpenHaldexC6_WiFi.h>
+#include <OpenHaldexC6_OTA.h> // otaWebClientActive(): bridge-mode browsers hold WiFi up
 
 // Low-power state: 
 //   WATCHING = WiFi Active, Normal IO
@@ -17,11 +18,10 @@ static uint32_t lpLastHaldexSnap     = 0;
 static uint32_t lpChassisFps         = 0;
 static uint32_t lpHaldexFps          = 0;
 
-// Bench mode support: latches true the first time real CAN traffic is seen on
-// either bus this power cycle. Used to auto-clear benchMode's sleep suppression
-// the moment the unit is demonstrably harnessed to a live bus, so a forgotten
-// bench-mode toggle can't weaken the parked-car battery protection once
-// actually installed. Resets to false on every boot (not persisted).
+// Bench mode support (PR #39): latches true the first time real CAN traffic is
+// seen on either bus this power cycle. Once set, benchMode stops suppressing
+// sleep - the unit is demonstrably harnessed - so a forgotten toggle can't
+// weaken the parked-car battery protection. Not persisted; resets on boot.
 static bool everSawCANThisSession = false;
 
 // Aggressive-mode state.
@@ -280,14 +280,12 @@ void updateTriggers(void *arg)
     hasCANHaldex = (lastCANHaldexTick > 0) && ((now - (uint32_t)lastCANHaldexTick) <= canHealthTimeoutMs);    // 1000ms timeout for CAN health - if we haven't received a message in 1000ms, consider the CAN connection unhealthy
 
     if (hasCANChassis || hasCANHaldex)
-    {
-      everSawCANThisSession = true; // real bus activity seen - bench mode (if on) stops suppressing sleep from here on
-    }
+      everSawCANThisSession = true; // real bus seen: bench mode (if on) stops holding WiFi up from here on
 
-    // Low-power WiFi management (gated on canSleepEnabled - the UI/EEP toggle)
+    // Low-power WiFi management
     // Standalone: Haldex bus fps. OEM: chassis bus fps.
     //
-    // LP_WATCHING : canSleepEnabled + no clients + canActive false for watchMs -> shut WiFi+LED -> LP_SLEEPING
+    // LP_WATCHING : no clients + canActive false for watchMs -> shut WiFi+LED -> LP_SLEEPING
     // LP_SLEEPING : canActive -> restore WiFi -> LP_WATCHING
     //               CPU auto-sleeps via esp_pm_configure in main.cpp when FreeRTOS is idle.
     //
@@ -322,22 +320,28 @@ void updateTriggers(void *arg)
         }
       }
 
-      const bool noClients = (WiFi.softAPgetStationNum() == 0) && (WiFi.getMode() != WIFI_OFF);
+      // "No clients" = nobody joined to our AP AND no browser polling the UI.
+      // The second half covers a phone/laptop reaching us through the home
+      // router (bridge mode), which softAPgetStationNum() can't see - without
+      // it the controller could switch WiFi off in the middle of an OTA update
+      // done over the bridge on the bench. An upload in progress always holds.
+      const bool noClients = (WiFi.softAPgetStationNum() == 0) && (WiFi.getMode() != WIFI_OFF) && !otaWebClientActive();
       // Standalone: Haldex fps >= fixed 50 fps threshold.
       // OEM: chassis fps >= lpWakeThresholdFps (UI slider, default 50).
       const bool canActive = isStandalone ? (lpHaldexFps >= 50U)
                                           : (lpChassisFps >= lpWakeThresholdFps);
-      // Bench mode: while enabled AND no real CAN has ever been seen this
-      // session, treat as always "active" so LP_WATCHING never sleeps - keeps
-      // the AP up indefinitely for a bench-only tuning session with no harness
-      // connected. The instant real CAN traffic appears (everSawCANThisSession
-      // latches true), this stops applying and normal sleep behavior resumes.
-      const bool benchModeSuppressing = benchMode && !everSawCANThisSession;
+      // Bench mode: with no real CAN seen this session, behave as if the bus
+      // were active so LP_WATCHING never sleeps. The instant traffic appears
+      // (everSawCANThisSession latches) this stops applying.
+      const bool benchHold = benchMode && !everSawCANThisSession;
 
       switch (lpState)
       {
       case LP_WATCHING:
-        if (canSleepEnabled && noClients && !canActive && !benchModeSuppressing)
+        // canSleepEnabled is the UI toggle: it used to gate only the CPU
+        // frequency scaling in main.cpp, never this WiFi shutdown, so turning
+        // it off did nothing visible (PR #39 fix).
+        if (canSleepEnabled && noClients && !canActive && !benchHold)
         {
           if (lpNoClientsSince == 0)
             lpNoClientsSince = now;

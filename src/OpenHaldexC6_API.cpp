@@ -2,10 +2,11 @@
 #include <OpenHaldexC6_UDS.h>
 #include <OpenHaldexC6_Calculations.h>
 #include <OpenHaldexC6_WiFi.h>
+#include <OpenHaldexC6_OTA.h> // otaNoteWebActivity()
 
 #include <cstring>
-#include <vector>
-#include <algorithm>
+#include <vector>    // /api/wifi/scan de-dup
+#include <algorithm> // std::sort
 
 // helper function to calculate CPU usage percentage based on FreeRTOS task run time stats
 static int getCPUUsagePercent() 
@@ -137,18 +138,67 @@ static void statusOutgoing(AsyncWebServerRequest *request)
     data["handbrakeIn"] = handbrakeSignalActive;
     data["handbrakeOut"] = handbrakeActive;
 
-    // CAN-decoded brake / handbrake state (MQB has both; PQ has brake only -
-    // PQ handbrake remains on the physical GPIO).
+    // Steering angle + health. Only gens with a steering source (2/4/50/52).
+    // Stale/absent/unsupported -> unhealthy + null (shown as "--"). Magnitude only.
+    {
+        const bool steerSupported = (haldexGeneration == 2 || haldexGeneration == 4 ||
+                                     haldexGeneration == 50 || haldexGeneration == 52);
+        const bool steerHealthy = steerSupported && chassisOk && received_steering_ms != 0 &&
+                                  (millis() - received_steering_ms) <= steeringStaleMs;
+        data["steeringHealthy"] = steerHealthy;
+        if (steerHealthy)
+            data["steeringAngle"] = (int)(fabsf(received_steering_angle) + 0.5f);
+        else
+            data["steeringAngle"] = nullptr;
+    }
+
+    // Per-corner slip [FL, FR, RL, RR] as signed %. Fresh within 500 ms; a -128
+    // sentinel (or stale data) reports null so the UI blanks rather than showing 0.
+    {
+        JsonArray slip = data["slip"].to<JsonArray>();
+        const bool slipFresh = lastCornerSlipMs != 0 && (millis() - lastCornerSlipMs) < 500;
+        for (uint8_t i = 0; i < 4; i++)
+        {
+            if (slipFresh && cornerSlip[i] != -128)
+                slip.add((int)cornerSlip[i]);
+            else
+                slip.add(nullptr);
+        }
+    }
+
+    // Steering-angle lock reduction (engagement-split display). Active only when
+    // scaling ran this cycle and actually pulled the request back.
+    data["steeringScaleEnabled"] = steeringScaleEnabled;
+    if (steering_scale_is_active())
+    {
+        data["steeringScaleActive"] = true;
+        data["lockRequested"] = steering_scale_requested_pct();
+        data["lockScaled"] = steering_scale_result_pct();
+    }
+    else
+    {
+        data["steeringScaleActive"] = false;
+        data["lockRequested"] = nullptr;
+        data["lockScaled"] = nullptr;
+    }
+
+    // CAN-decoded brake / handbrake state.
+    //   Brake:     PQ Motor_2 MO2_BLS (Gen2/4/51), MQB ESP_05 ESP_Fahrer_bremst (Gen5).
+    //   Handbrake: PQ Kombi_1 KO1_Handbremse (Gen2/4/51), MQB Kombi_01 KBI_Handbremse (Gen5).
+    // Gen1 (1J0) and the GM/Ford variants have no CAN handbrake decode -> null ("--").
     if (chassisOk)
     {
         data["brakeFromCAN"] = brakeFromCAN;
-        if (haldexGeneration == 50)
+        const bool hbFromCANSupported = (haldexGeneration == 2 || haldexGeneration == 4 ||
+                                         haldexGeneration == 50 || haldexGeneration == 51 ||
+                                         haldexGeneration == 52);
+        if (hbFromCANSupported)
         {
             data["handbrakeFromCAN"] = handbrakeFromCAN;
         }
         else
         {
-            data["handbrakeFromCAN"] = nullptr; // for non-MQB platforms, set to null (displayed as "--" in the UI) since we don't have this data from CAN
+            data["handbrakeFromCAN"] = nullptr; // no CAN handbrake source for this platform (displayed as "--" in the UI)
         }
     }
     else
@@ -211,9 +261,12 @@ static void statusOutgoing(AsyncWebServerRequest *request)
     data["lastChassisMs"] = lastCANChassisTick > 0 ? (millis() - lastCANChassisTick) : 0;
     data["lastHaldexMs"] = lastCANHaldexTick > 0 ? (millis() - lastCANHaldexTick) : 0;
     data["diagToolActive"] = externalDiagActive(); // external scanner detected -> our live polling auto-paused
+    data["udsSession"] = udsSessionMode;           // 0 idle, 1 default session, 3 extended session (Gen5 poller)
+    data["canTxDropBus0"] = canTxDropBus0;         // canTransmit() failures since boot (chassis)
+    data["canTxDropBus1"] = canTxDropBus1;         // canTransmit() failures since boot (Haldex)
 
-    // UDS live data is Gen5 (MQB 0CQ / PQ 0AY) only.
-    if (haldexOk && liveDiagEnabled && (haldexGeneration == 50 || haldexGeneration == 51))
+    // UDS live data is Gen5 family (0CQ MQB / 0AY / VAQ) only.
+    if (haldexOk && liveDiagEnabled && isGen5Family())
     {
         JsonObject uds = data["uds"].to<JsonObject>();
         uds["terminalVoltage"] = udsTerminalVoltage;
@@ -278,6 +331,7 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
     data["disableThrottle"] = disableThrottle;
     data["mode"] = lastMode;
     data["lockReleaseRatePerSec"] = lockReleaseRatePerSec;
+    data["steeringScaleEnabled"] = steeringScaleEnabled;
     data["FW_VERSION"] = FW_VERSION;
 
     // bools
@@ -291,6 +345,10 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
     data["disableOnboardButton"] = disableOnboardButton;
     data["disableExternalButton"] = disableExternalButton;
     data["fixHunting"] = fixHunting;
+    data["dangerZoneEnabled"] = dangerZoneEnabled;
+    data["bpkCeilingNm"] = bpkCeilingNm;
+    data["esp14MinFloorPct"] = esp14MinFloorPct;
+    data["longLearnNotes"] = longLearnNotes;
     data["canSleepEnabled"] = canSleepEnabled;
     data["canSleepAggressive"] = canSleepAggressive;
     data["benchMode"] = benchMode;
@@ -335,6 +393,18 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
         }
     }
 
+    // steering-angle lock-scale curve (breakpoints + 0-100% multipliers)
+    JsonArray steeringArrayJSON = data["steeringArray"].to<JsonArray>();
+    for (uint8_t i = 0; i < steeringArrayCount; i++)
+    {
+        steeringArrayJSON.add(steeringArray[i]);
+    }
+    JsonArray steeringScaleJSON = data["steeringLockScaleArray"].to<JsonArray>();
+    for (uint8_t i = 0; i < steeringArrayCount; i++)
+    {
+        steeringScaleJSON.add(steeringLockScaleArray[i]);
+    }
+
     // Frame-edit blocks for the current generation (per-CAN-ID passthrough toggles).
     {
         int gi = frameEditGenIdx(haldexGeneration);
@@ -350,6 +420,7 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
                     o["name"] = frameEditBlocks[i].name;
                     o["canId"] = frameEditBlocks[i].canId;
                     o["enabled"] = frameEditEnabled((uint8_t)gi, frameEditBlocks[i].bit);
+                    o["def"] = (bool)((frameEditMaskDefaults[gi] >> frameEditBlocks[i].bit) & 0x1ULL); // in the normal-mode default set
                 }
             }
         }
@@ -371,10 +442,11 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
     if (data["haldexGeneration"].is<uint8_t>())
     {
         int generation = data["haldexGeneration"];
-        if (generation == 1 || generation == 2 || generation == 4 || generation == 50 || generation == 51 || generation == 41)
+        if (generation == 1 || generation == 2 || generation == 4 || generation == 50 || generation == 51 || generation == 52 || generation == 41)
         {
             haldexGeneration = (uint8_t)generation;
             lastMode = generation;
+            udsApplyDefaultIds(); // move the UDS pair with the generation (no-op while the serial lab has it pinned)
         }
     }
 
@@ -519,6 +591,26 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
         fixHunting = data["fixHunting"];
     }
 
+    if (data["dangerZoneEnabled"].is<bool>())
+    {
+        dangerZoneEnabled = data["dangerZoneEnabled"];
+    }
+
+    if (data["bpkCeilingNm"].is<uint16_t>())
+    {
+        bpkCeilingNm = (uint16_t)constrain((int)data["bpkCeilingNm"], 10, 500);
+    }
+
+    if (data["esp14MinFloorPct"].is<uint8_t>())
+    {
+        esp14MinFloorPct = (uint8_t)constrain((int)data["esp14MinFloorPct"], 0, 100);
+    }
+
+    if (data["steeringScaleEnabled"].is<bool>())
+    {
+        steeringScaleEnabled = data["steeringScaleEnabled"];
+    }
+
     if (data["canSleepEnabled"].is<bool>())
     {
         canSleepEnabled = data["canSleepEnabled"];
@@ -572,6 +664,14 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
         ledBrightness = (uint8_t)constrain((int)data["ledBrightness"], 0, 255);
     }
 
+    // Long Learn chassis/car notes (free text, exported with the report)
+    if (data["longLearnNotes"].is<const char *>())
+    {
+        const char *n = data["longLearnNotes"];
+        memset(longLearnNotes, 0, sizeof(longLearnNotes));
+        strncpy(longLearnNotes, n, LL_NOTES_LEN);
+    }
+
     // Frame-edit gating: reset all masks to defaults, or toggle a single block
     // (bit) for the currently-selected generation.
     if (data["frameEditReset"].is<bool>() && data["frameEditReset"].as<bool>())
@@ -594,6 +694,38 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
 
     JsonDocument resp;
     resp["ok"] = true;
+    sendJSON(request, 200, resp);
+}
+
+// Long Learn start: {"testAll": bool}. Same pre-flight as the manual learn plus
+// a check that the generation actually has gated blocks to bisect.
+static void longLearnStartIncoming(AsyncWebServerRequest *request, const String &body)
+{
+    JsonDocument in;
+    bool testAll = false;
+    if (deserializeJson(in, body) == DeserializationError::Ok && in["testAll"].is<bool>())
+        testAll = in["testAll"].as<bool>();
+
+    JsonDocument resp;
+    if (!hasCANHaldex)
+    {
+        resp["ok"] = false;
+        resp["error"] = "No Haldex CAN data available";
+    }
+    else if (frameEditGenIdx(haldexGeneration) < 0)
+    {
+        resp["ok"] = false;
+        resp["error"] = "Frame editing is not available for this generation";
+    }
+    else if (!startLongLearn(testAll))
+    {
+        resp["ok"] = false;
+        resp["error"] = "A learn is already running";
+    }
+    else
+    {
+        resp["ok"] = true;
+    }
     sendJSON(request, 200, resp);
 }
 
@@ -638,36 +770,57 @@ static void tuneIncoming(AsyncWebServerRequest *request, const String &body)
     JsonArray throttleArrayJSON = data["throttleArray"].as<JsonArray>();
     JsonArray lockArrayJSON = data["lockArray"].as<JsonArray>();
 
-    if (speedArrayJSON.size() != speedArrayCount || throttleArrayJSON.size() != throttleArrayCount)
+    // Speed/throttle/lock map (optional - only applied when present in the payload).
+    if (!speedArrayJSON.isNull() || !throttleArrayJSON.isNull() || !lockArrayJSON.isNull())
     {
-        DEBUG("Invalid Array Length");
-        return;
-    }
-
-    // fill throttle array
-    for (uint8_t i = 0; i < throttleArrayCount; i++)
-    {
-        throttleArray[i] = (uint8_t)(throttleArrayJSON[i] | 0);
-    }
-
-    // fill speed array
-    for (uint8_t i = 0; i < speedArrayCount; i++)
-    {
-        speedArray[i] = (uint16_t)(speedArrayJSON[i] | 0);
-    }
-
-    // fill lock array
-    for (uint8_t throttle = 0; throttle < throttleArrayCount; throttle++)
-    {
-        JsonArray throttleRow = lockArrayJSON[throttle].as<JsonArray>();
-        if (throttleRow.size() != throttleArrayCount)
+        if (speedArrayJSON.size() != speedArrayCount || throttleArrayJSON.size() != throttleArrayCount)
         {
-            DEBUG("Invalid lock array");
+            DEBUG("Invalid Array Length");
             return;
         }
-        for (uint8_t speed = 0; speed < speedArrayCount; speed++)
+
+        // fill throttle array
+        for (uint8_t i = 0; i < throttleArrayCount; i++)
         {
-            lockArray[throttle][speed] = (uint8_t)throttleRow[speed];
+            throttleArray[i] = (uint8_t)(throttleArrayJSON[i] | 0);
+        }
+
+        // fill speed array
+        for (uint8_t i = 0; i < speedArrayCount; i++)
+        {
+            speedArray[i] = (uint16_t)(speedArrayJSON[i] | 0);
+        }
+
+        // fill lock array
+        for (uint8_t throttle = 0; throttle < throttleArrayCount; throttle++)
+        {
+            JsonArray throttleRow = lockArrayJSON[throttle].as<JsonArray>();
+            if (throttleRow.size() != throttleArrayCount)
+            {
+                DEBUG("Invalid lock array");
+                return;
+            }
+            for (uint8_t speed = 0; speed < speedArrayCount; speed++)
+            {
+                lockArray[throttle][speed] = (uint8_t)throttleRow[speed];
+            }
+        }
+    }
+
+    // Steering-angle lock-scale curve (optional - breakpoints + 0-100% multipliers).
+    JsonArray steeringArrayJSON = data["steeringArray"].as<JsonArray>();
+    JsonArray steeringScaleJSON = data["steeringLockScaleArray"].as<JsonArray>();
+    if (!steeringArrayJSON.isNull() || !steeringScaleJSON.isNull())
+    {
+        if (steeringArrayJSON.size() != steeringArrayCount || steeringScaleJSON.size() != steeringArrayCount)
+        {
+            DEBUG("Invalid steering array length");
+            return;
+        }
+        for (uint8_t i = 0; i < steeringArrayCount; i++)
+        {
+            steeringArray[i] = (uint16_t)(steeringArrayJSON[i] | 0);
+            steeringLockScaleArray[i] = (uint8_t)constrain((int)(steeringScaleJSON[i] | 0), 0, 100);
         }
     }
 
@@ -676,29 +829,82 @@ static void tuneIncoming(AsyncWebServerRequest *request, const String &body)
     sendJSON(request, 200, resp);
 }
 
+// Served at "/" when the web UI filesystem is missing, broken or empty (a
+// filesystem OTA that failed, a fresh chip with only firmware on it). Needs
+// nothing from LittleFS: two uploads straight to the OTA endpoints, web UI
+// first. Deliberately plain - it has to work from any phone browser.
+static const char RECOVERY_HTML[] PROGMEM = R"HTML(<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenHaldex-C6 recovery</title><style>body{font-family:sans-serif;background:#111;color:#eee;margin:0;padding:16px;max-width:520px}
+h1{font-size:20px}p{line-height:1.5;color:#bbb}code{color:#fff}section{border:1px solid #333;border-radius:10px;padding:14px;margin:14px 0}
+input[type=file]{display:block;margin:10px 0;max-width:100%}button{background:#2a6df4;color:#fff;border:0;border-radius:8px;padding:10px 16px;font-size:15px}
+button:disabled{opacity:.5}.s{margin-top:8px;font-size:14px;color:#9c9}.e{color:#f77}.bar{height:6px;background:#333;border-radius:3px;margin-top:8px}.bar i{display:block;height:100%;width:0;background:#2a6df4;border-radius:3px}</style></head>
+<body><h1>OpenHaldex-C6 &middot; web UI missing</h1>
+<p>The controller is running (firmware <code>%FW%</code>) but its web-interface partition holds no usable filesystem - usually a filesystem update that stopped part-way. Nothing else is affected. Upload the two files from the release folder on GitHub (<code>Releases/V&hellip;/</code>): the web UI first, then the firmware if you were mid-update.</p>
+<section><strong>1. Web UI</strong> &mdash; <code>littlefs.bin</code><input type="file" id="fs" accept=".bin"><button id="fsb">Upload web UI</button><div class="bar"><i id="fsp"></i></div><div class="s" id="fss"></div></section>
+<section><strong>2. Firmware</strong> &mdash; <code>firmware.bin</code> (optional; reboots when done)<input type="file" id="fw" accept=".bin"><button id="fwb">Upload firmware</button><div class="bar"><i id="fwp"></i></div><div class="s" id="fws"></div></section>
+<section><strong>Partition diagnostics</strong> <button id="dgb" style="float:right;padding:6px 10px;font-size:13px">Refresh</button><pre id="dg" style="white-space:pre-wrap;word-break:break-all;font-size:12px;color:#bbb;margin:10px 0 0">loading&hellip;</pre></section>
+<script>
+function diag(){var x=new XMLHttpRequest();x.open('GET','/ota/fsdiag');x.onload=function(){try{var d=JSON.parse(x.responseText),o='';for(var k in d)o+=k+': '+d[k]+'\n';document.getElementById('dg').textContent=o}catch(e){document.getElementById('dg').textContent=x.responseText}};x.send()}
+document.getElementById('dgb').onclick=diag;diag();
+function up(k,url,field,done,then){var f=document.getElementById(k).files[0],b=document.getElementById(k+'b'),s=document.getElementById(k+'s'),p=document.getElementById(k+'p');
+if(!f){s.textContent='Pick the file first.';s.className='s e';return}b.disabled=true;s.className='s';s.textContent='Uploading…';
+var d=new FormData();d.append(field,f,f.name);var x=new XMLHttpRequest();x.open('POST',url+'?size='+f.size);
+x.upload.onprogress=function(e){if(e.lengthComputable)p.style.width=Math.round(e.loaded/e.total*100)+'%'};
+x.onload=function(){if(x.status===200){s.textContent=done;if(then)then()}else{s.className='s e';s.textContent=x.responseText||('Failed ('+x.status+')');b.disabled=false}};
+x.onerror=function(){s.className='s e';s.textContent='Upload failed - check the connection and retry.';b.disabled=false};x.send(d)}
+document.getElementById('fsb').onclick=function(){up('fs','/ota/update/fs','filesystem','Web UI installed - opening it…',function(){setTimeout(function(){location.reload()},1500)})};
+document.getElementById('fwb').onclick=function(){up('fw','/ota/update','firmware','Firmware installed - rebooting. Reload this page in ~20 s.')};
+</script></body></html>)HTML";
+
 // setup webserver function
 void setupWebServer()
 {
-    if (!LittleFS.begin(false))
+    // The firmware never depends on the filesystem - it only holds the web UI.
+    // Mount it if it looks sane (fsMountSafe: a LittleFS superblock that fits
+    // the partition, so a half-written image can't trip an lfs assert and
+    // boot-loop us), and start the server either way: without a UI, "/" is
+    // the recovery page and the /ota/* and /api/* endpoints all still work.
+    if (fsMountSafe() && fsUiAvailable())
     {
-        DEBUG("LittleFS mount failed!"); // littleFS didn't mount
-        // add a warning visual - flashing LED?
-        return;
+        DEBUG("LittleFS mounted successfully");
     }
-    DEBUG("LittleFS mounted successfully");
+    else
+    {
+        DEBUG("LittleFS: no usable web UI - serving the recovery page at /");
+    }
 
-    // when "/" is requested, send index.html page
+    // index.html streamed from LittleFS (chunked, low-heap) with no-cache
+    // headers; it must never be cached. Decided per request, so a filesystem
+    // upload from the recovery page switches straight over to the real UI.
     webServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
-                 { request->send(LittleFS, "/index.html", "text/html"); });
+                 {
+        AsyncWebServerResponse *res;
+        if (fsUiAvailable()) {
+            res = request->beginResponse(LittleFS, "/index.html", "text/html");
+        } else {
+            String html = FPSTR(RECOVERY_HTML);
+            html.replace("%FW%", FW_VERSION);
+            res = request->beginResponse(200, "text/html", html);
+        }
+        res->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+        res->addHeader("Pragma", "no-cache");
+        request->send(res); });
 
-    webServer.serveStatic("/", LittleFS, "/").setDefaultFile("index.html"); // dunno - same as above?
+    // app.js / style.css: "no-cache" means the browser keeps a copy but asks
+    // every time (If-None-Match against the ETag the handler derives from the
+    // file's LittleFS mtime/size) and gets a 304 unless the file changed.
+    // Previously max-age=1y with a hand-bumped ?v= in index.html - which got
+    // forgotten, so phones ran a stale app.js against new HTML and buttons
+    // on new cards did nothing.
+    // The filter keeps the handler out of the way while nothing is mounted -
+    // otherwise every /api request first asks LittleFS.exists() and logs an
+    // "File system is not mounted" error.
+    webServer.serveStatic("/", LittleFS, "/").setDefaultFile("index.html").setCacheControl("no-cache")
+        .setFilter([](AsyncWebServerRequest *request) { return fsMounted(); });
 
     webServer.begin(); // begin the webServer
     DEBUG("Web server started");
-
-    // mDNS is already registered by applyWifiMode() (called from setupWiFi(), which always
-    // runs before this) - registering it again here just fails silently ("Service already
-    // exists") since the underlying ESP-IDF mdns component only allows one "http" service.
+    // mDNS is already started in setupWiFi(); don't re-init it here.
 }
 
 // setup main section for handling requests
@@ -712,7 +918,9 @@ void setupAPI()
 
     // GET /api/dashboard - retrieve live status data (polled regularly by JS)
     webServer.on("/api/dashboard", HTTP_GET, [](AsyncWebServerRequest *request)
-                 { statusOutgoing(request); });
+                 {
+                     otaNoteWebActivity(); // a browser is on the UI - hold WiFi up even if it came in via the home router
+                     statusOutgoing(request); });
 
     // GET /api/uds/read - UDS read-by-identifier helper
     webServer.on("/api/uds/read", HTTP_GET, [](AsyncWebServerRequest *request)
@@ -732,12 +940,62 @@ void setupAPI()
                      uint32_t requestId = strtoul(reqP->value().c_str(), nullptr, 16);
                      uint32_t responseId = strtoul(resP->value().c_str(), nullptr, 16);
                      uint16_t did = (uint16_t)strtoul(didP->value().c_str(), nullptr, 16);
+                     // Optional bus selector: 0 = chassis (default), 1 = Haldex side.
+                     auto busP = request->getParam("bus", false);
+                     const uint8_t bus = busP ? (uint8_t)(strtoul(busP->value().c_str(), nullptr, 10) != 0) : 0;
 
-                     OpenHaldexC6::UDS uds;
+                     // A malformed req/res parses to 0 via strtoul, which would transmit
+                     // on CAN ID 0x0 (highest priority on the bus) or wait on an ID that
+                     // never comes - reject both.
+                     if (requestId == 0 || requestId > 0x1FFFFFFFu || responseId == 0 || responseId > 0x1FFFFFFFu)
+                     {
+                         JsonDocument response;
+                         response["success"] = false;
+                         response["error"] = "Invalid request/response ID";
+                         sendJSON(request, 400, response);
+                         return;
+                     }
+
+                     // One read at a time: udsWebRespId doubles as the busy flag, and
+                     // two concurrent reads would fight over the tap queue.
+                     if (udsWebRespId != 0)
+                     {
+                         JsonDocument response;
+                         response["success"] = false;
+                         response["error"] = "UDS read already in progress";
+                         sendJSON(request, 429, response);
+                         return;
+                     }
+
+                     if (udsWebRxQueue == nullptr)
+                     {
+                         udsWebRxQueue = xQueueCreate(8, sizeof(twai_message_t));
+                     }
+                     if (udsWebRxQueue == nullptr)
+                     {
+                         JsonDocument response;
+                         response["success"] = false;
+                         response["error"] = "Out of memory";
+                         sendJSON(request, 500, response);
+                         return;
+                     }
+
+                     // Responses arrive via the parse-task copy-tap for the chosen bus
+                     // (the frame still flows through the gateway), so this never steals
+                     // frames from the bridge. The 300 ms timeout bounds how long this
+                     // handler holds the async_tcp task; single-frame replies land well
+                     // inside it.
+                     xQueueReset(udsWebRxQueue);
+                     udsWebBus = bus;
+                     udsWebRespId = responseId;
+
+                     OpenHaldexC6::UDS uds(bus ? twai_bus_1 : twai_bus_0, udsWebRxQueue);
                      uint8_t buffer[256];
                      size_t bufferLen = sizeof(buffer);
+                     const bool ok = uds.readDataByIdentifier(requestId, responseId, did, buffer, bufferLen, 300);
+                     udsWebRespId = 0;
 
-                     if (!uds.readDataByIdentifier(requestId, responseId, did, buffer, bufferLen))
+                     if (!ok)
                      {
                          JsonDocument response;
                          response["success"] = false;
@@ -834,11 +1092,221 @@ void setupAPI()
                      resp["ok"] = true;
                      sendJSON(request, 200, resp); });
 
+    // GET /api/longlearn/status - phase/progress, per-block verdicts, sweep log
+    // and live sweep position. Results stay available after the run finishes
+    // (until the next run) so the UI can show and export them.
+    webServer.on("/api/longlearn/status", HTTP_GET, [](AsyncWebServerRequest *request)
+                 {
+                     JsonDocument data;
+                     data["active"]     = (bool)longLearnActive;
+                     data["phase"]      = (uint8_t)longLearnPhase;
+                     data["sweepIdx"]   = (uint8_t)longLearnSweepIdx;
+                     data["sweepTotal"] = (uint8_t)longLearnSweepTotal;
+                     data["currentBit"] = (int)longLearnCurrentBit;
+                     data["generation"] = longLearnGeneration;
+                     data["testAll"]    = longLearnTestAll;
+                     data["floorNow"]   = esp14MinFloorPct;
+                     data["floorStart"] = longLearnFloorStart;
+                     data["floorResult"]= longLearnFloorResult;
+                     data["bpkNow"]       = bpkCeilingNm;
+                     data["bpkStart"]     = longLearnBpkStart;
+                     data["bpkAdjusted"]  = longLearnBpkAdjusted;
+                     data["fixHunting"]   = fixHunting;
+                     data["isStandalone"] = isStandalone;
+                     const uint32_t endMs = longLearnActive ? millis() : longLearnEndMs;
+                     data["elapsedS"]   = (longLearnStartMs && endMs >= longLearnStartMs) ? (endMs - longLearnStartMs) / 1000 : 0;
+                     // live sweep position (mirrors /api/learn/status)
+                     data["cf"]   = (uint8_t)haldexLearnCF;
+                     data["eng"]  = received_haldex_engagement;
+                     data["step"] = (uint8_t)haldexLearnStep;
+
+                     auto putScore = [](JsonObject o, const LearnScore &sc)
+                     {
+                         o["reach"]      = sc.reach;
+                         o["maxStep"]    = sc.maxStep;
+                         o["engageCF"]   = sc.engageCF;
+                         o["engageJump"] = sc.engageJump;
+                         o["score"]      = sc.score;
+                         o["smooth"]     = sc.smooth;
+                     };
+                     if (longLearnBaselineValid)
+                         putScore(data["baseline"].to<JsonObject>(), longLearnBaseline);
+                     if (longLearnFinalValid)
+                         putScore(data["final"].to<JsonObject>(), longLearnFinal);
+
+                     // Per-block verdicts for the generation the run belongs to
+                     // (or the current generation when idle) with live enable state.
+                     const int gi = (longLearnPhase != LL_IDLE) ? (int)longLearnGenIdx : frameEditGenIdx(haldexGeneration);
+                     char maskHex[20] = "";
+                     if (gi >= 0)
+                     {
+                         const uint64_t m = activeFrameEditMask()[gi];
+                         snprintf(maskHex, sizeof(maskHex), "0x%08lX", (unsigned long)(m & 0xFFFFFFFFULL));
+                         JsonArray blocks = data["blocks"].to<JsonArray>();
+                         for (uint16_t i = 0; i < frameEditBlockCount; i++)
+                         {
+                             if (frameEditBlocks[i].genIdx != (uint8_t)gi)
+                                 continue;
+                             JsonObject o = blocks.add<JsonObject>();
+                             o["bit"]     = frameEditBlocks[i].bit;
+                             o["name"]    = frameEditBlocks[i].name;
+                             o["canId"]   = frameEditBlocks[i].canId;
+                             o["enabled"] = (bool)((m >> frameEditBlocks[i].bit) & 0x1ULL);
+                             o["def"]     = (bool)((frameEditMaskDefaults[gi] >> frameEditBlocks[i].bit) & 0x1ULL);
+                             o["result"]  = longLearnBlockResult[frameEditBlocks[i].bit];
+                         }
+                     }
+                     data["mask"] = maskHex;
+
+                     JsonArray sweeps = data["sweeps"].to<JsonArray>();
+                     for (uint8_t i = 0; i < longLearnSweepCount; i++)
+                     {
+                         const LongLearnSweep &e = longLearnSweeps[i];
+                         JsonObject o = sweeps.add<JsonObject>();
+                         o["kind"]    = e.kind;
+                         o["bit"]     = e.bit;
+                         o["floor"]   = e.floorPct;
+                         o["bpk"]     = e.bpkNm;
+                         o["verdict"] = e.verdict;
+                         putScore(o, e.s);
+                     }
+                     sendJSON(request, 200, data); });
+
+    // POST /api/longlearn/start - optional body {"testAll": bool}
+    webServer.on(
+        "/api/longlearn/start", HTTP_POST, [](AsyncWebServerRequest *request)
+        {
+            if (request->contentLength() == 0)
+                longLearnStartIncoming(request, String("{}")); // body-less start
+        },
+        nullptr,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
+        {
+            parseJSON(request, data, len, index, total, longLearnStartIncoming);
+        });
+
+    // POST /api/longlearn/cancel - abort; previous mask/floor/table are restored
+    webServer.on("/api/longlearn/cancel", HTTP_POST, [](AsyncWebServerRequest *request)
+                 {
+                     longLearnCancel = true;
+                     haldexLearnCancel = true; // also stops the sweep in progress
+                     JsonDocument resp;
+                     resp["ok"] = true;
+                     sendJSON(request, 200, resp); });
+
     // NOTE: route registration order matters. ESPAsyncWebServer's URL matcher
     // accepts a registered "/api/wifi" handler for any URL that starts with
-    // "/api/wifi/" (see WebHandlerImpl.h canHandle). The more-specific routes 
+    // "/api/wifi/" (see WebHandlerImpl.h canHandle). The more-specific routes
     // must be registered BEFORE "/api/wifi"
-    // or POSTs to "/api/wifi/ssid" get missed 
+    // or POSTs to "/api/wifi/ssid" get missed
+
+    // ---- Bridge mode (PR #39, louij2): home-network STA alongside the AP ----
+
+    // GET /api/wifi/scan - nearby networks for the home-WiFi picker.
+    // The scan is ASYNC: the first call starts it and answers {"scanning":true};
+    // the page polls until the list comes back. A blocking scan here would sit
+    // inside the async_tcp task for 2-3 s, which is exactly the task that has
+    // to keep serving everyone else. One radio is shared between AP and STA,
+    // so the AP drops off-channel for the scan's duration either way - hence
+    // this is a manual action behind the SSID field, never automatic.
+    webServer.on("/api/wifi/scan", HTTP_GET, [](AsyncWebServerRequest *request)
+                 {
+                     JsonDocument resp;
+                     int16_t n = WiFi.scanComplete();
+                     if (n == WIFI_SCAN_RUNNING)
+                     {
+                         resp["scanning"] = true;
+                     }
+                     else if (n == WIFI_SCAN_FAILED || n < 0)
+                     {
+                         // nothing in progress (or a previous one failed): kick one off
+                         WiFi.scanNetworks(true /*async*/, false /*hidden*/);
+                         resp["scanning"] = true;
+                     }
+                     else
+                     {
+                         resp["scanning"] = false;
+                         JsonArray nets = resp["networks"].to<JsonArray>();
+                         // de-duplicate by SSID keeping the strongest, then sort strongest first
+                         struct Net { String ssid; int32_t rssi; bool secure; };
+                         std::vector<Net> list;
+                         for (int16_t i = 0; i < n; i++)
+                         {
+                             String ssid = WiFi.SSID(i);
+                             if (ssid.length() == 0) continue; // hidden - type it in instead
+                             int32_t rssi = WiFi.RSSI(i);
+                             bool merged = false;
+                             for (auto &e : list)
+                                 if (e.ssid == ssid) { if (rssi > e.rssi) e.rssi = rssi; merged = true; break; }
+                             if (!merged) list.push_back({ssid, rssi, WiFi.encryptionType(i) != WIFI_AUTH_OPEN});
+                         }
+                         std::sort(list.begin(), list.end(), [](const Net &a, const Net &b) { return a.rssi > b.rssi; });
+                         for (auto &e : list)
+                         {
+                             JsonObject o = nets.add<JsonObject>();
+                             o["ssid"] = e.ssid;
+                             o["rssi"] = e.rssi;
+                             o["secure"] = e.secure;
+                         }
+                         WiFi.scanDelete(); // next GET starts a fresh scan
+                     }
+                     sendJSON(request, 200, resp); });
+
+    // POST /api/wifi/sta/reset - forget the home network, back to AP only
+    webServer.on("/api/wifi/sta/reset", HTTP_POST, [](AsyncWebServerRequest *request)
+                 {
+                     resetWifiSta();
+                     JsonDocument resp;
+                     resp["ok"] = true;
+                     sendJSON(request, 200, resp); });
+
+    // GET /api/wifi/sta - bridge-mode status. Password is write-only, never returned.
+    webServer.on("/api/wifi/sta", HTTP_GET, [](AsyncWebServerRequest *request)
+                 {
+                     otaNoteWebActivity();
+                     JsonDocument resp;
+                     resp["ssid"] = wifiStaSsid;
+                     resp["passwordSet"] = (strlen(wifiStaPassword) >= 8);
+                     resp["connected"] = wifiStaConnected;
+                     resp["ip"] = wifiStaIP;
+                     if (wifiStaConnected) resp["rssi"] = WiFi.RSSI();
+                     else resp["rssi"] = nullptr;
+                     sendJSON(request, 200, resp); });
+
+    // POST /api/wifi/sta {ssid, password} - set (empty ssid = disable) and restart AP(+STA)
+    webServer.on(
+        "/api/wifi/sta", HTTP_POST, [](AsyncWebServerRequest *request)
+        { (void)request; }, nullptr,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
+        {
+            parseJSON(request, data, len, index, total, [](AsyncWebServerRequest *req, const String &body)
+                      {
+                JsonDocument d;
+                JsonDocument resp;
+                auto fail = [&](const char *why) { resp["ok"] = false; resp["error"] = why; sendJSON(req, 400, resp); };
+                if (deserializeJson(d, body) != DeserializationError::Ok) { fail("Invalid JSON"); return; }
+                if (!d["ssid"].is<const char *>()) { fail("Missing 'ssid' field"); return; }
+                const char *newSsid = d["ssid"];
+                const size_t ssidLen = strlen(newSsid);
+                if (ssidLen > 32) { fail("SSID too long (max 32)"); return; }
+                for (size_t i = 0; i < ssidLen; ++i)
+                {
+                    unsigned char c = (unsigned char)newSsid[i];
+                    if (c < 0x20 || c > 0x7E) { fail("SSID must be printable ASCII"); return; }
+                }
+                const char *newPwd = d["password"].is<const char *>() ? d["password"].as<const char *>() : "";
+                const size_t pwdLen = strlen(newPwd);
+                if (pwdLen > 0 && pwdLen < 8) { fail("Password must be at least 8 characters, or empty for an open network"); return; }
+                if (pwdLen >= 65) { fail("Password too long (max 64)"); return; }
+                memset(wifiStaSsid, 0, sizeof(wifiStaSsid));
+                strncpy(wifiStaSsid, newSsid, sizeof(wifiStaSsid) - 1);
+                memset(wifiStaPassword, 0, sizeof(wifiStaPassword));
+                if (pwdLen > 0) strncpy(wifiStaPassword, newPwd, sizeof(wifiStaPassword) - 1);
+                rebootWiFi = true; // restart AP(+STA) with the new credentials
+                resp["ok"] = true;
+                resp["ssid"] = wifiStaSsid;
+                sendJSON(req, 200, resp); });
+        });
 
     // POST /api/wifi/ssid/reset - restore factory SSID and restart AP
     webServer.on("/api/wifi/ssid/reset", HTTP_POST, [](AsyncWebServerRequest *request)
@@ -904,137 +1372,6 @@ void setupAPI()
                 JsonDocument resp;
                 resp["ok"] = true;
                 resp["ssid"] = wifiSsid;
-                sendJSON(req, 200, resp); });
-        });
-
-    // GET /api/wifi/scan - blocking scan for nearby networks, for the bridge-mode SSID picker.
-    // NOTE: WiFi.scanNetworks() briefly disrupts the AP (this chip has one radio, shared
-    // between AP and STA - a scan channel-hops away from the AP's channel for a couple of
-    // seconds). Acceptable for a manual, occasional user action; not something to call
-    // automatically or on a timer.
-    webServer.on("/api/wifi/scan", HTTP_GET, [](AsyncWebServerRequest *request)
-                 {
-                     struct NetInfo { String ssid; int32_t rssi; bool secure; };
-                     std::vector<NetInfo> nets;
-
-                     int n = WiFi.scanNetworks(false, false);
-                     for (int i = 0; i < n; i++)
-                     {
-                         String ssid = WiFi.SSID(i);
-                         if (ssid.length() == 0) continue; // hidden network - use manual entry instead
-                         int32_t rssi = WiFi.RSSI(i);
-                         bool secure = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
-
-                         bool merged = false;
-                         for (auto &net : nets)
-                         {
-                             if (net.ssid == ssid)
-                             {
-                                 if (rssi > net.rssi) net.rssi = rssi; // keep strongest if seen on multiple channels/BSSIDs
-                                 merged = true;
-                                 break;
-                             }
-                         }
-                         if (!merged) nets.push_back({ssid, rssi, secure});
-                     }
-                     WiFi.scanDelete();
-
-                     std::sort(nets.begin(), nets.end(), [](const NetInfo &a, const NetInfo &b)
-                               { return a.rssi > b.rssi; });
-
-                     JsonDocument resp;
-                     JsonArray networksJSON = resp["networks"].to<JsonArray>();
-                     for (auto &net : nets)
-                     {
-                         JsonObject o = networksJSON.add<JsonObject>();
-                         o["ssid"] = net.ssid;
-                         o["rssi"] = net.rssi;
-                         o["secure"] = net.secure;
-                     }
-                     sendJSON(request, 200, resp); });
-
-    // POST /api/wifi/sta/reset - disable bridge mode (clear home-network SSID+password) and restart AP-only
-    webServer.on("/api/wifi/sta/reset", HTTP_POST, [](AsyncWebServerRequest *request)
-                 {
-                     resetWifiSta();
-                     JsonDocument resp;
-                     resp["ok"] = true;
-                     sendJSON(request, 200, resp); });
-
-    // GET /api/wifi/sta - return bridge-mode (home network) status; password is write-only, never returned
-    webServer.on("/api/wifi/sta", HTTP_GET, [](AsyncWebServerRequest *request)
-                 {
-                     JsonDocument resp;
-                     resp["ssid"] = wifiStaSsid;
-                     resp["passwordSet"] = (strlen(wifiStaPassword) >= 8);
-                     resp["connected"] = wifiStaConnected;
-                     resp["ip"] = wifiStaIP;
-                     if (wifiStaConnected)
-                     {
-                         resp["rssi"] = WiFi.RSSI();
-                     }
-                     else
-                     {
-                         resp["rssi"] = nullptr;
-                     }
-                     sendJSON(request, 200, resp); });
-
-    // POST /api/wifi/sta - set (or clear) the home-network SSID/password for bridge mode; AP+STA restart immediately
-    webServer.on(
-        "/api/wifi/sta", HTTP_POST, [](AsyncWebServerRequest *request)
-        { (void)request; }, nullptr,
-        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
-        {
-            parseJSON(request, data, len, index, total, [](AsyncWebServerRequest *req, const String &body)
-                      {
-                JsonDocument d;
-                if (deserializeJson(d, body) != DeserializationError::Ok)
-                {
-                    JsonDocument resp; resp["ok"] = false; resp["error"] = "Invalid JSON";
-                    sendJSON(req, 400, resp); return;
-                }
-                if (!d["ssid"].is<const char *>())
-                {
-                    JsonDocument resp; resp["ok"] = false; resp["error"] = "Missing 'ssid' field";
-                    sendJSON(req, 400, resp); return;
-                }
-                const char *newSsid = d["ssid"];
-                const size_t ssidLen = strlen(newSsid);
-                // unlike the AP SSID, an empty string here is valid - it disables bridge mode
-                if (ssidLen > 32)
-                {
-                    JsonDocument resp; resp["ok"] = false; resp["error"] = "SSID too long (max 32)";
-                    sendJSON(req, 400, resp); return;
-                }
-                for (size_t i = 0; i < ssidLen; ++i)
-                {
-                    unsigned char c = (unsigned char)newSsid[i];
-                    if (c < 0x20 || c > 0x7E)
-                    {
-                        JsonDocument resp; resp["ok"] = false; resp["error"] = "SSID must be printable ASCII";
-                        sendJSON(req, 400, resp); return;
-                    }
-                }
-                const char *newPwd = d["password"].is<const char *>() ? d["password"].as<const char *>() : "";
-                const size_t pwdLen = strlen(newPwd);
-                if (pwdLen > 0 && pwdLen < 8)
-                {
-                    JsonDocument resp; resp["ok"] = false; resp["error"] = "Password must be at least 8 characters or empty";
-                    sendJSON(req, 400, resp); return;
-                }
-                if (pwdLen >= 65)
-                {
-                    JsonDocument resp; resp["ok"] = false; resp["error"] = "Password too long (max 64)";
-                    sendJSON(req, 400, resp); return;
-                }
-                memset(wifiStaSsid, 0, sizeof(wifiStaSsid));
-                strncpy(wifiStaSsid, newSsid, sizeof(wifiStaSsid) - 1);
-                memset(wifiStaPassword, 0, sizeof(wifiStaPassword));
-                if (pwdLen > 0) strncpy(wifiStaPassword, newPwd, sizeof(wifiStaPassword) - 1);
-                rebootWiFi = true; // restart AP(+STA) with new bridge-mode credentials
-                JsonDocument resp;
-                resp["ok"] = true;
-                resp["ssid"] = wifiStaSsid;
                 sendJSON(req, 200, resp); });
         });
 

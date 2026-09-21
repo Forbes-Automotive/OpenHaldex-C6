@@ -1,12 +1,127 @@
 #include <OpenHaldexC6_WiFi.h>
 #include <cstring>
+#include <esp_netif.h>
+#include <dhcpserver/dhcpserver.h>
 
 // Legacy WiFi implementation - now a stub
 // All WiFi functionality has moved to OpenHaldexC6_WebServer.cpp
-
-static void softAPStart()
+// ---------------------------------------------------------------------------
+static void softAPLocalOnly()
 {
-  WiFi.softAPConfig(IPAddress(192, 168, 1, 1), IPAddress(192, 168, 1, 1), IPAddress(255, 255, 255, 0));
+  esp_netif_t *ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+  if (ap == NULL)
+    return;
+  esp_netif_dhcps_stop(ap);
+  dhcps_offer_t offer = 0; // clear OFFER_ROUTER: no gateway in DHCP offers
+  esp_netif_dhcps_option(ap, ESP_NETIF_OP_SET, ESP_NETIF_ROUTER_SOLICITATION_ADDRESS, &offer, sizeof(offer));
+  esp_netif_dhcps_option(ap, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER, &offer, sizeof(offer)); // no DNS either
+  esp_netif_dhcps_start(ap);
+}
+
+// ---------------------------------------------------------------------------
+// Bridge mode (PR #39): optionally join a home/garage network as a station as
+// well. One radio is shared between AP and STA, and every STA connect attempt
+// scans all channels, pulling the AP off its own channel for a second or two.
+// That is fine when the network is there (one attempt, done), but with the
+// home SSID saved and the car parked anywhere else the core's auto-reconnect
+// would re-scan forever and the AP would stutter for whoever is in the car.
+// So: try hard for a short window after (re)start, then back off to one
+// attempt every few minutes.
+// ---------------------------------------------------------------------------
+static const uint32_t STA_INITIAL_WINDOW_MS = 20000;      // keep the core's auto-reconnect for this long after start
+static const uint32_t STA_RETRY_INTERVAL_MS = 5UL * 60000; // then one fresh attempt this often
+static uint32_t staStartedMs = 0;   // when the current connect window opened
+static uint32_t staLastAttemptMs = 0;
+static bool staBackedOff = false;   // auto-reconnect disabled, we're on the slow retry
+
+static void staBegin()
+{
+  if (strlen(wifiStaPassword) >= 8)
+    WiFi.begin(wifiStaSsid, wifiStaPassword);
+  else
+    WiFi.begin(wifiStaSsid); // open network
+  staLastAttemptMs = millis();
+}
+
+static void staStart()
+{
+  wifiStaConnected = false;
+  wifiStaIP[0] = '\0';
+  staBackedOff = false;
+  if (wifiStaSsid[0] == '\0')
+    return; // bridge mode off - startSoftAP() stays in plain WIFI_AP
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.persistent(false); // credentials live in our EEP, not the core's NVS blob
+  WiFi.setAutoReconnect(true);
+  WiFi.setMinSecurity(strlen(wifiStaPassword) >= 8 ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN); // core default refuses open networks
+  staStartedMs = millis();
+  staBegin();
+  DEBUG("WiFi bridge mode: joining \"%s\"...", wifiStaSsid);
+}
+
+// Called from loop(): tracks the STA connection, picks up its IP, and runs the
+// back-off described above. No-op when bridge mode is off.
+void pollWifiSta()
+{
+  if (wifiStaSsid[0] == '\0')
+    return;
+  const uint32_t now = millis();
+  const bool nowConnected = (WiFi.status() == WL_CONNECTED);
+  if (nowConnected && !wifiStaConnected)
+  {
+    strncpy(wifiStaIP, WiFi.localIP().toString().c_str(), sizeof(wifiStaIP) - 1);
+    wifiStaIP[sizeof(wifiStaIP) - 1] = '\0';
+    DEBUG("WiFi bridge mode: connected to \"%s\" as %s", wifiStaSsid, wifiStaIP);
+    // Connected: let the core handle brief drop-outs again.
+    if (staBackedOff)
+    {
+      WiFi.setAutoReconnect(true);
+      staBackedOff = false;
+    }
+    staStartedMs = now; // a later drop gets a fresh fast window
+  }
+  else if (!nowConnected && wifiStaConnected)
+  {
+    wifiStaIP[0] = '\0';
+    DEBUG("WiFi bridge mode: lost \"%s\"", wifiStaSsid);
+  }
+  wifiStaConnected = nowConnected;
+
+  if (!nowConnected)
+  {
+    if (!staBackedOff && (now - staStartedMs) > STA_INITIAL_WINDOW_MS)
+    {
+      // Not there. Stop the core's continuous re-scan so the AP is left alone.
+      WiFi.setAutoReconnect(false);
+      WiFi.disconnect(false, false);
+      staBackedOff = true;
+      DEBUG("WiFi bridge mode: \"%s\" not found - retrying every %lu min", wifiStaSsid, (unsigned long)(STA_RETRY_INTERVAL_MS / 60000UL));
+    }
+    else if (staBackedOff && (now - staLastAttemptMs) > STA_RETRY_INTERVAL_MS)
+    {
+      staBegin(); // one shot; the core gives up on its own without auto-reconnect
+    }
+  }
+}
+
+// Bring the AP up (or back up) with the current SSID/password, plus the STA
+// side if a home network is configured. Shared by the boot path and the
+// rebootWiFi restart in loop() so the DHCP behaviour stays identical in both.
+void startSoftAP()
+{
+  WiFi.mode(WIFI_AP);
+  staStart(); // switches to WIFI_AP_STA and begins connecting when bridge mode is on
+  // gateway 0.0.0.0 = local-only network (see softAPLocalOnly). Checked against
+  // NetworkInterface::config() in the 3.x core: a gateway outside the AP subnet
+  // simply skips the "gateway inside the DHCP range" test, so this is accepted,
+  // and the lease pool defaults to <AP IP>+1 .. +11 (192.168.1.2-.12). The
+  // result is an offer with an address and netmask and no router or
+  // DNS option at all, which is exactly what a local-only network should look
+  // like. Offering router 0.0.0.0 instead would be malformed - hence clearing
+  // the option rather than relying on the zero gateway.
+  bool cfg = WiFi.softAPConfig(IPAddress(192, 168, 1, 1), IPAddress(0, 0, 0, 0), IPAddress(255, 255, 255, 0));
+  if (!cfg)
+    DEBUG("softAPConfig REJECTED - AP will fall back to the default 192.168.4.1");
   if (strlen(wifiPassword) >= 8)
   {
     WiFi.softAP(wifiHostName, wifiPassword); // password-protected AP
@@ -17,95 +132,27 @@ static void softAPStart()
     WiFi.softAP(wifiHostName); // open network
     DEBUG("WiFi AP started (open): %s", wifiHostName);
   }
-}
-
-// Bridge mode: join a home/garage network as a station, in addition to the AP.
-// Non-blocking - WiFi.begin() returns immediately, actual connection is picked up
-// later by pollWifiSta() from the main loop. AP always keeps running regardless
-// of whether the STA side connects, so nothing changes for anyone who doesn't
-// set a home network SSID.
-static void staStart()
-{
-  wifiStaConnected = false;
-  wifiStaIP[0] = '\0';
-
-  if (wifiStaSsid[0] == '\0') // bridge mode disabled
-  {
-    WiFi.mode(WIFI_AP);
-    DEBUG("WiFi bridge mode disabled - AP only");
-    return;
-  }
-
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.setAutoReconnect(true);
-  WiFi.persistent(false); // we manage credentials ourselves via EEP; don't also wear the WiFi lib's own NVS blob
-  if (strlen(wifiStaPassword) >= 8)
-  {
-    WiFi.begin(wifiStaSsid, wifiStaPassword);
-  }
-  else
-  {
-    WiFi.begin(wifiStaSsid);
-  }
-  DEBUG("WiFi bridge mode: connecting to home network \"%s\"...", wifiStaSsid);
-}
-
-// Call periodically from the main loop to track STA connection state and pick up
-// its IP once associated. AP-only installs (wifiStaSsid empty) skip this entirely.
-void pollWifiSta()
-{
-  if (wifiStaSsid[0] == '\0')
-    return;
-
-  bool nowConnected = (WiFi.status() == WL_CONNECTED);
-  if (nowConnected && !wifiStaConnected)
-  {
-    strncpy(wifiStaIP, WiFi.localIP().toString().c_str(), sizeof(wifiStaIP) - 1);
-    wifiStaIP[sizeof(wifiStaIP) - 1] = '\0';
-    DEBUG("WiFi bridge mode: connected to \"%s\", IP %s", wifiStaSsid, wifiStaIP);
-  }
-  else if (!nowConnected && wifiStaConnected)
-  {
-    wifiStaIP[0] = '\0';
-    DEBUG("WiFi bridge mode: lost connection to \"%s\" - auto-reconnecting", wifiStaSsid);
-  }
-  wifiStaConnected = nowConnected;
-}
-
-// (Re)applies AP (+ STA if a home-network SSID is configured) using whatever is
-// currently in wifiSsid/wifiPassword/wifiStaSsid/wifiStaPassword, and restarts
-// mDNS so openhaldex.local resolves on both interfaces. Shared by first boot and
-// by the rebootWiFi restart path, so both stay in sync as this grows.
-void applyWifiMode()
-{
-  WiFi.hostname(wifiHostName);
-  staStart();     // sets WIFI_AP or WIFI_AP_STA as appropriate, begins STA connect if configured
-  softAPStart();  // AP always runs regardless of STA state
+  softAPLocalOnly();
   WiFi.setSleep(false);
+  // Aggressive sleep: trim AP TX power to reduce active-WiFi current.
   if (canSleepAggressive)
   {
-    WiFi.setTxPower(WIFI_POWER_8_5dBm); // trim AP TX power to reduce active-WiFi current
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);
   }
-  DEBUG("AP IP address: 192.168.1.1");
-
-  // Only tear down mDNS if it was actually running - calling end() on first
-  // boot (before it's ever been started) confuses the underlying ESP-IDF mdns
-  // component into rejecting the addService() that follows ("Service already
-  // exists"), which silently breaks openhaldex.local. Matches the original
-  // code's behavior, which never called end() on the first-boot path either.
-  static bool mdnsStarted = false;
-  if (mdnsStarted)
-  {
-    MDNS.end();
-  }
-  MDNS.begin("openhaldex");           // openhaldex.local
-  MDNS.addService("http", "tcp", 80); // advertise HTTP
-  mdnsStarted = true;
 }
 
 void setupWiFi()
 {
-  applyWifiMode();
+  // WiFi setup is now in main.cpp
+  WiFi.hostname(wifiHostName);
+  DEBUG("Creating Access Point...");
+  startSoftAP();
+  // Print what the AP actually came up on - the old hardcoded "192.168.1.1"
+  // would have hidden a rejected softAPConfig behind the address we wanted.
+  DEBUG("IP address: %s", WiFi.softAPIP().toString().c_str());
+
+  MDNS.begin("openhaldex");           // openhaldex.local
+  MDNS.addService("http", "tcp", 80); // advertise HTTP
 }
 
 void disconnectWifi()
@@ -139,10 +186,10 @@ void resetWifiSsid()
 
 void resetWifiSta()
 {
-  memset(wifiStaSsid, 0, sizeof(wifiStaSsid));         // clear home network SSID -> bridge mode disabled
-  memset(wifiStaPassword, 0, sizeof(wifiStaPassword)); // clear home network password
+  memset(wifiStaSsid, 0, sizeof(wifiStaSsid));         // empty SSID = bridge mode off
+  memset(wifiStaPassword, 0, sizeof(wifiStaPassword));
   wifiStaConnected = false;
   wifiStaIP[0] = '\0';
-  rebootWiFi = true; // trigger AP(/STA) restart
+  rebootWiFi = true; // restart as plain AP
   DEBUG("WiFi bridge mode disabled - AP only");
 }
