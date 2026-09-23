@@ -24,6 +24,10 @@ void readEEP() // function to read stored preferences into runtime variables
   pref.begin("canSleepEn", false);      // CAN-wake light sleep enable preference
   pref.begin("benchMode", false);       // bench-mode (hold WiFi up, no harness) preference
   pref.begin("ledBrightness", false);   // LED brightness preference
+  pref.begin("slipWheelbase", false); // vehicle geometry: wheelbase (mm), for per-corner slip
+  pref.begin("slipTrackFront", false); // vehicle geometry: front track (mm)
+  pref.begin("slipTrackRear", false); // vehicle geometry: rear track (mm)
+  pref.begin("slipSteerRatio", false); // vehicle geometry: steering-wheel:road-wheel ratio
 
   pref.begin("haldexGen", false);       // stored haldex generation
   pref.begin("forceModeValue", false);  // stored force mode value
@@ -73,6 +77,10 @@ void readEEP() // function to read stored preferences into runtime variables
     pref.putBool("canSleepAggr", canSleepAggressive);          // save aggressive CAN sleep enable
     pref.putUShort("lpWakeFps", lpWakeThresholdFps);           // save LP wake threshold (fps)
     pref.putUChar("ledBrightness", ledBrightness);             // save LED brightness
+    pref.putUShort("slipWheelbase", slipWheelbaseMm);                         // save vehicle wheelbase (mm)
+    pref.putUShort("slipTrackFront", slipTrackFrontMm);                       // save vehicle front track (mm)
+    pref.putUShort("slipTrackRear", slipTrackRearMm);                         // save vehicle rear track (mm)
+    pref.putFloat("slipSteerRatio", slipSteeringRatio);                       // save steering ratio
 
     pref.putBool("otaUpdate", otaUpdate);                                            // save OTA update flag
     pref.putUChar("haldexGen", haldexGeneration);                                    // save haldex generation
@@ -123,6 +131,10 @@ void readEEP() // function to read stored preferences into runtime variables
     canSleepAggressive = pref.getBool("canSleepAggr", false);               // load aggressive CAN sleep enable
     lpWakeThresholdFps = pref.getUShort("lpWakeFps", 1100);                  // load LP wake threshold (fps)
     ledBrightness = pref.getUChar("ledBrightness", led_brightness_default); // load LED brightness
+    slipWheelbaseMm = pref.getUShort("slipWheelbase", 2505);                     // load vehicle wheelbase (mm), default Audi TT Mk3
+    slipTrackFrontMm = pref.getUShort("slipTrackFront", 1572);                  // load vehicle front track (mm), default Audi TT Mk3
+    slipTrackRearMm = pref.getUShort("slipTrackRear", 1543);                    // load vehicle rear track (mm), default Audi TT Mk3
+    slipSteeringRatio = pref.getFloat("slipSteerRatio", 15.0f);                 // load steering ratio, default Audi TT Mk3
 
     otaUpdate = pref.getBool("otaUpdate", false);                          // load OTA update flag
     haldexGeneration = pref.getUChar("haldexGen", 1);                      // load haldex generation with default
@@ -271,6 +283,10 @@ void writeEEP(void *arg) // task function to periodically write preferences
     pref.putBool("canSleepAggr", canSleepAggressive);          // write aggressive CAN sleep enable
     pref.putUShort("lpWakeFps", lpWakeThresholdFps);           // write LP wake threshold (fps)
     pref.putUChar("ledBrightness", ledBrightness);             // write LED brightness
+    pref.putUShort("slipWheelbase", slipWheelbaseMm);                         // write vehicle wheelbase (mm)
+    pref.putUShort("slipTrackFront", slipTrackFrontMm);                       // write vehicle front track (mm)
+    pref.putUShort("slipTrackRear", slipTrackRearMm);                         // write vehicle rear track (mm)
+    pref.putFloat("slipSteerRatio", slipSteeringRatio);                       // write steering ratio
 
     pref.putUChar("haldexGen", haldexGeneration);                                    // write haldex generation
     pref.putUChar("tcFMV", tcForceModeValue);                                        // write TC force mode value

@@ -140,6 +140,15 @@ async function initStoredSettings() {
     document.getElementById("ledBrightnessRange").value = ledBrightPct;
     document.getElementById("ledBrightnessValue").textContent = ledBrightPct;
 
+    const geomFields = [
+      ["slipWheelbaseMm", 2505], ["slipTrackFrontMm", 1572],
+      ["slipTrackRearMm", 1543], ["slipSteeringRatio", 15.0],
+    ];
+    geomFields.forEach(([id, def]) => {
+      const el = document.getElementById(id);
+      if (el) el.value = data[id] !== undefined ? data[id] : def;
+    });
+
     const lockRateRange = document.getElementById("lockReleaseRateRange");
     const lockRateVal   = document.getElementById("lockReleaseRateValue");
     if (lockRateRange && data.lockReleaseRatePerSec !== undefined) {
@@ -948,6 +957,15 @@ function initSettings() {
   });
 
   // LED brightness: UI is 0-100%, firmware stores 0-255
+  ["slipWheelbaseMm", "slipTrackFrontMm", "slipTrackRearMm", "slipSteeringRatio"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.addEventListener("change", () => {
+        saveSetting(id, id === "slipSteeringRatio" ? parseFloat(el.value) : parseInt(el.value));
+      });
+    }
+  });
+
   const ledBrightElem = document.getElementById("ledBrightnessRange");
   if (ledBrightElem) {
     ledBrightElem.addEventListener("input", () => {
@@ -2633,6 +2651,7 @@ const BACKUP_GENERAL_KEYS = [
   "followBrake", "invertBrake", "followHandbrake", "invertHandbrake",
   "fixHunting", "dangerZoneEnabled", "esp14MinFloorPct", "bpkCeilingNm",
   "steeringScaleEnabled", "liveDiagEnabled", "ledBrightness",
+  "slipWheelbaseMm", "slipTrackFrontMm", "slipTrackRearMm", "slipSteeringRatio",
   "canSleepEnabled", "canSleepAggressive", "benchMode", "lpWakeThresholdFps",
   "longLearnNotes",
 ];
