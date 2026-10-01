@@ -33,6 +33,8 @@
 #define BLE_INFO_UUID "6254A005-C7B7-494F-A2FB-76FB74A7DDF0"
 #define BLE_SETTINGS_UUID "6254A006-C7B7-494F-A2FB-76FB74A7DDF0" // driving settings (documents/MOBILE_APP_OPENHALDEX.md "Settings")
 #define BLE_DIAG_UUID "6254A007-C7B7-494F-A2FB-76FB74A7DDF0"     // Haldex live diagnostics, 1 Hz
+#define BLE_PAIRING_UUID "6254A008-C7B7-494F-A2FB-76FB74A7DDF0"  // pairing code, readable by paired phones only
+#define BLE_PAIRING_LEN 5                                          // u8 codeRequired, u32 passkey LE
 
 #define BLE_PROTO_VERSION 1
 #define BLE_STATUS_LAYOUT 1
@@ -88,12 +90,62 @@ static bool bleRunning = false;
 static volatile bool bleConnected = false;
 static volatile bool bleForgetBondsRequest = false;
 
+// Pairing ("trust on first use"): while no phone is bonded, pairing is
+// "Just Works" (no code). Once the first phone has bonded, new phones must
+// enter the 6-digit pairing code (blePasskey, shown on the web UI and readable
+// by paired phones over the Pairing characteristic). Phones bonded before the
+// code was required keep working. Forget Paired Phones clears the bonds,
+// makes a new code and opens pairing again.
+// NimBLE does not reliably refuse a Just Works pairing when we ask for MITM,
+// so onAuthenticationComplete enforces it: a new, unauthenticated bond while
+// the code is required is deleted and the link dropped.
+static volatile bool bleCodeRequired = false;
+static std::vector<NimBLEAddress> trustedPeers; // bonds that may stay unauthenticated (made while pairing was open)
+static SemaphoreHandle_t bleSecMutex = nullptr;
+
 static NimBLECharacteristic *chrMode = nullptr;
 static NimBLECharacteristic *chrController = nullptr;
 static NimBLECharacteristic *chrStatus = nullptr;
 static NimBLECharacteristic *chrInfo = nullptr;
 static NimBLECharacteristic *chrSettings = nullptr;
 static NimBLECharacteristic *chrDiag = nullptr;
+static NimBLECharacteristic *chrPairing = nullptr;
+
+static bool isTrustedPeer(const NimBLEAddress &addr)
+{
+  for (const auto &a : trustedPeers)
+    if (a == addr)
+      return true;
+  return false;
+}
+
+static void updatePairingValue()
+{
+  if (!chrPairing)
+    return;
+  const uint32_t k = blePasskey;
+  const uint8_t v[BLE_PAIRING_LEN] = {(uint8_t)(bleCodeRequired ? 1 : 0), (uint8_t)(k & 0xFF), (uint8_t)((k >> 8) & 0xFF),
+                                      (uint8_t)((k >> 16) & 0xFF), (uint8_t)((k >> 24) & 0xFF)};
+  chrPairing->setValue(v, sizeof(v));
+}
+
+// Applies to pairings that start after the call; existing bonds are unaffected.
+static void applyPairingMode(bool codeRequired)
+{
+  bleCodeRequired = codeRequired;
+  if (codeRequired)
+  {
+    NimBLEDevice::setSecurityAuth(true, true, true); // bonding, MITM (passkey), LE Secure Connections
+    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY);
+    NimBLEDevice::setSecurityPasskey(blePasskey);
+  }
+  else
+  {
+    NimBLEDevice::setSecurityAuth(true, false, true); // bonding, no MITM ("Just Works"), LE Secure Connections
+    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+  }
+  updatePairingValue();
+}
 
 class BleServerCallbacks : public NimBLEServerCallbacks
 {
@@ -127,12 +179,54 @@ class BleServerCallbacks : public NimBLEServerCallbacks
     // (advertiseOnDisconnect).
     bleConnected = server->getConnectedCount() > 0;
   }
+
+  uint32_t onPassKeyDisplay() override
+  {
+    return blePasskey;
+  }
+
+  void onAuthenticationComplete(NimBLEConnInfo &connInfo) override
+  {
+    if (!connInfo.isEncrypted())
+      return;
+    const NimBLEAddress peer = connInfo.getIdAddress();
+    xSemaphoreTake(bleSecMutex, portMAX_DELAY);
+    if (!bleCodeRequired)
+    {
+      if (connInfo.isBonded()) // the first phone: from now on new phones need the code
+      {
+        if (!isTrustedPeer(peer))
+          trustedPeers.push_back(peer);
+        applyPairingMode(true);
+        DEBUG("BLE - first phone paired, pairing code required from now on");
+      }
+    }
+    else if (!connInfo.isAuthenticated() && !isTrustedPeer(peer))
+    {
+      // Paired without the code while it is required: undo it.
+      NimBLEDevice::deleteBond(peer);
+      NimBLEDevice::getServer()->disconnect(connInfo.getConnHandle());
+      DEBUG("BLE - refused a pairing without the code");
+    }
+    xSemaphoreGive(bleSecMutex);
+  }
 };
 
 class BleWriteCallbacks : public NimBLECharacteristicCallbacks
 {
   void onWrite(NimBLECharacteristic *chr, NimBLEConnInfo &connInfo) override
   {
+    // Belt and braces for the pairing-code rule: a link that paired without
+    // the code while it is required never gets a write through (it is being
+    // disconnected by onAuthenticationComplete anyway).
+    if (bleCodeRequired && !connInfo.isAuthenticated())
+    {
+      xSemaphoreTake(bleSecMutex, portMAX_DELAY);
+      const bool trusted = isTrustedPeer(connInfo.getIdAddress());
+      xSemaphoreGive(bleSecMutex);
+      if (!trusted)
+        return;
+    }
     NimBLEAttValue value = chr->getValue();
     BleWrite w;
     w.target = (chr == chrMode) ? BLE_WRITE_MODE : (chr == chrController) ? BLE_WRITE_CONTROLLER : BLE_WRITE_SETTING;
@@ -341,8 +435,14 @@ static void bleStart()
   // passkey to type - the phone at most asks to confirm. Writes still need an
   // encrypted (bonded) link; anyone in range can pair, a deliberate trade-off
   // for an easy first connection (was passkey / DisplayOnly before).
-  NimBLEDevice::setSecurityAuth(true, false, true); // bonding, no MITM, LE Secure Connections
-  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+  // Phones bonded so far stay valid without the code; pairing is open only
+  // while there are none (see applyPairingMode).
+  xSemaphoreTake(bleSecMutex, portMAX_DELAY);
+  trustedPeers.clear();
+  for (int i = 0; i < NimBLEDevice::getNumBonds(); i++)
+    trustedPeers.push_back(NimBLEDevice::getBondedAddress(i));
+  applyPairingMode(!trustedPeers.empty());
+  xSemaphoreGive(bleSecMutex);
 
   NimBLEServer *server = NimBLEDevice::createServer();
   server->setCallbacks(&serverCallbacks, false);
@@ -363,6 +463,9 @@ static void bleStart()
       NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC | NIMBLE_PROPERTY::NOTIFY,
       DRIVING_SETTINGS_LEN);
   chrDiag = service->createCharacteristic(BLE_DIAG_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY, BLE_DIAG_LEN);
+  // Encrypted read: an unpaired phone has to pair first (with the code, once one is required).
+  chrPairing = service->createCharacteristic(BLE_PAIRING_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::READ_ENC, BLE_PAIRING_LEN);
+  updatePairingValue();
   chrMode->setCallbacks(&writeCallbacks);
   chrController->setCallbacks(&writeCallbacks);
   chrSettings->setCallbacks(&writeCallbacks);
@@ -415,7 +518,7 @@ static void bleStart()
 static void bleStop()
 {
   NimBLEDevice::deinit(true); // frees server, services and characteristics
-  chrMode = chrController = chrStatus = chrInfo = chrSettings = chrDiag = nullptr;
+  chrMode = chrController = chrStatus = chrInfo = chrSettings = chrDiag = chrPairing = nullptr;
   bleConnected = false;
   bleRunning = false;
   xQueueReset(bleWriteQueue);
@@ -459,9 +562,15 @@ static void bleTask(void *arg)
     {
       if (bleForgetBondsRequest)
       {
+        // Back to "first phone pairs without a code", with a new code for later.
         NimBLEDevice::deleteAllBonds();
+        blePasskey = 100000 + (esp_random() % 900000); // persisted by writeEEP
+        xSemaphoreTake(bleSecMutex, portMAX_DELAY);
+        trustedPeers.clear();
+        applyPairingMode(false);
+        xSemaphoreGive(bleSecMutex);
         bleForgetBondsRequest = false;
-        DEBUG("BLE - bonds deleted");
+        DEBUG("BLE - bonds deleted, new pairing code");
       }
 
       bool echo = false;
@@ -549,8 +658,18 @@ static void bleTask(void *arg)
 
 void setupBLE()
 {
+  if (blePasskey < 100000 || blePasskey > 999999)
+  {
+    blePasskey = 100000 + (esp_random() % 900000); // first boot: random pairing code, persisted by writeEEP
+  }
+  bleSecMutex = xSemaphoreCreateMutex();
   bleWriteQueue = xQueueCreate(8, sizeof(BleWrite));
   xTaskCreate(bleTask, "bleTask", 4096, NULL, 2, NULL);
+}
+
+bool bleCodeIsRequired()
+{
+  return bleCodeRequired;
 }
 
 bool bleIsConnected()

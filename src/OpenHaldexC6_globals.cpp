@@ -348,6 +348,7 @@ bool canSleepEnabled = true;
 bool canSleepAggressive = false; // opt-in: transceiver standby + DFS floor 10MHz + low WiFi TX power
 bool benchMode = false;          // opt-in: hold WiFi up on the bench until real CAN traffic is seen
 bool bleEnabled = true;          // BLE link to the DashCAN app
+uint32_t blePasskey = 0;         // 0 = not made yet; setupBLE() generates one
 volatile bool canWakeRequest = false; // ISR-set wake flag when transceivers in standby see bus activity
 uint16_t lpWakeThresholdFps = 1100; // wake threshold fps; default 1100 — user adjustable via UI
 

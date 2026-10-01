@@ -492,14 +492,17 @@ The controller also talks **Bluetooth LE** to the **DashCAN** mobile app, so the
 - **Haldex diagnostics** — clutch / oil / module temperatures, supply voltage, clutch current and duty (and oil pressure / estimated torque on Gen4), from the same [Live Diagnostics](#live-diagnostics) pollers. Needs *Live diagnostics* switched on.
 - **Gauges** — `AWD Lock`, `AWD Lock Target`, `Steering` and the Haldex temperatures can be placed on the app's dashboards and in drive recordings.
 
-**Connecting.** With Bluetooth enabled (default), the app finds the controller as `OpenHaldex‑XXXX` and connects to the first one in range by itself; it can also be picked on the app's Bluetooth screen. Live data needs no pairing. The first change from a phone pairs it once — there is **no passkey**, the phone at most asks you to confirm.
+**Connecting.** With Bluetooth enabled (default), the app finds the controller as `OpenHaldex‑XXXX` and connects to the first one in range by itself; it can also be picked on the app's Bluetooth screen. Live data needs no pairing. The first change from a phone pairs it once:
 
-**On the controller:** **Settings → Bluetooth (DashCAN App)** has the enable switch, a *phone connected* indicator and **Forget Paired Phones** (phones must pair again; also forget the device in the phone's Bluetooth settings). Bluetooth follows the WiFi into [Low Power Mode](#low-power-mode): it switches off when the car is parked and comes back with it.
+- the **first phone** pairs without a code (the phone at most asks you to confirm);
+- after that, **every new phone needs the 6‑digit pairing code**. It is shown in the app on an already paired phone and on the web UI (**Settings → Bluetooth**).
+
+**On the controller:** **Settings → Bluetooth (DashCAN App)** has the enable switch, a *phone connected* indicator, the pairing code and **Forget Paired Phones** — this removes every paired phone, makes a new code, and lets the next phone pair without one again (also forget the device in the phone's Bluetooth settings). Bluetooth follows the WiFi into [Low Power Mode](#low-power-mode): it switches off when the car is parked and comes back with it.
 
 > [!NOTE]
-> Pairing is deliberately simple ("Just Works"), so anyone within Bluetooth range can pair a phone and change the mode while Bluetooth is enabled. Switch Bluetooth off on the web UI if that matters for your car. Firmware updates are never done over Bluetooth.
+> Until the first phone has paired — on a new controller, or right after Forget Paired Phones — anyone within Bluetooth range could be that first phone. Pair yours straight away; if a phone you don't know got there first, use Forget Paired Phones. Firmware updates are never done over Bluetooth.
 
-The protocol is documented in [`documents/MOBILE_APP_OPENHALDEX.md`](documents/MOBILE_APP_OPENHALDEX.md), so other apps can use it too. Endpoints: `POST /api/ble/forget`; `bleEnabled` in `/api/settings`, `bleConnected` in `/api/status`.
+The protocol is documented in [`documents/MOBILE_APP_OPENHALDEX.md`](documents/MOBILE_APP_OPENHALDEX.md), so other apps can use it too. Endpoints: `POST /api/ble/forget`; `bleEnabled`, `blePasskey`, `bleCodeRequired` in `/api/settings`; `bleConnected`, `bleCodeRequired` in `/api/status`.
 
 ---
 

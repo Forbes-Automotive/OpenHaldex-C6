@@ -50,6 +50,7 @@ Service `6254A001-C7B7-494F-A2FB-76FB74A7DDF0`:
 | Info | `6254A005-C7B7-494F-A2FB-76FB74A7DDF0` | read | `u8 protoVersion`, `u8 haldexGeneration`, `u8 isStandalone` |
 | Settings | `6254A006-C7B7-494F-A2FB-76FB74A7DDF0` | read, write (with response), notify | 14 bytes, see [Settings](#settings); write `[u8 id][value]` |
 | Diag | `6254A007-C7B7-494F-A2FB-76FB74A7DDF0` | read, notify | 20 bytes, 1 Hz, see [Diag](#diag) |
+| Pairing | `6254A008-C7B7-494F-A2FB-76FB74A7DDF0` | read (encrypted) | `u8 codeRequired`, `u32 pairingCode`, see [Pairing](#pairing) |
 
 **GATT cache:** phones cache the attribute table of bonded devices. The firmware sends a Service Changed indication
 every time BLE starts, so after a firmware update that adds characteristics a bonded phone re-discovers on its next
@@ -80,15 +81,29 @@ Device Information Service `0x180A` (read):
 
 ## Security
 
-- **Pairing: "Just Works".** LE Secure Connections with bonding, no MITM protection, IO capability
-  `NoInputNoOutput`. There is **no passkey**: the phone at most asks the user to confirm the pairing.
-  - Trade-off, chosen for an easy first connection: anyone in range can pair and change the mode.
+- **Pairing: trust on first use.** LE Secure Connections with bonding.
+  - **While no phone is bonded** (new unit, or after Forget Paired Phones) pairing is "Just Works"
+    (`NoInputNoOutput`, no MITM): no code, the phone at most asks the user to confirm.
+  - **Once a phone has bonded**, the device switches to passkey pairing (`DisplayOnly`, MITM): a new phone must enter
+    the **6-digit pairing code**. The code is random, persisted, shown on the web UI (Settings → Bluetooth) and readable
+    by a paired phone from the [Pairing](#pairing) characteristic, so the app can show it for a second phone.
+    Phones bonded before stay valid without it. A new pairing that does not use the code is refused (bond deleted,
+    link dropped).
+  - **Forget Paired Phones** deletes all bonds, makes a new code and opens pairing for the next phone again.
 - **Writes need an encrypted (bonded) link.** The first write to Mode or Controller from an unpaired phone fails with
-  an insufficient-encryption/authentication error, which makes iOS and Android pair (with a confirm dialog at most).
-  The app should retry the write after pairing succeeds; on Android it can call `createBond` first.
+  an insufficient-encryption/authentication error, which makes iOS and Android pair (confirm dialog for the first
+  phone, code entry after that). The app should retry the write after pairing succeeds; on Android it can call
+  `createBond` first.
 - **Reads and notifications are open** (Status, Info, Mode, Controller, DIS), so live data works without pairing.
 - **Forget Paired Phones** in the web UI deletes all bonds; phones must pair again (the phone should also forget
   the device in its Bluetooth settings).
+
+### Pairing
+
+`6254A008-C7B7-494F-A2FB-76FB74A7DDF0`, read only, **encrypted read** (an unpaired phone pairs first). 5 bytes:
+`u8 codeRequired` (0 = no phone bonded yet, 1 = new phones need the code), `u32 pairingCode` little-endian
+(100000..999999). Optional like Settings / Diag: check that the characteristic is present. Reading it from an
+unpaired phone starts pairing, so an app should read it only once the phone is paired (or on a user action).
 
 ## Writes: request, then echo
 

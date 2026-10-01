@@ -242,6 +242,10 @@ async function initStoredSettings() {
 
     const bleEnabledElem = document.getElementById("bleEnabled");
     if (bleEnabledElem) bleEnabledElem.checked = data.bleEnabled !== undefined ? data.bleEnabled : true;
+    if (data.blePasskey !== undefined) {
+      blePasskeyCache = data.blePasskey;
+      renderBlePairing(data.bleCodeRequired);
+    }
 
     // Aggressive implies basic - lock the basic checkbox while aggressive is on.
     if (canSleepElem && canSleepAggrElem) {
@@ -392,6 +396,8 @@ async function refreshStatus() {
     const chassisOk = data.chassisCAN;
     const haldexOk = data.haldexCAN;
     canStatus.textContent = `CAN: ${chassisOk ? "✓" : "X"} Chassis | ${haldexOk ? "✓" : "X"} Haldex`;
+
+    if (data.bleCodeRequired !== undefined) renderBlePairing(data.bleCodeRequired);
 
     const bleStatus = document.getElementById("bleStatus");
     if (bleStatus && data.bleConnected !== undefined) {
@@ -1832,6 +1838,16 @@ function initWifiSsid() {
   });
 }
 
+// Pairing line on the Bluetooth card: the code is only asked from the second phone on.
+let blePasskeyCache = null;
+function renderBlePairing(codeRequired) {
+  const el = document.getElementById("blePairing");
+  if (!el) return;
+  el.textContent = codeRequired
+    ? `Pairing code for another phone: ${blePasskeyCache ?? "--"}`
+    : "No phone paired yet - the first phone pairs without a code.";
+}
+
 // initialise Bluetooth (DashCAN app) section
 function initBle() {
   const btnForget = document.getElementById("bleForget");
@@ -1846,7 +1862,8 @@ function initBle() {
       showNotification("Bluetooth is off - nothing to forget", "error");
       return;
     }
-    showNotification("Paired phones forgotten - they must pair again");
+    showNotification("Paired phones forgotten, new pairing code - the next phone pairs without it");
+    initStoredSettings(); // refresh the pairing line
   });
 }
 

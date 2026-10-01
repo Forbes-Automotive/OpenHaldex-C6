@@ -304,6 +304,7 @@ static void statusOutgoing(AsyncWebServerRequest *request)
     data["uptimeMs"] = millis();
     data["freeHeap"] = ESP.getFreeHeap();
     data["bleConnected"] = bleIsConnected();
+    data["bleCodeRequired"] = bleCodeIsRequired(); // flips when the first phone pairs
     data["lpChassisFrameCount"] = lpChassisFrameCount;
     data["lpHaldexFrameCount"] = lpHaldexFrameCount;
 
@@ -355,6 +356,8 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
     data["longLearnNotes"] = longLearnNotes;
     data["canSleepEnabled"] = canSleepEnabled;
     data["bleEnabled"] = bleEnabled;
+    data["blePasskey"] = blePasskey;            // shown so a second phone can pair; never in backups (not in BACKUP_GENERAL_KEYS)
+    data["bleCodeRequired"] = bleCodeIsRequired(); // false until the first phone has paired
     data["canSleepAggressive"] = canSleepAggressive;
     data["benchMode"] = benchMode;
     data["lpWakeThresholdFps"] = lpWakeThresholdFps;
@@ -1027,7 +1030,7 @@ void setupAPI()
                      resp["ok"] = true;
                      sendJSON(request, 200, resp); });
 
-    // POST /api/ble/forget - drop every bonded phone (they must pair again)
+    // POST /api/ble/forget - drop every bonded phone, new pairing code; the next phone pairs without it
     webServer.on("/api/ble/forget", HTTP_POST, [](AsyncWebServerRequest *request)
                  {
                      JsonDocument resp;

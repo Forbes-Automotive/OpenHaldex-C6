@@ -461,6 +461,7 @@ extern bool benchMode;               // persisted (UI/EEP), default off
 
 // Bluetooth LE link to the DashCAN mobile app (see OpenHaldexC6_BLE.cpp).
 extern bool bleEnabled;      // persisted (UI/EEP), default on
+extern uint32_t blePasskey;  // 6-digit pairing code, required once a phone is bonded; random, persisted, never in backups
 extern volatile bool canWakeRequest; // set by CAN_RX GPIO ISR when transceivers in standby see bus activity
 
 extern bool rebootWiFi;
