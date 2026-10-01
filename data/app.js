@@ -2632,7 +2632,7 @@ const BACKUP_GENERAL_KEYS = [
   "extButtonForceMode", "extBtnForceModeValue", "disableOnboardButton", "disableExternalButton",
   "followBrake", "invertBrake", "followHandbrake", "invertHandbrake",
   "fixHunting", "dangerZoneEnabled", "esp14MinFloorPct", "bpkCeilingNm",
-  "steeringScaleEnabled", "liveDiagEnabled", "ledBrightness",
+  "steeringScaleEnabled", "lockReleaseEnabled", "lockReleaseRatePerSec", "liveDiagEnabled", "ledBrightness",
   "canSleepEnabled", "canSleepAggressive", "benchMode", "lpWakeThresholdFps",
   "longLearnNotes",
 ];

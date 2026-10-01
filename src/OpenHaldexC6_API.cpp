@@ -331,6 +331,7 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
     data["disableThrottle"] = disableThrottle;
     data["mode"] = lastMode;
     data["lockReleaseRatePerSec"] = lockReleaseRatePerSec;
+    data["lockReleaseEnabled"] = lockReleaseEnabled;
     data["steeringScaleEnabled"] = steeringScaleEnabled;
     data["FW_VERSION"] = FW_VERSION;
 
@@ -609,6 +610,18 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
     if (data["steeringScaleEnabled"].is<bool>())
     {
         steeringScaleEnabled = data["steeringScaleEnabled"];
+    }
+
+    // Lock release switch / rate slider (Settings tab). Both were sent by the
+    // web UI but never applied here, so the controls had no effect.
+    if (data["lockReleaseEnabled"].is<bool>())
+    {
+        lockReleaseEnabled = data["lockReleaseEnabled"];
+    }
+
+    if (data["lockReleaseRatePerSec"].is<float>())
+    {
+        lockReleaseRatePerSec = constrain(data["lockReleaseRatePerSec"].as<float>(), 5.0f, 500.0f); // slider range
     }
 
     if (data["canSleepEnabled"].is<bool>())
