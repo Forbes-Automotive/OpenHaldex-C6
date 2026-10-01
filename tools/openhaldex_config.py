@@ -46,7 +46,7 @@ BACKUP_GENERAL_KEYS = [
     "fixHunting", "dangerZoneEnabled", "esp14MinFloorPct", "bpkCeilingNm",
     "steeringScaleEnabled", "lockReleaseEnabled", "lockReleaseRatePerSec", "liveDiagEnabled", "ledBrightness",
     "canSleepEnabled", "canSleepAggressive", "benchMode", "lpWakeThresholdFps",
-    "longLearnNotes",
+    "longLearnNotes", "bleEnabled",
 ]
 
 # Connection-level failures worth retrying: the controller drops its WiFi for a couple

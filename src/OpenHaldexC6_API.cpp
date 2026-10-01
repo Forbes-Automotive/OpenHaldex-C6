@@ -3,6 +3,8 @@
 #include <OpenHaldexC6_Calculations.h>
 #include <OpenHaldexC6_WiFi.h>
 #include <OpenHaldexC6_OTA.h> // otaNoteWebActivity()
+#include <OpenHaldexC6_BLE.h> // bleIsConnected(), bleForgetBonds()
+#include <OpenHaldexC6_Settings.h> // applyDrivingSetting()
 
 #include <cstring>
 #include <vector>    // /api/wifi/scan de-dup
@@ -301,6 +303,7 @@ static void statusOutgoing(AsyncWebServerRequest *request)
 
     data["uptimeMs"] = millis();
     data["freeHeap"] = ESP.getFreeHeap();
+    data["bleConnected"] = bleIsConnected();
     data["lpChassisFrameCount"] = lpChassisFrameCount;
     data["lpHaldexFrameCount"] = lpHaldexFrameCount;
 
@@ -351,6 +354,7 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
     data["esp14MinFloorPct"] = esp14MinFloorPct;
     data["longLearnNotes"] = longLearnNotes;
     data["canSleepEnabled"] = canSleepEnabled;
+    data["bleEnabled"] = bleEnabled;
     data["canSleepAggressive"] = canSleepAggressive;
     data["benchMode"] = benchMode;
     data["lpWakeThresholdFps"] = lpWakeThresholdFps;
@@ -451,58 +455,49 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
         }
     }
 
-    if (data["tcForceModeValue"].is<uint8_t>())
+    // Driving settings: shared validation with BLE (OpenHaldexC6_Settings.cpp).
     {
-        uint8_t v = data["tcForceModeValue"];
-        if (v < 6)
-            tcForceModeValue = v;
-    }
+        struct
+        {
+            const char *key;
+            uint8_t id;
+        } const drivingBools[] = {
+            {"tcForceMode", DS_TC_FORCE_MODE},
+            {"hazardForceMode", DS_HAZARD_FORCE_MODE},
+            {"extButtonForceMode", DS_EXT_BTN_FORCE_MODE},
+            {"followBrake", DS_FOLLOW_BRAKE},
+            {"followHandbrake", DS_FOLLOW_HANDBRAKE},
+            {"steeringScaleEnabled", DS_STEERING_SCALE_ENABLED},
+            {"lockReleaseEnabled", DS_LOCK_RELEASE_ENABLED},
+            {"liveDiagEnabled", DS_LIVE_DIAG_ENABLED},
+        };
+        for (const auto &b : drivingBools)
+            if (data[b.key].is<bool>())
+                applyDrivingSetting(b.id, data[b.key].as<bool>() ? 1 : 0);
 
-    if (data["hazardForceModeValue"].is<uint8_t>())
-    {
-        uint8_t v = data["hazardForceModeValue"];
-        if (v < 6)
-            hazardForceModeValue = v;
-    }
-
-    if (data["extBtnForceModeValue"].is<uint8_t>())
-    {
-        uint8_t v = data["extBtnForceModeValue"];
-        if (v < 6)
-            extBtnForceModeValue = v;
-    }
-
-    if (data["disengageUnderSpeed"].is<uint16_t>())
-    {
-        uint16_t value = data["disengageUnderSpeed"];
-        disengageUnderSpeed = constrain(value, 0, 300);
-    }
-
-    if (data["disengageAboveSpeed"].is<uint16_t>())
-    {
-        uint16_t value = data["disengageAboveSpeed"];
-        disengageAboveSpeed = constrain(value, 0, 300);
-    }
-
-    if (data["disableThrottle"].is<uint8_t>())
-    {
-        uint8_t value = data["disableThrottle"];
-        disableThrottle = constrain(value, 0, 100);
-        state.pedal_threshold = disableThrottle;
+        struct
+        {
+            const char *key;
+            uint8_t id;
+            int maxValue; // clamp before the u16 conversion (negative / huge JSON numbers)
+        } const drivingNumbers[] = {
+            {"tcForceModeValue", DS_TC_FORCE_MODE_VALUE, 255},
+            {"hazardForceModeValue", DS_HAZARD_FORCE_MODE_VALUE, 255},
+            {"extBtnForceModeValue", DS_EXT_BTN_FORCE_MODE_VALUE, 255},
+            {"disengageUnderSpeed", DS_DISENGAGE_UNDER_SPEED, 300},
+            {"disengageAboveSpeed", DS_DISENGAGE_ABOVE_SPEED, 300},
+            {"disableThrottle", DS_DISABLE_THROTTLE, 100},
+            {"lockReleaseRatePerSec", DS_LOCK_RELEASE_RATE, 500},
+            {"ledBrightness", DS_LED_BRIGHTNESS, 255},
+        };
+        for (const auto &n : drivingNumbers)
+            if (data[n.key].is<float>())
+                applyDrivingSetting(n.id, (uint16_t)constrain(lroundf(data[n.key].as<float>()), 0L, (long)n.maxValue));
     }
 
     if (data["disableController"].is<bool>())
     {
-        disableController = data["disableController"];
-        if (disableController)
-        {
-            state.mode = MODE_STOCK;
-            lastMode = 0;
-        }
-        if (!disableController && analyzerMode)
-        {
-            setAnalyzerMode(false);
-        }
+        setControllerDisabled(data["disableController"]);
     }
 
     if (data["isStandalone"].is<bool>())
@@ -547,34 +542,9 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
         setAnalyzerSerialMode(data["analyzerSerial"]);
     }
 
-    if (data["liveDiagEnabled"].is<bool>())
-    {
-        liveDiagEnabled = data["liveDiagEnabled"];
-    }
-
     if (data["useCANifAvailable"].is<bool>())
     {
         useCANifAvailable = data["useCANifAvailable"];
-    }
-
-    if (data["tcForceMode"].is<bool>())
-    {
-        tcForceMode = data["tcForceMode"];
-    }
-
-    if (data["extButtonForceMode"].is<bool>())
-    {
-        extBtnForceMode = data["extButtonForceMode"];
-    }
-
-    if (data["hazardForceMode"].is<bool>())
-    {
-        hazardForceMode = data["hazardForceMode"];
-        if (!hazardForceMode)
-        {
-
-            hazardForceModeFlag = false; // clear active flag when feature is disabled
-        }
     }
 
     if (data["disableOnboardButton"].is<bool>())
@@ -607,23 +577,6 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
         esp14MinFloorPct = (uint8_t)constrain((int)data["esp14MinFloorPct"], 0, 100);
     }
 
-    if (data["steeringScaleEnabled"].is<bool>())
-    {
-        steeringScaleEnabled = data["steeringScaleEnabled"];
-    }
-
-    // Lock release switch / rate slider (Settings tab). Both were sent by the
-    // web UI but never applied here, so the controls had no effect.
-    if (data["lockReleaseEnabled"].is<bool>())
-    {
-        lockReleaseEnabled = data["lockReleaseEnabled"];
-    }
-
-    if (data["lockReleaseRatePerSec"].is<float>())
-    {
-        lockReleaseRatePerSec = constrain(data["lockReleaseRatePerSec"].as<float>(), 5.0f, 500.0f); // slider range
-    }
-
     if (data["canSleepEnabled"].is<bool>())
     {
         canSleepEnabled = data["canSleepEnabled"];
@@ -643,23 +596,17 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
     {
         benchMode = data["benchMode"];
     }
+    if (data["bleEnabled"].is<bool>())
+    {
+        bleEnabled = data["bleEnabled"];
+    }
     if (data["lpWakeThresholdFps"].is<uint16_t>())
     {
         lpWakeThresholdFps = constrain((uint16_t)data["lpWakeThresholdFps"], 0, 2000);
     }
-    if (data["followBrake"].is<bool>())
-    {
-        followBrake = data["followBrake"];
-    }
-
     if (data["invertBrake"].is<bool>())
     {
         invertBrake = data["invertBrake"];
-    }
-
-    if (data["followHandbrake"].is<bool>())
-    {
-        followHandbrake = data["followHandbrake"];
     }
 
     if (data["invertHandbrake"].is<bool>())
@@ -670,11 +617,6 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
     if (data["broadcastOpenHaldexOverCAN"].is<bool>())
     {
         broadcastOpenHaldexOverCAN = data["broadcastOpenHaldexOverCAN"];
-    }
-
-    if (data["ledBrightness"].is<int>())
-    {
-        ledBrightness = (uint8_t)constrain((int)data["ledBrightness"], 0, 255);
     }
 
     // Long Learn chassis/car notes (free text, exported with the report)
@@ -754,18 +696,7 @@ static void modeIncoming(AsyncWebServerRequest *request, const String &body)
 
     if (data["mode"].is<uint8_t>())
     {
-        if (!disableController)
-        {
-            if (isStandalone && (openhaldex_mode_t)data["mode"] == 0)
-            {
-                state.mode = (openhaldex_mode_t)lastMode;
-            }
-            else
-            {
-                state.mode = (openhaldex_mode_t)data["mode"];
-            }
-            lastMode = state.mode;
-        }
+        requestMode(data["mode"]);
     }
 }
 
@@ -1094,6 +1025,13 @@ void setupAPI()
                      haldexLearnCancel = true;
                      JsonDocument resp;
                      resp["ok"] = true;
+                     sendJSON(request, 200, resp); });
+
+    // POST /api/ble/forget - drop every bonded phone (they must pair again)
+    webServer.on("/api/ble/forget", HTTP_POST, [](AsyncWebServerRequest *request)
+                 {
+                     JsonDocument resp;
+                     resp["ok"] = bleForgetBonds();
                      sendJSON(request, 200, resp); });
 
     // POST /api/learn/clear - discard the stored learn table and revert to formula

@@ -347,6 +347,7 @@ void resetFrameEditMask()
 bool canSleepEnabled = true;
 bool canSleepAggressive = false; // opt-in: transceiver standby + DFS floor 10MHz + low WiFi TX power
 bool benchMode = false;          // opt-in: hold WiFi up on the bench until real CAN traffic is seen
+bool bleEnabled = true;          // BLE link to the DashCAN app
 volatile bool canWakeRequest = false; // ISR-set wake flag when transceivers in standby see bus activity
 uint16_t lpWakeThresholdFps = 1100; // wake threshold fps; default 1100 — user adjustable via UI
 
@@ -391,6 +392,7 @@ float udsClutchCurrent = 0.0f;
 uint8_t udsClutchPWM = 0;
 float udsClutchVoltage = 0.0f;
 uint8_t udsBlockagePct = 0;
+volatile uint32_t udsLastDecodeMs = 0;
 
 // KWP2000 over VW TP2.0 diagnostics (Gen2 / Gen4 PQ Haldex)
 QueueHandle_t tp20RxQueue = nullptr;
