@@ -18,10 +18,16 @@ nvs,        data, nvs,   ,   0x4000,
 otadata,    data, ota,   ,   0x2000,
 
 # OTA partition 0 (first firmware slot)
-ota_0,      app,  ota_0, ,  0x1A0000,
+ota_0,      app,  ota_0, ,  0x1C0000,
 
 # OTA partition 1 (second firmware slot)
-ota_1,      app,  ota_1, , 0x1A0000,
+ota_1,      app,  ota_1, , 0x1C0000,
 
 # LittleFS partition for web UI files
-spiffs,     data, spiffs, , 0xB0000,
+# Layout changed in the BLE release: was 2 x 0x1A0000 app + 0xB0000 LittleFS
+# (at 0x350000). The BLE build no longer fit the old slot, so LittleFS gave up
+# 0x40000 (the UI is ~250 KB) and each app slot grew by 0x20000 (128 KB).
+# Resulting offsets: ota_0 0x10000, ota_1 0x1D0000, spiffs 0x390000.
+# A partition table cannot be changed over OTA: devices on the old layout need
+# one USB (ESP Web Tools) flash.
+spiffs,     data, spiffs, , 0x70000,
