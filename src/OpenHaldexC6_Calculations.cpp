@@ -420,7 +420,7 @@ uint8_t get_lock_target_adjusted_value(uint8_t value, bool invert)
   else
   {
     // VAG Haldex default — linear fit: engagement = 2 * CF - 20  →  CF = (target + 20) / 2
-    correction_factor = (uint8_t)constrain(((float)lock_target / 2) + 20, 0, 100);
+    correction_factor = (uint8_t)constrain(((float)lock_target + 20.0f) / 2.0f, 0, 100);
   }
 
   uint8_t corrected_value = (uint16_t)value * correction_factor / 100;
