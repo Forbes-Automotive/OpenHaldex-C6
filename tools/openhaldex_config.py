@@ -142,7 +142,7 @@ def cmd_import(args):
         sys.exit("This file has no Expert tune table - is it a backup made by this tool or the web UI?")
 
     host = args.host
-    print(f"Restoring to {host}  (backup from firmware {backup.get('_fwVersion', 'unknown')})")
+    print(f"Restoring to {host}  (backup from firmware {backup.get('_fwVersion') or backup.get('_fw_version') or 'unknown'})")
 
     # 1. Generation first, so the per-frame switches below land on the right table.
     if not args.tune_only and isinstance(s.get("haldexGeneration"), int):
