@@ -192,6 +192,12 @@ void updateTriggers(void *arg);
 void modeChange();
 void modeChangeExt();
 
+// Mode / controller changes requested from the web UI or BLE (shared so both
+// apply the same rules). requestMode() returns false when the request was
+// rejected (out of range, or the controller is disabled).
+bool requestMode(uint8_t mode);
+void setControllerDisabled(bool disabled);
+
 extern void getLockData(twai_message_t &rx_message_chs);
 extern uint8_t get_lock_target_adjusted_value(uint8_t value, bool invert);
 
@@ -452,6 +458,10 @@ extern bool canSleepAggressive; // aggressive add-on: transceiver standby + DFS 
 // toggle can't weaken parked-car battery protection once installed. See
 // everSawCANThisSession in OpenHaldexC6_IO.cpp.
 extern bool benchMode;               // persisted (UI/EEP), default off
+
+// Bluetooth LE link to the DashCAN mobile app (see OpenHaldexC6_BLE.cpp).
+extern bool bleEnabled;      // persisted (UI/EEP), default on
+extern uint32_t blePasskey;  // 6-digit pairing code, required once a phone is bonded; random, persisted, never in backups
 extern volatile bool canWakeRequest; // set by CAN_RX GPIO ISR when transceivers in standby see bus activity
 
 extern bool rebootWiFi;
@@ -594,6 +604,7 @@ extern float udsClutchCurrent;   // 0x2BE6: BE16 × 0.001 A
 extern uint8_t udsClutchPWM;     // 0x2BE7: raw % (1 byte, 0–100)
 extern float udsClutchVoltage;   // 0x2BE9: BE16 × 0.001 V
 extern uint8_t udsBlockagePct;   // unconfirmed DID — always 0
+extern volatile uint32_t udsLastDecodeMs; // millis() of the last decoded UDS value (0 = none); freshness for BLE Diag
 
 // --- KWP2000 over VW TP2.0 diagnostics: Gen2 / Gen4 (PQ) Haldex ------------
 // The PQ-platform AWD/Haldex controller is diagnosed with KWP2000 tunnelled

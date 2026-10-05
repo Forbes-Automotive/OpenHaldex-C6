@@ -34,6 +34,8 @@ static void udsDecodeDID(uint16_t did, const twai_message_t &frame)
     const uint16_t respDID = ((uint16_t)frame.data[2] << 8) | frame.data[3];
     if (respDID != did) return;
 
+    udsLastDecodeMs = millis(); // freshness for the BLE Diag characteristic (values persist after polling stops)
+
     // Actual measurement data starts at frame.data[4]
     switch (did)
     {

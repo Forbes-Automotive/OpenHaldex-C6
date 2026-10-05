@@ -55,6 +55,7 @@ It can operate using OEM CAN signals or it is able to run in Standalone mode - w
 - [Low Power Mode](#low-power-mode)
 - [Home WiFi (Bridge Mode)](#home-wifi-bridge-mode)
 - [Backup & Restore](#backup--restore)
+- [DashCAN App (Bluetooth)](#dashcan-app-bluetooth)
 - [CAN Sniffing](#can-sniffing-savvycan--gvret)
 - [Live Diagnostics](#live-diagnostics)
 - [Frame Editing](#frame-editing-addingremoving-can-signals)
@@ -78,6 +79,7 @@ It can operate using OEM CAN signals or it is able to run in Standalone mode - w
 - Live diagnostics: UDS (Gen5) and KWP2000‑over‑TP2.0 (Gen2/Gen4) with measurement scaling confirmed against VCDS
 - Selectable CAN frames — enable/disable CAN messages per Generation from the Web UI
 - Wireless (OTA) firmware and web‑UI updates over Wi‑Fi
+- Bluetooth LE link to the DashCAN mobile app: live data, mode and controller on/off, driving settings and Haldex diagnostics from the phone (see [DashCAN App](#dashcan-app-bluetooth))
 - Colour‑coded status indicators throughout the Web UI (green / orange / red — see [Status Indicators](#status-indicators))
 
 ![OpenHaldex-C6](/Images/BoardOverview.png)
@@ -479,6 +481,31 @@ Contributed in [PR #39](https://github.com/Forbes-Automotive/OpenHaldex-C6/pull/
 
 ---
 
+## DashCAN App (Bluetooth)
+
+The controller also talks **Bluetooth LE** to the **DashCAN** mobile app, so the basics are on the phone without joining the **OpenHaldex‑C6** WiFi — and the app can stay connected to a DashCAN interface at the same time. The web UI remains the place for everything else (Expert maps, learning, generation setup, frame editing, OTA).
+
+**From the app:**
+
+- **Live** — mode buttons, controller on/off, lock target / actual, speed, throttle, rpm, boost, steering angle, CAN health and Haldex warnings (temperature protection, coupling open, speed limit).
+- **Settings** — the settings you change per situation: force modes (TC off / hazard lights / external button → mode), release lock on brake / handbrake, no‑lock speed and throttle window, steering‑angle lock scaling, gradual lock release and its rate, live diagnostics, LED brightness. Changes made on the web UI show up in the app and the other way round.
+- **Haldex diagnostics** — clutch / oil / module temperatures, supply voltage, clutch current and duty (and oil pressure / estimated torque on Gen4), from the same [Live Diagnostics](#live-diagnostics) pollers. Needs *Live diagnostics* switched on.
+- **Gauges** — `AWD Lock`, `AWD Lock Target`, `Steering` and the Haldex temperatures can be placed on the app's dashboards and in drive recordings.
+
+**Connecting.** With Bluetooth enabled (default), the app finds the controller as `OpenHaldex‑XXXX` and connects to the first one in range by itself; it can also be picked on the app's Bluetooth screen. Live data needs no pairing. The first change from a phone pairs it once:
+
+- the **first phone** pairs without a code (the phone at most asks you to confirm);
+- after that, **every new phone needs the 6‑digit pairing code**. It is shown in the app on an already paired phone and on the web UI (**Settings → Bluetooth**).
+
+**On the controller:** **Settings → Bluetooth (DashCAN App)** has the enable switch, a *phone connected* indicator, the pairing code and **Forget Paired Phones** — this removes every paired phone, makes a new code, and lets the next phone pair without one again (also forget the device in the phone's Bluetooth settings). Bluetooth follows the WiFi into [Low Power Mode](#low-power-mode): it switches off when the car is parked and comes back with it.
+
+> [!NOTE]
+> Until the first phone has paired — on a new controller, or right after Forget Paired Phones — anyone within Bluetooth range could be that first phone. Pair yours straight away; if a phone you don't know got there first, use Forget Paired Phones. Firmware updates are never done over Bluetooth.
+
+The protocol is documented in [`documents/MOBILE_APP_OPENHALDEX.md`](documents/MOBILE_APP_OPENHALDEX.md), so other apps can use it too. Endpoints: `POST /api/ble/forget`; `bleEnabled`, `blePasskey`, `bleCodeRequired` in `/api/settings`; `bleConnected`, `bleCodeRequired` in `/api/status`.
+
+---
+
 ## Installation
 
 >[!TIP]
@@ -664,6 +691,9 @@ Keep the page open and the screen on during an install. While a browser is on th
 
 > [!NOTE]
 > USB via ESP Web‑Tools (above) remains the recommended method for a controller's **first** flash or for recovering from a failed update; OTA is for updating a controller that's already running.
+
+> [!IMPORTANT]
+> The first release with [Bluetooth](#dashcan-app-bluetooth) changes the flash layout (bigger firmware slots, smaller web‑UI partition). A partition table can't be changed over the air, so that release is installed **once over USB** with ESP Web Tools; settings are kept. It is not offered by the OTA page on older firmware. Later updates work over OTA again.
 
 ---
 

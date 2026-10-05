@@ -70,6 +70,7 @@ function initApp() {
   initLongLearn();
   initWifiSsid();
   initWifi();
+  initBle();
   initWifiSta("wifiSta");    // Diagnostics
   initWifiSta("otaWifiSta"); // OTA tab copy - gets the phone online for the GitHub check
   initBackupRestore();
@@ -239,6 +240,13 @@ async function initStoredSettings() {
     const benchModeElem = document.getElementById("benchMode");
     if (benchModeElem) benchModeElem.checked = data.benchMode || false;
 
+    const bleEnabledElem = document.getElementById("bleEnabled");
+    if (bleEnabledElem) bleEnabledElem.checked = data.bleEnabled !== undefined ? data.bleEnabled : true;
+    if (data.blePasskey !== undefined) {
+      blePasskeyCache = data.blePasskey;
+      renderBlePairing(data.bleCodeRequired);
+    }
+
     // Aggressive implies basic - lock the basic checkbox while aggressive is on.
     if (canSleepElem && canSleepAggrElem) {
       canSleepElem.disabled = canSleepAggrElem.checked;
@@ -388,6 +396,14 @@ async function refreshStatus() {
     const chassisOk = data.chassisCAN;
     const haldexOk = data.haldexCAN;
     canStatus.textContent = `CAN: ${chassisOk ? "✓" : "X"} Chassis | ${haldexOk ? "✓" : "X"} Haldex`;
+
+    if (data.bleCodeRequired !== undefined) renderBlePairing(data.bleCodeRequired);
+
+    const bleStatus = document.getElementById("bleStatus");
+    if (bleStatus && data.bleConnected !== undefined) {
+      bleStatus.textContent = data.bleConnected ? "\u2713 Phone connected" : "No phone connected";
+      bleStatus.style.color = data.bleConnected ? "var(--success)" : "var(--text-dim)";
+    }
 
     setStatusPill("diagChassisCAN", chassisOk, "Healthy", "Unhealthy");
     setStatusPill("diagHaldexCAN", haldexOk, "Healthy", "Unhealthy");
@@ -708,12 +724,14 @@ async function saveSetting(key, value) {
 
     if (!response.ok) {
       showNotification("Failed to save setting", "error");
-    } else {
-      updateCachedSetting(key, value);
+      return false;
     }
+    updateCachedSetting(key, value);
+    return true;
   } catch (error) {
     console.log("Saving setting failed: " + error.message);
     showNotification("Error saving setting", "error");
+    return false;
   }
 }
 
@@ -1013,6 +1031,7 @@ function initSettings() {
     "canSleepEnabled",
     "canSleepAggressive",
     "benchMode",
+    "bleEnabled",
     "liveDiagEnabled",
     "lockReleaseEnabled",
     "steeringScaleEnabled",
@@ -1816,6 +1835,35 @@ function initWifiSsid() {
     status.textContent = "AP restarting as \"" + (resp.ssid || defaultSsid) + "\"\u2026";
     status.style.color = "var(--text-dim)";
     showNotification("WiFi SSID reset to default - reconnect to AP");
+  });
+}
+
+// Pairing line on the Bluetooth card: the code is only asked from the second phone on.
+let blePasskeyCache = null;
+function renderBlePairing(codeRequired) {
+  const el = document.getElementById("blePairing");
+  if (!el) return;
+  el.textContent = codeRequired
+    ? `Pairing code for another phone: ${blePasskeyCache ?? "--"}`
+    : "No phone paired yet - the first phone pairs without a code.";
+}
+
+// initialise Bluetooth (DashCAN app) section
+function initBle() {
+  const btnForget = document.getElementById("bleForget");
+
+  btnForget.addEventListener("click", async () => {
+    const resp = await fetchJson("/api/ble/forget", { method: "POST" });
+    if (!resp) {
+      showNotification("No response from the controller", "error");
+      return;
+    }
+    if (!resp.ok) {
+      showNotification("Bluetooth is off - nothing to forget", "error");
+      return;
+    }
+    showNotification("Paired phones forgotten, new pairing code - the next phone pairs without it");
+    initStoredSettings(); // refresh the pairing line
   });
 }
 
@@ -2632,9 +2680,9 @@ const BACKUP_GENERAL_KEYS = [
   "extButtonForceMode", "extBtnForceModeValue", "disableOnboardButton", "disableExternalButton",
   "followBrake", "invertBrake", "followHandbrake", "invertHandbrake",
   "fixHunting", "dangerZoneEnabled", "esp14MinFloorPct", "bpkCeilingNm",
-  "steeringScaleEnabled", "liveDiagEnabled", "ledBrightness",
+  "steeringScaleEnabled", "lockReleaseEnabled", "lockReleaseRatePerSec", "liveDiagEnabled", "ledBrightness",
   "canSleepEnabled", "canSleepAggressive", "benchMode", "lpWakeThresholdFps",
-  "longLearnNotes",
+  "longLearnNotes", "bleEnabled",
 ];
 
 function initBackupRestore() {

@@ -120,6 +120,8 @@ void readEEP() // function to read stored preferences into runtime variables
     dangerZoneEnabled = pref.getBool("dangerZone", false);      // load Danger Zone (full-duty 50:50)
     canSleepEnabled = pref.getBool("canSleepEn", true);                     // load CAN-wake light sleep enable
     benchMode = pref.getBool("benchMode", false);                           // load bench mode
+    bleEnabled = pref.getBool("bleEn", true);                               // load BLE enable
+    blePasskey = pref.getUInt("blePasskey", 0);                             // load BLE pairing code (0 = generate)
     canSleepAggressive = pref.getBool("canSleepAggr", false);               // load aggressive CAN sleep enable
     lpWakeThresholdFps = pref.getUShort("lpWakeFps", 1100);                  // load LP wake threshold (fps)
     ledBrightness = pref.getUChar("ledBrightness", led_brightness_default); // load LED brightness
@@ -268,6 +270,8 @@ void writeEEP(void *arg) // task function to periodically write preferences
     pref.putBool("dangerZone", dangerZoneEnabled);             // write Danger Zone (full-duty 50:50)
     pref.putBool("canSleepEn", canSleepEnabled);               // write CAN-wake light sleep enable
     pref.putBool("benchMode", benchMode);                      // write bench mode
+    pref.putBool("bleEn", bleEnabled);                         // write BLE enable
+    pref.putUInt("blePasskey", blePasskey);                    // write BLE pairing code
     pref.putBool("canSleepAggr", canSleepAggressive);          // write aggressive CAN sleep enable
     pref.putUShort("lpWakeFps", lpWakeThresholdFps);           // write LP wake threshold (fps)
     pref.putUChar("ledBrightness", ledBrightness);             // write LED brightness

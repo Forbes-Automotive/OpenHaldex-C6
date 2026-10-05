@@ -2,6 +2,7 @@
 #include <OpenHaldexC6_can.h>
 #include <OpenHaldexC6_WiFi.h>
 #include <OpenHaldexC6_OTA.h> // otaWebClientActive(): bridge-mode browsers hold WiFi up
+#include <OpenHaldexC6_Analyzer.h> // setAnalyzerMode(): enabling the controller leaves analyzer mode
 
 // Low-power state: 
 //   WATCHING = WiFi Active, Normal IO
@@ -191,6 +192,39 @@ void modeChange(void)
     }
   }
   lastMode = state.mode;
+}
+
+bool requestMode(uint8_t mode)
+{
+  if (mode >= (uint8_t)openhaldex_mode_t_MAX || disableController)
+  {
+    return false;
+  }
+
+  if (isStandalone && mode == MODE_STOCK)
+  {
+    state.mode = (openhaldex_mode_t)lastMode; // Stock is passthrough-only: standalone keeps the last driving mode
+  }
+  else
+  {
+    state.mode = (openhaldex_mode_t)mode;
+  }
+  lastMode = state.mode;
+  return true;
+}
+
+void setControllerDisabled(bool disabled)
+{
+  disableController = disabled;
+  if (disableController)
+  {
+    state.mode = MODE_STOCK;
+    lastMode = 0;
+  }
+  if (!disableController && analyzerMode)
+  {
+    setAnalyzerMode(false);
+  }
 }
 
 void modeChangeExt(void)

@@ -911,6 +911,21 @@
             </section>
 
             <section class="card">
+                <h2>Bluetooth (DashCAN App)</h2>
+                <p class="hint">Lets the DashCAN mobile app show live data and change the mode or switch the controller on/off over Bluetooth LE. The first phone pairs without a code (it may just ask you to confirm); after that, other phones need the pairing code below. Bluetooth switches off together with the WiFi when the car is parked (CAN sleep).</p>
+                <label class="toggle">
+                    <input type="checkbox" id="bleEnabled">
+                    <span class="toggle-slider"></span>
+                    <span class="toggle-label">Enable Bluetooth</span>
+                </label>
+                <p class="hint" id="bleStatus">--</p>
+                <p class="hint" id="blePairing">--</p>
+                <div class="wifi-controls">
+                    <button class="btn-secondary" id="bleForget">Forget Paired Phones</button>
+                </div>
+            </section>
+
+            <section class="card">
                 <h2>Backup &amp; Restore</h2>
                 <p class="hint">Export the Expert tune, steering scale, frame edits, settings and WiFi name to a JSON file. Do this before a firmware update &mdash; an update can wipe on-device settings. Import brings everything back in one go. WiFi passwords are never written to the file; you'll be asked to re-enter them once after importing if any were set.</p>
                 <p class="hint" id="backupStatus">--</p>
