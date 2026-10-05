@@ -1000,6 +1000,14 @@
                     controller to your router in <a href="#otaWifiStaCard" id="updGoBridge">Home WiFi</a> below, put this
                     phone on the same network and open the address that card shows. On the OpenHaldex‑C6 access point
                     alone most phones drop mobile data. Keep this page open until the device has rebooted.</p>
+                <div class="input-group">
+                    <label for="updChannel">Update channel</label>
+                    <select id="updChannel" class="input-select">
+                        <option value="stable">Stable - published releases</option>
+                        <option value="latest">Latest build - picks up rebuilds of the newest release</option>
+                    </select>
+                </div>
+                <p class="hint" id="updChannelHint" hidden></p>
                 <div class="button-row">
                     <button id="updCheckBtn" class="btn primary">Check for updates</button>
                     <button id="updBridgeBtn" class="btn" hidden>Set up Home WiFi</button>

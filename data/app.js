@@ -1965,6 +1965,14 @@ const UPD_MIRRORS = [
   { name: "jsDelivr", base: "https://cdn.jsdelivr.net/gh/" + UPD_REPO + "@" + UPD_BRANCH + "/Releases/" },
 ];
 const UPD_DIR_API = "https://api.github.com/repos/" + UPD_REPO + "/contents/Releases?ref=" + UPD_BRANCH;
+// Update channel. Everything is published on one branch - main is the live
+// development branch and Releases/ holds the stable-ish cut - so the channel
+// changes which builds are *offered*, not where they are fetched from.
+//   stable - only a higher version number than the one installed (as before)
+//   latest - also the newest release itself, because its .bin files get
+//            rebuilt in place when a fix lands before the next version is cut
+const UPD_CHANNEL_KEY = "otaUpdateChannel";
+let updChannel = "stable";
 const UPD_FOLDER_RE = /^V(\d+(?:\.\d+)*)$/i;
 // Mirror that last answered - the .bin downloads follow the index.
 let UPD_RELEASES_BASE = UPD_MIRRORS[0].base;
@@ -2035,6 +2043,9 @@ function initUpdateCheck() {
     const cur = installed();
     const all = showAll && showAll.checked;
     const list = otaCandidates().filter((r) => all || (r.channel !== "beta" && updCompareVersions(r.version, cur) >= 0));
+    // Nothing extra to add on "latest": the >= 0 compare above already keeps
+    // the installed version in the list, which is what makes a rebuild of it
+    // installable. The channel only changes the wording and the rebuild check.
     list.sort((a, b) => updCompareVersions(b.version, a.version));
     sel.innerHTML = "";
     list.forEach((r) => {
@@ -2236,7 +2247,56 @@ function initUpdateCheck() {
     else if (c === 0) { setState("Up to date", "upd-current"); setStatus("You are on the latest release." + srcNote + via); }
     else { setState("Ahead of release", "upd-current"); setStatus("Installed v" + cur + " is newer than the published v" + latest + "." + srcNote + via); }
     renderPicker();
+    if (updChannel === "latest" && index.releases && index.releases.length) {
+      const newest = otaCandidates().find((r) => r.version === index.latest);
+      if (newest) {
+        const rb = await rebuiltSinceIndexed(newest);
+        if (rb.changed) {
+          setState("Rebuilt since release", "upd-available");
+          setStatus("v" + newest.version + " has been rebuilt since it was indexed - the published firmware is " + rb.published +
+            " bytes, the release index records " + rb.indexed + ". That usually means a fix landed without the version being " +
+            "bumped. Installing v" + newest.version + " again picks it up." + via);
+        } else {
+          setStatus("Latest build channel: could not confirm whether v" + newest.version + " has been rebuilt since release (" +
+            (rb.unknown || "no comparison available") + "). Re-installing it is still the way to pick up an in-place fix." + via);
+        }
+      }
+    }
     finish();
+  }
+
+  // Has the newest release been rebuilt in place since it was indexed?
+  // releases.json records the size each .bin had when make_release.py ran, so
+  // a Content-Length that disagrees is positive evidence the file changed
+  // afterwards. One HEAD, no download.
+  //
+  // This is a one-way test. A size that matches does NOT mean the build is
+  // unchanged: littlefs.bin is a fixed-size partition image, so a rebuilt
+  // filesystem is always the same length, and a firmware rebuild can land on
+  // the same size by chance. (On this repo today 8.00.1 and 8.00.2 match the
+  // index exactly, while 8.00.3 and 9.00.0 do not - and for both of those the
+  // filesystem sha differs while its size does not.) Proving the negative
+  // would mean downloading both images and hashing them, which is not worth
+  // doing on a check, so a match is reported as "cannot tell", never as "no".
+  // Returns:
+  //   {changed:true, published, indexed} - definitely rebuilt since indexing
+  //   {unknown:"reason"}                 - could not tell, say so
+  async function rebuiltSinceIndexed(rel) {
+    const want = rel && rel.firmware && rel.firmware.size;
+    if (!want || rel.unindexed) return { unknown: "this release has no indexed size to compare against" };
+    const url = UPD_RELEASES_BASE + rel.firmware.path;
+    let res = null;
+    try {
+      res = await updFetch(url, 10000, { method: "HEAD", mode: "cors" });
+    } catch (e) {
+      return { unknown: "the published build could not be reached" };
+    }
+    if (!res.ok) return { unknown: "the published build answered HTTP " + res.status };
+    const len = parseInt(res.headers.get("content-length") || "0", 10);
+    // Not every mirror sends Content-Length (jsDelivr may not); never guess.
+    if (!len) return { unknown: "this mirror does not report a size" };
+    if (len !== want) return { changed: true, published: len, indexed: want };
+    return { unknown: "the firmware is the size the index expects, which does not rule out a rebuild" };
   }
 
   // streamed download with progress; returns a Blob and checks size when known
@@ -2383,9 +2443,57 @@ function initUpdateCheck() {
     const what = dir < 0 ? "roll back to v" + rel.version : (dir === 0 ? "re-install v" + rel.version : "update to v" + rel.version);
     let msg = "This will " + what + " (currently v" + cur + ").\n\nThe web UI is replaced first, then the firmware, then the device reboots. Keep this page open.";
     if (dir < 0) msg += "\n\nRolling back: older releases may not have this update page, so coming forward again could mean a USB flash. Settings may also be reset - export a backup first (Diagnostics tab).";
+    if (dir === 0) {
+      msg += "\n\nSame version number: this re-downloads whatever is published under v" + rel.version + " right now. If that " +
+        "build was rebuilt after release it will bring the newer code in; if it was not, you end up back where you started. " +
+        "It is not a published release in its own right, so export a settings backup first (Diagnostics tab).";
+    }
     if (!confirm(msg + "\n\nContinue?")) return;
     rel._blobs = {};
     runInstall(rel);
+  }
+
+  // --- update channel -----------------------------------------------------
+  // Kept in localStorage rather than on the controller: nothing on the device
+  // talks to GitHub (it has no internet), so this only affects this browser,
+  // and opting into unreleased builds should not silently follow the device to
+  // whoever opens it next.
+  const chanSel = $("updChannel"), chanHint = $("updChannelHint");
+  function renderChannel() {
+    if (chanSel) chanSel.value = updChannel;
+    if (!chanHint) return;
+    if (updChannel === "latest") {
+      chanHint.textContent = "main is the live development branch: when a fix lands before the next version is cut, the newest " +
+        "release folder is rebuilt in place under the same version number. On this channel the newest release stays installable " +
+        "even when its version matches what you already have, and a check reports whether it has been rebuilt since it was " +
+        "indexed. These builds have not been through a release - keep a settings backup (Diagnostics tab).";
+      chanHint.hidden = false;
+    } else {
+      chanHint.hidden = true;
+    }
+  }
+  try {
+    const saved = localStorage.getItem(UPD_CHANNEL_KEY);
+    if (saved === "latest" || saved === "stable") updChannel = saved;
+  } catch (e) { /* private mode - stay on stable */ }
+  renderChannel();
+  if (chanSel) {
+    chanSel.addEventListener("change", () => {
+      updChannel = chanSel.value === "latest" ? "latest" : "stable";
+      try { localStorage.setItem(UPD_CHANNEL_KEY, updChannel); } catch (e) { /* not fatal */ }
+      renderChannel();
+      // Re-check rather than re-label a stale result: the rebuild check only
+      // runs on the latest channel, so the previous status may not apply.
+      index = null;
+      picker.hidden = true;
+      resetSteps();
+      setState("Not checked");
+      setStatus(updChannel === "latest"
+        ? "Latest build channel selected. Press Check for updates."
+        : "Stable channel selected. Press Check for updates.");
+      checkBtn.textContent = "Check for updates";
+      if (bridgeBtn) bridgeBtn.hidden = true;
+    });
   }
 
   checkBtn.addEventListener("click", check);
