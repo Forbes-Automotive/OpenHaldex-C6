@@ -79,9 +79,12 @@ static void udsDecodeDID(uint16_t did, const twai_message_t &frame)
             udsCoolingFinTemp = ((int32_t)((uint16_t)frame.data[5] * 256 + frame.data[4]) - 22767) / 100.0f;
         break;
 
-    case 0x2BE9: // Haldex Clutch Voltage: 2 bytes BE, × 0.001 V  (0x001F=31 → 0.031 V ≈ 0 V at rest confirmed)
+    case 0x2BE9: // Haldex Clutch (pump) Voltage: LE16, × 0.1 V - same scale as 0x0286.
+                 // Bench 2026-09-20 (0CQ, pump at 61 % PWM, terminal 13.4 V): raw
+                 // 50 00 / 51 00 = 80/81 -> 8.0 V, which is PWM x supply. Read BE
+                 // x 0.001 that showed as an impossible 20.5 V. Rest: 00 00 -> 0 V.
         if (payloadLen >= 5)
-            udsClutchVoltage = (((uint16_t)frame.data[4] << 8) | frame.data[5]) * 0.001f;
+            udsClutchVoltage = (float)(((uint16_t)frame.data[5] << 8) | frame.data[4]) * 0.1f;
         break;
 
     default:

@@ -38,6 +38,11 @@ void fill_esp19_wheel_speeds(uint8_t data[8]);
 // a CRC placeholder for the caller) from the runtime BPK tunables in defs.h.
 void fill_motor11_bpk(uint8_t data[8], uint8_t counter);
 
+// Danger Zone is live this cycle: toggle on, full lock requested (> 99 %), not
+// in a learn sweep. When true the Motor_11 packers use BPK packing with the
+// ceiling raised to dangerZoneNm, whatever the Fix Hunting toggle says.
+bool dangerZoneActive();
+
 // Stores what the Motor_11 BPK packer computed this cycle, for the serial lab
 // task to stream out. Called from both BPK code paths at the Motor_11 rate.
 void bpkLogSample(uint16_t torqueNm, uint16_t istNm, uint16_t solfNm);

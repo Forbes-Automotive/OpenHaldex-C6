@@ -355,13 +355,18 @@ extern int32_t bpkForceSolfNm;
 // Last Motor_11 payload actually transmitted, for telemetry.
 extern volatile uint8_t bpkLastFrame[8];
 
-// Danger Zone: at a full 50:50 request, pin the ESP_14 coupling-range minimum
-// to the maximum so the Haldex is given no room to modulate and drives the pump
-// to full duty. Measured on the bench: ~99% PWM and ~10.5 A, versus ~56% PWM at
-// the same request with this off. Maximum clamping force, but the Haldex's
-// REPORTED engagement reads LOWER (80s rather than ~98%) because its estimate
-// backs off once the pressure relief valve opens. Off by default; persisted.
+// Danger Zone: at a full lock request (50:50, or Expert with lock_target > 99),
+// send Motor_11 in BPK packing with the torque ceiling raised to dangerZoneNm.
+// The 0CQ's pump duty follows the engine torque this frame claims, so the pump
+// goes past its normal ~60 % / 9-10 A and pegs the pressure relief valve.
+// Bench 2026-09-20 (0CQ, BPK): 220 Nm -> 58 % / 9 A; 285 Nm pegs the PRV;
+// 320 Nm -> 90 % / 11.0 A; 400 Nm -> 95 % / 11.5 A. Maximum clamping force,
+// but the Haldex's REPORTED engagement reads LOWER (80s rather than ~98%)
+// because its estimate backs off once the relief valve opens. ESP_14 Min/Max
+// pinning (the original implementation) was measured to do nothing on the 0CQ.
+// Off by default; the toggle is persisted, the Nm value is a lab tunable.
 extern bool dangerZoneEnabled;
+extern uint16_t dangerZoneNm; // 320 - used only when it exceeds bpkCeilingNm
 
 // ---- Serial lab byte overrides ----------------------------------------------
 // Force an individual byte of any generated standalone frame, so each byte's

@@ -513,13 +513,26 @@ void fill_esp19_wheel_speeds(uint8_t data[8])
   }
 }
 
+bool dangerZoneActive()
+{
+  return dangerZoneEnabled && !haldexLearnActive && lock_target > 99.0f;
+}
+
 void fill_motor11_bpk(uint8_t data[8], uint8_t counter)
 {
   // DBC-correct bit packing for Motor_11 (0x0A7). Every field below is a
   // runtime tunable (see defs.h) so the serial lab can massage the wire
   // format live; the defaults are the values that were hardcoded here.
   // Signals are 10-bit with offset -509, i.e. raw = Nm + 509.
-  const uint16_t ceilNm = bpkCeilingNm;
+  //
+  // Danger Zone: the pump duty on the 0CQ follows the torque this frame
+  // claims, not ESP_14 (bench 2026-09-20: 220 Nm -> 58 % / 9 A, 320 Nm ->
+  // 90 % / 11 A, 400 Nm -> 95 % / 11.5 A, relief valve pegged, reported
+  // engagement in the 80s). At a full lock request, raise the ceiling to
+  // dangerZoneNm unless the user's own calibration is already higher.
+  uint16_t ceilNm = bpkCeilingNm;
+  if (dangerZoneActive() && dangerZoneNm > ceilNm)
+    ceilNm = dangerZoneNm;
   const uint16_t floorNm = (bpkFloorNm < ceilNm) ? bpkFloorNm : 0;
 
   uint16_t torqueNm = get_lock_target_adjusted_value(0xFE, false);
@@ -1505,7 +1518,8 @@ void getLockData(twai_message_t &rx_message_chs)
       //   fixHunting == false : V3 packing - works on 554C/D/H and 554K @ 100% lock.
       //   fixHunting == true  : DBC-correct BPK packing - needed on 554K at partial
       //                         lock (60/40, 70/30) where V3 packing causes hunting.
-      if (!fixHunting)
+      //   Danger Zone live    : BPK packing regardless (raised ceiling), see fill_motor11_bpk.
+      if (!fixHunting && !dangerZoneActive())
       {
         rx_message_chs.data[0] = 0x00;                                        // checksum placeholder
         rx_message_chs.data[1] = MOTOR_11_counter;                            // rolling - 0x40>0x4F
@@ -1552,10 +1566,9 @@ void getLockData(twai_message_t &rx_message_chs)
             f = (uint16_t)(appliedTorque - 1);
           esp14Floor = (uint8_t)f;
         }
-        // Danger Zone: at a full 50:50 request only, pin Min to Max so the
-        // Haldex has no modulation room and goes to full pump duty.
-        if (dangerZoneEnabled && lock_target >= 100 && appliedTorque > 1)
-          esp14Floor = (uint8_t)(appliedTorque - 1);
+        // (Danger Zone used to pin Min here. Bench 2026-09-20: Min = Max - 1,
+        // Min = Max and the K-matrix 251/252 codes all leave the 0CQ pump at
+        // the same duty - it lives in the Motor_11 torque, see fill_motor11_bpk.)
         rx_message_chs.data[4] = esp14Floor; // BR_Vorg_Quer_Min
         rx_message_chs.data[6] = esp14Floor; // BR_Vorg_Allrad_Min
       }

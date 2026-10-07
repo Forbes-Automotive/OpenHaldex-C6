@@ -738,6 +738,13 @@ static void labHandleLine(char *line)
     dangerZoneEnabled = (v != 0);
     Serial.printf("OK,DANGER,%u\n", (unsigned)(dangerZoneEnabled ? 1 : 0));
   }
+  else if (strcmp(line, "DANGERNM") == 0)
+  {
+    // Motor_11 BPK ceiling applied while Danger Zone is live (same range as CEIL).
+    if (!labArgInt(arg, v)) { Serial.println("ERR,DANGERNM needs Nm"); return; }
+    dangerZoneNm = (uint16_t)constrain(v, 10, 500);
+    Serial.printf("OK,DANGERNM,%u\n", (unsigned)dangerZoneNm);
+  }
   else if (strcmp(line, "UDS") == 0)
   {
     if (!labArgInt(arg, v)) { Serial.println("ERR,UDS needs 0|1"); return; }
@@ -944,7 +951,7 @@ static void labHandleLine(char *line)
   {
     Serial.println("OK,HELP,PING GET LOG CEIL FLOOR FIXHUNT QBIT MODE CF"
                    " BPKFLOOR SLEWIST SLEWSOLF TRAEG SCHUB STATUS FORCEIST FORCESOLF"
-                   " WSFREEZE WSBASE WSDITHER WSFRONT WSLR UDS BLOCKS BLOCK OVR OVRS OVRCLR DANGER"
+                   " WSFREEZE WSBASE WSDITHER WSFRONT WSLR UDS BLOCKS BLOCK OVR OVRS OVRCLR DANGER DANGERNM"
                    " GEN SA RXIDS RXCLR DIAGID UDSRAW DTC DTCCLR SESS TP TXADD TXDEL TXCLR TXS HELP");
   }
   else

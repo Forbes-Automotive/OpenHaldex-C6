@@ -2,7 +2,7 @@
 #include <OpenHaldexC6_defs.h>
 
 // Current firmware version
-#define FW_VERSION "9.00.0" // also bump data/version.json ("fs")
+#define FW_VERSION "9.00.5" // also bump data/version.json ("fs")
 
 /*
 Version Control:
@@ -168,6 +168,25 @@ V9.00.0 - shared Forbes Automotive UI theme; automatic product web-asset
           revalidation, 304 when unchanged) instead of max-age=1y + a hand-
           bumped ?v= that kept being forgotten - phones were running a stale
           app.js against new HTML, so buttons on new cards did nothing.
+        - fixed saving the Haldex generation (dropdown or backup restore)
+          overwriting the saved drive mode with the generation number
+          (lastMode = generation) - Gen1/41/5x then booted in FWD.
+
+V9.00.5 - 9.00.4 (VAQ + Themes + ESP-NOW) merged with the GitHub contributor PRs:
+        - #39 WiFi bridge mode / config backup tool (already ported in 9.00.4)
+        - #40 CLI: accept the old _fw_version backup key (not needed by our tool)
+        - #43 OTA tab: Stable / Latest build update channel (web UI only)
+        - #44 Bluetooth LE for the DashCAN app (NimBLE) + lock release
+          switch/rate now actually save. PARTITION CHANGE: app slots
+          0x1A0000 -> 0x1C0000, LittleFS 0xB0000 -> 0x70000 (at 0x390000).
+          Needs ONE USB flash from any older build - cannot go over OTA.
+        - #42 Vehicle Geometry card (wheelbase / tracks / steering ratio)
+          for the per-corner slip calc, persisted, in backups. Defaults TT Mk3.
+        - #41 favicons, PWA manifest, home-screen icons. The six iOS splash
+          screens were left out: with them the UI (~145 blocks) no longer
+          fits the 0x70000 LittleFS (112 blocks) that #44 introduced.
+        - ESP-NOW and BLE now run side by side on the one radio - untested
+          together on hardware.
 
 */
 

@@ -12,6 +12,7 @@ Version: 8.00.5
 #include <OpenHaldexC6_WiFi.h>
 #include <OpenHaldexC6_Analyzer.h>
 #include <OpenHaldexC6_API.h>
+#include <OpenHaldexC6_ESPNow.h> // live state to can2gauge (and other displays) over ESP-NOW
 #include <OpenHaldexC6_BLE.h>
 #include <ESPmDNS.h> // for mDNS responder to allow openhaldex.local access to the web UI without needing to know the IP address
 #include "esp_pm.h"  // for power management when CAN sleep enabled
@@ -40,6 +41,7 @@ void setup()
   setupWebServer(); // setup WebServer
   setupAPI();       // setup API handling for WebServer
   setupOTA();       // setup Over-the-Air Updates
+  setupESPNow();    // gauges over ESP-NOW (follows the AP: started / stopped with it)
   setupBLE();       // setup BLE link to the DashCAN app (stack comes up from its own task)
 
   // Power management: when CAN sleep is enabled, scale CPU frequency down
@@ -97,6 +99,7 @@ void loop()
 #if detailedDebugWiFi
     DEBUG("Low Power: Disabling WiFi AP");
 #endif
+    espNowStop(); // before the radio goes
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_OFF);
   }
@@ -118,6 +121,7 @@ void loop()
       vTaskDelay(pdMS_TO_TICKS(50));
     }
 
+    espNowStop();                // the ESP-NOW task brings it back once the AP is up again
     WiFi.disconnect(true, true); // disconnect and erase AP settings to ensure a clean restart
     WiFi.mode(WIFI_OFF);         // turn off WiFi to reset the state
 

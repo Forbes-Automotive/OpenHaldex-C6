@@ -1937,7 +1937,9 @@ void Gen5_0CQ_frames10()
   frame.rtr = 0;
   frame.data_length_code = 8;
 
-  if (!fixHunting)
+  // Danger Zone rides on the BPK packing (raised torque ceiling), so it forces
+  // that path for the cycles it is live even with Fix Hunting off.
+  if (!fixHunting && !dangerZoneActive())
   {
     // ---- V3 packing (default, working on 554C/D/H and 554K@100%) ----
     appliedTorque = get_lock_target_adjusted_value(0xFA, false);
@@ -1953,7 +1955,7 @@ void Gen5_0CQ_frames10()
   }
   else
   {
-    // ---- BPK packing (Fix Hunting toggle on; needed for 554K @ partial lock) ----
+    // ---- BPK packing (Fix Hunting toggle on, or Danger Zone live) ----
     // Shared with the normal-mode packer so the two can never drift, and so the
     // serial lab tunables apply identically in both. See fill_motor11_bpk().
     appliedTorque = get_lock_target_adjusted_value(0xFE, false); // pre-scale value, for telemetry
@@ -2000,10 +2002,10 @@ void Gen5_0CQ_frames10()
         f = (uint16_t)(appliedTorque - 1);
       esp14Floor = (uint8_t)f;
     }
-    // Danger Zone: at a full 50:50 request only, pin Min to Max so the Haldex
-    // has no modulation room and goes to full pump duty.
-    if (dangerZoneEnabled && lock_target >= 100 && appliedTorque > 1)
-      esp14Floor = (uint8_t)(appliedTorque - 1);
+    // (Danger Zone used to pin Min here. Bench 2026-09-20 on the 0CQ: Min =
+    // Max - 1, Min = Max and the K-matrix 251 "Over-pressure" / 252 "fast
+    // close" codes, on Quer and Allrad, all leave the pump at the same ~65 %
+    // duty. The pump follows the Motor_11 torque - see fill_motor11_bpk.)
     frame.data[4] = esp14Floor; // BR_Vorg_Quer_Min
     frame.data[6] = esp14Floor; // BR_Vorg_Allrad_Min
   }
@@ -2619,7 +2621,7 @@ void Gen5_0CQ_VAQ_frames10()
   frame.rtr = 0;
   frame.data_length_code = 8;
 
-  if (!fixHunting)
+  if (!fixHunting && !dangerZoneActive())
   {
     // ---- V3 packing (default, working on 554C/D/H and 554K@100%) ----
     appliedTorque = get_lock_target_adjusted_value(0xFA, false);
@@ -2703,8 +2705,6 @@ void Gen5_0CQ_VAQ_frames10()
         f = (uint16_t)(appliedTorque - 1);
       esp14Floor = (uint8_t)f;
     }
-    if (dangerZoneEnabled && lock_target >= 100 && appliedTorque > 1)
-      esp14Floor = (uint8_t)(appliedTorque - 1);
     frame.data[6] = esp14Floor; // BR_Vorg_Allrad_Min
   }
   frame.data[7] = appliedTorque; // BR_Vorg_Allrad_Max
