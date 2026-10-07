@@ -3,6 +3,7 @@
 #include <OpenHaldexC6_Calculations.h>
 #include <OpenHaldexC6_WiFi.h>
 #include <OpenHaldexC6_OTA.h> // otaNoteWebActivity()
+#include <OpenHaldexC6_ESPNow.h> // gauges over ESP-NOW settings
 #include <OpenHaldexC6_BLE.h> // bleIsConnected(), bleForgetBonds()
 #include <OpenHaldexC6_Settings.h> // applyDrivingSetting()
 
@@ -372,8 +373,14 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
     data["invertHandbrake"] = invertHandbrake;
 
     data["broadcastOpenHaldexOverCAN"] = broadcastOpenHaldexOverCAN;
+    data["espNowEnabled"] = espNowEnabled; // gauges over ESP-NOW (can2gauge)
+    data["espNowControl"] = espNowControl;
 
     data["ledBrightness"] = ledBrightness;
+    data["slipWheelbaseMm"] = slipWheelbaseMm;
+    data["slipTrackFrontMm"] = slipTrackFrontMm;
+    data["slipTrackRearMm"] = slipTrackRearMm;
+    data["slipSteeringRatio"] = slipSteeringRatio;
 
     // throttle/speed/lock array send
     // row array
@@ -453,7 +460,6 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
         if (generation == 1 || generation == 2 || generation == 4 || generation == 50 || generation == 51 || generation == 52 || generation == 41)
         {
             haldexGeneration = (uint8_t)generation;
-            lastMode = generation;
             udsApplyDefaultIds(); // move the UDS pair with the generation (no-op while the serial lab has it pinned)
         }
     }
@@ -617,9 +623,34 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
         invertHandbrake = data["invertHandbrake"];
     }
 
+    if (data["espNowEnabled"].is<bool>())
+        espNowEnabled = data["espNowEnabled"];
+    if (data["espNowControl"].is<bool>())
+        espNowControl = data["espNowControl"];
+
     if (data["broadcastOpenHaldexOverCAN"].is<bool>())
     {
         broadcastOpenHaldexOverCAN = data["broadcastOpenHaldexOverCAN"];
+    }
+
+    // Vehicle geometry for per-corner slip (compute_corner_slip): mm/ratio,
+    // 0 is rejected by the calc itself so a bad value just disables slip calc
+    // rather than producing nonsense - safe range is generous, not exact.
+    if (data["slipWheelbaseMm"].is<int>())
+    {
+        slipWheelbaseMm = (uint16_t)constrain((int)data["slipWheelbaseMm"], 0, 4000);
+    }
+    if (data["slipTrackFrontMm"].is<int>())
+    {
+        slipTrackFrontMm = (uint16_t)constrain((int)data["slipTrackFrontMm"], 0, 2200);
+    }
+    if (data["slipTrackRearMm"].is<int>())
+    {
+        slipTrackRearMm = (uint16_t)constrain((int)data["slipTrackRearMm"], 0, 2200);
+    }
+    if (data["slipSteeringRatio"].is<float>())
+    {
+        slipSteeringRatio = constrain((float)data["slipSteeringRatio"], 1.0f, 40.0f);
     }
 
     // Long Learn chassis/car notes (free text, exported with the report)

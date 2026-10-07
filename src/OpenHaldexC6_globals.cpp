@@ -169,6 +169,7 @@ int32_t bpkForceSolfNm = -1;
 volatile uint8_t bpkLastFrame[8] = {0};
 
 bool dangerZoneEnabled = false; // full-duty 50:50 (see defs.h) - off by default
+uint16_t dangerZoneNm = 320;    // Motor_11 BPK ceiling used while Danger Zone is live (bench: 285 pegs the PRV, 320 -> 90 % / 11 A)
 
 LabOverride labOverrides[LAB_OVR_MAX] = {};
 
