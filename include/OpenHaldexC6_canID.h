@@ -90,6 +90,7 @@
 
 #define ESP_10 0x116
 #define MOTOR_20 0x121
+#define KLEMMEN_STATUS_01 0x3C0 // MQB ignition status (ZAS_Kl_15)
 #define ESP_18 0x135
 
 #define ESP_29 0x18c

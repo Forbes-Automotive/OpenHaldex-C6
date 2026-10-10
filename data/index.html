@@ -182,7 +182,7 @@
                         <div class="gauge-unit">%</div>
                     </div>
                 </div>
-                <p class="hint">Geometry-compensated per-corner slip vs. steering-predicted speed. Needs MQB wheel-speed + steering CAN. Geometry defaults are Audi TT Mk3 and want on-car calibration.</p>
+                <p class="hint">Per-corner slip vs. steering-predicted speed. Needs MQB wheel-speed and steering CAN. Set the car's geometry below.</p>
             </section>
 
             <section class="card" id="gen41Card" style="display:none;">
@@ -313,7 +313,7 @@
 
             <section class="card">
                 <h2>Display Options</h2>
-                <p class="hint">Choose which readouts show as dial gauges instead of numbers. Saved in this browser.</p>
+                <p class="hint">Pick which readouts show as dials. Saved in this browser.</p>
                 <div class="tile-opt-grid" id="gaugeCustomizer"></div>
                 <div class="toggle-group" style="margin-top:12px;">
                     <label class="toggle">
@@ -347,9 +347,7 @@
 
             <section class="card" id="learnSection">
                 <h2>Learn Haldex</h2>
-                <p class="hint">Sweeps correction factors 0–100% and records actual Haldex engagement at each step,
-                    building a calibration table that replaces the formula. Car must be running with Haldex CAN active.
-                </p>
+                <p class="hint">Sweeps 0&ndash;100% and records actual engagement to build a calibration table. Engine running, Haldex CAN active.</p>
                 <p class="hint" id="learnStatusText">--</p>
                 <div class="learn-progress-wrap" id="learnProgressWrap" style="display:none;">
                     <div class="learn-progress-bar">
@@ -392,26 +390,20 @@
                         <span class="toggle-slider"></span>
                         <span class="toggle-label">Fix Hunting</span>
                     </label>
-                    <p class="hint">Enable only if the Haldex hunts at partial lock (e.g. 60/40 or 70/30) on a 554K controller.</p>
+                    <p class="hint">Only if the Haldex hunts at partial lock (e.g. 60/40) on a 554K controller.</p>
                 </div>
             </section>
 
             <section class="card" id="longLearnSection">
                 <h2>Long Learn</h2>
-                <p class="hint">Automates the manual add/remove-a-block loop. Turns <strong>every</strong> frame block for this
-                    generation on, then (Gen5 0CQ/VAQ) steps the Launch PWM Floor until the learn is smooth &mdash; it may jump on
-                    first engage (e.g. to 30%) but must then climb cleanly to 100%. It then removes each additional block one at a
-                    time: any block whose removal <em>affects</em> the learn goes back on (flagged if it was actually better without);
-                    one that makes no difference stays off. A final confirmation learn is
-                    stored against the resulting set. Allow 10&ndash;20 minutes with the car running and Haldex CAN active.
-                    Cancelling restores the previous blocks, floor and learn table.</p>
+                <p class="hint">Finds which frame blocks the Haldex actually needs. Engine running, Haldex CAN active, about 6&ndash;8 min. Cancel restores everything.</p>
                 <div class="toggle-group">
                     <label class="toggle">
                         <input type="checkbox" id="longLearnTestAll">
                         <span class="toggle-slider"></span>
-                        <span class="toggle-label">Also test the default (core) blocks</span>
+                        <span class="toggle-label">Also test the lock-driven (core) blocks</span>
                     </label>
-                    <p class="hint">Off = the original edited set is kept as-is and only the transferred/additional blocks are bisected. On = every block is tested (longer, and can leave the Haldex with no lock command during a sweep).</p>
+                    <p class="hint">On = also test the lock-control blocks. Slower, and lock can drop out during a sweep.</p>
                 </div>
                 <p class="hint" id="longLearnStatusText">--</p>
                 <div class="learn-progress-wrap" id="longLearnProgressWrap" style="display:none;">
@@ -452,7 +444,7 @@
                 </div>
 
                 <h3 class="subsection-title" style="margin-top:18px;">Chassis / car notes</h3>
-                <p class="hint">Free text saved on the unit and written into the exported report &mdash; chassis, Haldex part number, tyres, tune, anything that identifies this car.</p>
+                <p class="hint">Saved on the unit and included in the exported report: chassis, Haldex part no., tyres, tune.</p>
                 <textarea id="longLearnNotes" class="ll-notes" rows="3" maxlength="200" placeholder="e.g. 2015 Golf R Mk7, 0CQ 554K, 235/35R19, Stage 1"></textarea>
                 <div class="button-row">
                     <button class="btn-secondary" id="longLearnExport" type="button">Export report (.txt)</button>
@@ -461,7 +453,7 @@
 
             <section class="card" id="gen5CalibrationCard">
                 <h2>Gen 5 Lock Calibration</h2>
-                <p class="hint">Per-car tuning for Gen5 (0CQ/VAQ). Both apply only to Gen5 packing; defaults leave behaviour unchanged.</p>
+                <p class="hint">Gen5 (0CQ/VAQ) only. Defaults change nothing.</p>
 
                 <div class="cal-row">
                     <div class="cal-row-head">
@@ -470,7 +462,7 @@
                     </div>
                     <input type="range" id="bpkCeilingRange" min="10" max="500" step="5" value="220" class="slider cal-slider">
                 </div>
-                <p class="hint">BPK ceiling the spoof frame claims at full command. Not a strength dial — run a Learn and nudge until commanded lock matches delivered (Sent vs Returned on the 1:1 line). Only active with Fix Hunting on.</p>
+                <p class="hint">Torque ceiling claimed at full command. Not a strength dial: run a Learn and adjust until Sent matches Returned. Needs Fix Hunting on.</p>
                 <div class="button-row">
                     <button class="btn" id="bpkCeilingResetBtn" type="button">Reset to default (220 Nm)</button>
                 </div>
@@ -482,7 +474,7 @@
                     </div>
                     <input type="range" id="esp14MinFloorRange" min="0" max="100" step="5" value="0" class="slider cal-slider">
                 </div>
-                <p class="hint">Experimental. Raises the ESP_14 minimum clutch PWM while lock is commanded, for a firmer launch. 0% = off. Collapses off-throttle/FWD/coasting and is clamped below the commanded max.</p>
+                <p class="hint">Experimental. Raises the minimum clutch PWM while lock is commanded, for firmer launches. 0% = off.</p>
                 <div class="button-row">
                     <button class="btn" id="esp14MinFloorResetBtn" type="button">Reset to default (0 %)</button>
                 </div>
@@ -504,7 +496,7 @@
                         <option value="4">75:25</option>
                         <option value="5">Expert</option>
                     </select>
-                    <p class="hint">Use the Traction Control Signal (via. CAN) to force mode</p>
+                    <p class="hint">Force mode from the traction control button (CAN).</p>
 
                     <label class="toggle">
                         <input type="checkbox" id="hazardForceMode">
@@ -519,7 +511,7 @@
                         <option value="4">75:25</option>
                         <option value="5">Expert</option>
                     </select>
-                    <p class="hint">Use the Hazard Lights (via. CAN) to force mode</p>
+                    <p class="hint">Force mode from the hazard lights (CAN).</p>
 
                     <div class="brightness-row" style="margin-top:10px;">
                         <span class="toggle-label">Ext. Control</span>
@@ -538,7 +530,7 @@
                             <option value="5">Expert</option>
                         </select>
                     </div>
-                    <p class="hint">Press: each tap advances to the next mode. Hold: button held forces the selected mode; releasing reverts.</p>
+                    <p class="hint">Press: next mode. Hold: force the selected mode until released.</p>
 
                     <div class="brightness-row" style="margin-top:10px;">
                         <span class="toggle-label">Force Mode Priority</span>
@@ -551,7 +543,7 @@
                             <option value="5">Ext &gt; Hazard &gt; TC</option>
                         </select>
                     </div>
-                    <p class="hint">When multiple triggers are active simultaneously, the highest-priority one wins.</p>
+                    <p class="hint">If several triggers are active, the highest priority wins.</p>
                 </div>
             </section>
 
@@ -614,19 +606,13 @@
                         <span class="toggle-slider"></span>
                         <span class="toggle-label">Allow Gauges to Change Settings</span>
                     </label>
-                    <p class="hint">Sends the live state over WiFi to can2gauge gauges in range - no CAN wiring to the gauge needed. With control allowed, a gauge can change the mode, generation and run Learn; the gauge needs this WiFi's password if one is set. Generation and Learn only work with the car stopped.</p>
+                    <p class="hint">Sends live data to can2gauge gauges over WiFi. With control allowed, a gauge can change mode and generation and run Learn (car stopped).</p>
                     <label class="toggle">
                         <input type="checkbox" id="dangerZoneEnabled">
                         <span class="toggle-slider"></span>
                         <span class="toggle-label">Danger Zone (full-duty 50:50)</span>
                     </label>
-                    <p class="hint">On a full lock request (50:50, or Expert where the map asks for more than 99%),
-                        tells the Haldex the engine is making more torque than your Lock Calibration (320 Nm, via
-                        the Fix Hunting packing), so the pump runs past its normal duty and pegs the pressure
-                        relief valve. Maximum clamping force, but the <strong>Returned %</strong> will read
-                        <em>lower</em> (bench: ~90–95% pump duty and ~11 A, reporting in the 80s, versus ~60% duty
-                        reporting ~100% with this off) — the Haldex backs its own estimate off once the relief
-                        valve opens. Increases pump load and current draw considerably. Off by default.</p>
+                    <p class="hint">On a full lock request, over-reports engine torque so the pump runs to the relief valve. Maximum clamping force, but <strong>Returned %</strong> reads lower (80s). Higher pump load and current.</p>
                     <label class="toggle">
                         <input type="checkbox" id="analyzerMode">
                         <span class="toggle-slider"></span>
@@ -642,8 +628,8 @@
                         <span class="toggle-slider"></span>
                         <span class="toggle-label">Enable Live Diagnostics</span>
                     </label>
-                    <p class="hint">Polls the Haldex ECU for live data using whatever generation is set (Gen5 = UDS; Gen2/4 = KWP2000/TP2.0). Requires Haldex CAN healthy.</p>
-                    <p class="hint">Note: Occupies the diagnostic channel — leave OFF when using VCDS or other diagnostic tools.</p>
+                    <p class="hint">Polls the Haldex for live data (Gen5: UDS, Gen2/4: KWP2000). Needs Haldex CAN.</p>
+                    <p class="hint">Uses the diagnostic channel. Turn off when using VCDS.</p>
                     <label class="toggle">
                         <input type="checkbox" id="disableOnboardButton">
                         <span class="toggle-slider"></span>
@@ -659,19 +645,19 @@
                         <span class="toggle-slider"></span>
                         <span class="toggle-label">Enable CAN Sleep</span>
                     </label>
-                    <p class="hint">After 5 min idle with no WiFi clients and both CAN buses silent, sleep until a CAN frame arrives. The first wake frame may be lost.</p>
+                    <p class="hint">Sleeps after 5 min with no WiFi clients and both CAN buses quiet. Wakes on CAN traffic; the first frame may be missed.</p>
                     <label class="toggle">
                         <input type="checkbox" id="canSleepAggressive">
                         <span class="toggle-slider"></span>
                         <span class="toggle-label">Enable CAN Sleep (Aggressive)</span>
                     </label>
-                    <p class="hint">Additionally parks the CAN transceivers in standby while sleeping, drops CPU freq. to 10MHz, and lowers WiFi AP TX power. Bus activity wakes the transceivers via GPIO interrupt within microseconds; a 2s safety-net probe runs as backup.</p>
+                    <p class="hint">Also puts the CAN transceivers in standby, drops the CPU to 10 MHz and lowers WiFi power while asleep.</p>
                     <label class="toggle">
                         <input type="checkbox" id="benchMode">
                         <span class="toggle-slider"></span>
                         <span class="toggle-label">Bench Mode</span>
                     </label>
-                    <p class="hint">Keeps the WiFi up indefinitely while bench testing over USB with no harness connected, overriding CAN sleep above. Self-clears the moment real CAN traffic is seen on either bus (i.e. once actually harnessed to a car), so it is safe to leave on &mdash; but turn it off once you're done tuning a permanent install.</p>
+                    <p class="hint">Keeps WiFi on for bench testing with no car connected. Switches itself off as soon as CAN traffic is seen.</p>
                     <p class="hint" id="benchModeStatus">--</p>
                     <div class="brightness-row">
                         <span class="toggle-label">LP Wake Threshold</span>
@@ -680,7 +666,8 @@
                             <span id="lpWakeThresholdFpsValue">1100</span> fps
                         </div>
                     </div>
-                    <p class="hint">OEM: chassis bus fps to confirm ignition-on. Standalone: Haldex bus fps. Parked = 0 fps.</p>
+                    <p class="hint" id="sleepCalStatus" hidden></p>
+                    <p class="hint">OEM: chassis bus fps. Standalone: Haldex bus fps. Parked = 0.</p>
                     <div class="brightness-row">
                         <span class="toggle-label">Live Frame Rate</span>
                         <div class="brightness-controls">
@@ -703,7 +690,7 @@
         <div class="page" id="basic-page">
             <section class="card">
                 <h2>Disengage Under Speed (km/h)</h2>
-                <p class="hint">Use this to disable ANY lock BELOW a certain speed (for car parks etc)</p>
+                <p class="hint">No lock below this speed (car parks etc.).</p>
 
                 <div class="slider-container">
                     <input type="range" id="disengageUnderSpeedRange" min="0" max="300" value="120" class="slider">
@@ -713,7 +700,7 @@
 
             <section class="card">
                 <h2>Disengage Above Speed (km/h)</h2>
-                <p class="hint">Use this to disable ANY lock ABOVE a certain speed (for highways etc)</p>
+                <p class="hint">No lock above this speed (motorways etc.).</p>
 
                 <div class="slider-container">
                     <input type="range" id="disengageAboveSpeedRange" min="0" max="300" value="120" class="slider">
@@ -723,7 +710,7 @@
 
             <section class="card">
                 <h2>Minimum Throttle Before Lock (%)</h2>
-                <p class="hint">Use this to disable ANY lock BELOW a certain throttle (for car parks etc)</p>
+                <p class="hint">No lock below this throttle.</p>
 
                 <div class="slider-container">
                     <input type="range" id="disableThrottleRange" min="0" max="100" value="15" class="slider">
@@ -733,7 +720,7 @@
 
             <section class="card">
                 <h2>Lock Release Rate (%/s)</h2>
-                <p class="hint">Controls how quickly the lock target decays when releasing throttle or changing mode. Higher = faster release. Lock-up is always instantaneous. Disable for instant release (legacy behaviour).</p>
+                <p class="hint">How fast lock fades when lifting off or changing mode. Higher = faster. Lock-up is always instant. Off = instant release.</p>
 
                 <div class="toggle-group">
                     <label class="toggle">
@@ -768,14 +755,14 @@
 
             <section class="card">
                 <h2>Lock Map Surface</h2>
-                <p class="hint">Read-only 3D view of the lock table — speed and throttle on the ground, lock % as height. The dot rides the live operating point. Editing the grid above redraws it.</p>
+                <p class="hint">3D view of the lock table. The dot is the live operating point.</p>
                 <div class="tune-chart" id="tuneChart"></div>
                 <div class="chart-legend" id="tuneChartLegend"></div>
             </section>
 
             <section class="card" id="steeringScaleCard">
                 <h2>Steering-Angle Lock Scale</h2>
-                <p class="hint">Reduces overall lock as steering-wheel angle increases (FWD bias). 100% = full lock. Applies to Gen2, Gen4, Gen5 (0CQ) and VAQ.</p>
+                <p class="hint">Reduces lock as steering angle increases. 100% = full lock. Gen2, Gen4, Gen5 (0CQ) and VAQ.</p>
                 <div class="toggle-group">
                     <label class="toggle">
                         <input type="checkbox" id="steeringScaleEnabled" checked>
@@ -792,7 +779,7 @@
 
             <section class="card" id="vehicleGeometryCard">
                 <h2>Vehicle Geometry</h2>
-                <p class="hint">Used for the geometry-compensated per-corner slip calculation (feeds the per-wheel slip readout and Steering-Angle Lock Scale above). Defaults are Audi TT Mk3 - enter the real figures for your car for accurate results. Changing these does not affect any other mode or lock target.</p>
+                <p class="hint">Used for per-wheel slip and Steering-Angle Lock Scale. Defaults are Audi TT Mk3; enter your car's figures.</p>
                 <div class="form-group">
                     <label for="slipWheelbaseMm">Wheelbase (mm)</label>
                     <input type="number" id="slipWheelbaseMm" min="0" max="4000" step="1" class="input-number">
@@ -905,7 +892,7 @@
 
             <section class="card">
                 <h2>Frame Editing (Advanced)</h2>
-                <p class="hint">Enable or disable editing of individual CAN frames in normal (non-standalone) mode. Unchecking a frame leaves the car's original frame untouched (clean passthrough). Use this to bisect which edited frame upsets the learn procedure. Changes apply immediately and are saved. Only affects the selected Haldex generation.</p>
+                <p class="hint">Choose which frames are edited in normal mode. Unticked frames pass through untouched. Saved immediately, current generation only.</p>
                 <div id="frameEditList" class="frame-edit-list">
                     <p class="hint">Not available for this generation.</p>
                 </div>
@@ -916,7 +903,7 @@
 
             <section class="card">
                 <h2>WiFi Name (SSID)</h2>
-                <p class="hint">Change the access-point name broadcast by the controller. 1&ndash;32 printable ASCII characters. Saving restarts the AP &mdash; you will need to reconnect.</p>
+                <p class="hint">1&ndash;32 printable characters. Saving restarts the AP; reconnect afterwards.</p>
                 <p class="hint" id="wifiSsidStatus">--</p>
                 <div class="wifi-password-row">
                     <input type="text" id="wifiSsidInput" placeholder="OpenHaldex-C6" class="input-wifi-password" maxlength="32" autocomplete="off" spellcheck="false">
@@ -929,7 +916,7 @@
 
             <section class="card">
                 <h2>WiFi Password</h2>
-                <p class="hint">Set a WPA2 password (min. 8 characters) to secure the access point. Leave blank to keep an open network. Long-pressing the mode button always resets back to open.</p>
+                <p class="hint">WPA2, 8+ characters. Blank = open network. Long-press the mode button to reset to open.</p>
                 <p class="hint" id="wifiPasswordStatus">--</p>
                 <div class="wifi-password-row">
                     <input type="password" id="wifiPasswordInput" placeholder="No password (open network)" class="input-wifi-password" maxlength="64" autocomplete="new-password">
@@ -943,7 +930,7 @@
 
             <section class="card">
                 <h2>Home WiFi (Bridge Mode)</h2>
-                <p class="hint">Optional: also join a home or garage WiFi network as a client. The controller's own access point keeps running either way &mdash; this just makes it reachable (and lets you run backups) from a phone or laptop already on that network, without switching WiFi. Leave blank to disable. The controller still sleeps after 5 minutes without CAN traffic unless Bench Mode is on, and it only looks for the home network for 20&nbsp;s after starting, then once every 5 minutes, so it can't disturb the AP while you're away from home.</p>
+                <p class="hint">Optional. Also joins your home/garage WiFi so the unit is reachable from that network; the AP stays on. Blank = off. Retries every 5 min.</p>
                 <p class="hint" id="wifiStaStatus">--</p>
                 <div class="wifi-password-row">
                     <input type="text" id="wifiStaSsidInput" placeholder="Home network name" class="input-wifi-password" maxlength="32" autocomplete="off" spellcheck="false" list="wifiStaSsidList">
@@ -962,7 +949,7 @@
 
             <section class="card">
                 <h2>Bluetooth (DashCAN App)</h2>
-                <p class="hint">Lets the DashCAN mobile app show live data and change the mode or switch the controller on/off over Bluetooth LE. The first phone pairs without a code (it may just ask you to confirm); after that, other phones need the pairing code below. Bluetooth switches off together with the WiFi when the car is parked (CAN sleep).</p>
+                <p class="hint">Lets the DashCAN app show live data and change mode over Bluetooth. The first phone pairs without a code; others need the code below. Off when parked.</p>
                 <label class="toggle">
                     <input type="checkbox" id="bleEnabled">
                     <span class="toggle-slider"></span>
@@ -977,7 +964,7 @@
 
             <section class="card">
                 <h2>Backup &amp; Restore</h2>
-                <p class="hint">Export the Expert tune, steering scale, frame edits, settings and WiFi name to a JSON file. Do this before a firmware update &mdash; an update can wipe on-device settings. Import brings everything back in one go. WiFi passwords are never written to the file; you'll be asked to re-enter them once after importing if any were set.</p>
+                <p class="hint">Exports tune, steering scale, frame edits and settings to a file. Do this before a firmware update. Passwords aren't exported; you'll re-enter them after import.</p>
                 <p class="hint" id="backupStatus">--</p>
                 <div class="wifi-controls">
                     <button class="btn-secondary" id="backupExport">Export Config</button>
@@ -1033,8 +1020,7 @@
             <section class="card">
                 <h2>Update Safety</h2>
                 <div class="sysgrid" id="otaSafety"></div>
-                <p class="hint">Firmware updates are blocked while the vehicle is moving or the CAN
-                    bus is unhealthy. This is a safety feature and cannot be overridden.</p>
+                <p class="hint">Updates are blocked while moving or with CAN unhealthy.</p>
             </section>
             <!-- Guided update straight from GitHub. Needs internet in this
                  browser while it can still reach the controller: controller on
@@ -1046,10 +1032,7 @@
                     <div><span>Latest</span><strong id="updLatest">--</strong></div>
                     <div><span>Status</span><strong id="updState">Not checked</strong></div>
                 </div>
-                <p class="hint">This browser needs internet while it can still reach the controller: join the
-                    controller to your router in <a href="#otaWifiStaCard" id="updGoBridge">Home WiFi</a> below, put this
-                    phone on the same network and open the address that card shows. On the OpenHaldex‑C6 access point
-                    alone most phones drop mobile data. Keep this page open until the device has rebooted.</p>
+                <p class="hint">This phone needs internet while reaching the controller: join the controller to your router under <a href="#otaWifiStaCard" id="updGoBridge">Home WiFi</a>, put this phone on the same network and open the address shown. Keep this page open until it reboots.</p>
                 <div class="input-group">
                     <label for="updChannel">Update channel</label>
                     <select id="updChannel" class="input-select">
@@ -1091,9 +1074,7 @@
                  so the router can be joined from here without leaving the tab. -->
             <section class="card" id="otaWifiStaCard">
                 <h2>Home WiFi (Bridge Mode)</h2>
-                <p class="hint">Join the controller to your home or garage router; its own access point keeps running.
-                    Once it shows <em>Connected</em>, put this phone on the same network, open the address shown and
-                    press <strong>Check for updates</strong> again.</p>
+                <p class="hint">Join the controller to your router (the AP stays on). Once <em>Connected</em>, put this phone on the same network, open the address shown and press <strong>Check for updates</strong> again.</p>
                 <p class="hint" id="otaWifiStaStatus">--</p>
                 <div class="wifi-password-row">
                     <input type="text" id="otaWifiStaSsidInput" placeholder="Home network name" class="input-wifi-password" maxlength="32" autocomplete="off" spellcheck="false" list="otaWifiStaSsidList">
@@ -1111,12 +1092,7 @@
             </section>
             <section class="card">
                 <h2>Update from Files</h2>
-                <p class="hint">No internet needed here. Download <code>littlefs.bin</code> and <code>firmware.bin</code>
-                    from the newest <code>V…</code> folder in
-                    <a href="https://github.com/Forbes-Automotive/OpenHaldex-C6/tree/main/Releases" target="_blank"
-                        rel="noopener">Releases on GitHub</a>, then upload them here: <strong>Filesystem</strong>
-                    (littlefs.bin, the web interface) first, then <strong>Firmware</strong> (firmware.bin). The device
-                    reboots once the firmware upload completes.</p>
+                <p class="hint">No internet needed. Get <code>littlefs.bin</code> and <code>firmware.bin</code> from the newest folder in <a href="https://github.com/Forbes-Automotive/OpenHaldex-C6/tree/main/Releases" target="_blank" rel="noopener">Releases</a>. Upload <strong>Filesystem</strong> first, then <strong>Firmware</strong>.</p>
                 <div class="ota-steps" id="otaSteps">
                     <div class="ota-step" data-step="filesystem"><span class="ota-step-num">1</span> Filesystem</div>
                     <div class="ota-step" data-step="firmware"><span class="ota-step-num">2</span> Firmware</div>

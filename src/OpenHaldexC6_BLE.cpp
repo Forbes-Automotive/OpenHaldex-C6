@@ -3,6 +3,7 @@
 #include <OpenHaldexC6_Settings.h> // applyDrivingSetting(), buildDrivingSettings()
 #include <NimBLEDevice.h>
 #include "esp_mac.h"
+#include "esp_heap_caps.h" // free-heap figure logged before BLE init
 
 // =============================================================================
 // BLE link to the DashCAN mobile app
@@ -87,6 +88,7 @@ struct BleWrite
 
 static QueueHandle_t bleWriteQueue = nullptr;
 static bool bleRunning = false;
+static bool bleInitFailed = false; // controller/host refused to start: BLE stays off until reboot (WiFi/CAN carry on)
 static volatile bool bleConnected = false;
 static volatile bool bleForgetBondsRequest = false;
 
@@ -423,14 +425,25 @@ static void updateInfo()
   chrInfo->setValue(info, sizeof(info));
 }
 
-static void bleStart()
+static bool bleStart()
 {
   uint8_t mac[6] = {0};
   esp_read_mac(mac, ESP_MAC_BT);
   char name[20];
   snprintf(name, sizeof(name), "OpenHaldex-%02X%02X", mac[4], mac[5]);
 
-  NimBLEDevice::init(name);
+  DEBUG("BLE - starting, internal heap free %u, largest block %u",
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+        (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+  if (!NimBLEDevice::init(name))
+  {
+    // Controller init failed (seen as "ble ll env init error code:-13" on the
+    // C6). The host was never started, so every NimBLE call below would lock a
+    // NULL mutex and panic - a boot loop, since this runs ~1 s after WiFi is up.
+    // Leave BLE off for this session instead; the rest of the unit is unaffected.
+    DEBUG("BLE - init FAILED, BLE disabled until reboot");
+    return false;
+  }
   // "Just Works" pairing: bonding + LE Secure Connections, no MITM, so no
   // passkey to type - the phone at most asks to confirm. Writes still need an
   // encrypted (bonded) link; anyone in range can pair, a deliberate trade-off
@@ -501,6 +514,10 @@ static void bleStart()
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
   adv->setAdvertisementData(advData);
   adv->setScanResponseData(scanData);
+  // WiFi and BLE share the C6's one radio. NimBLE's default 30-60 ms advertising
+  // starves the web server; 500-690 ms still finds the device within a second.
+  adv->setMinInterval(800);  // x 0.625 ms
+  adv->setMaxInterval(1100);
   adv->start(); // also starts the GATT server
 
   // Bonded phones cache the GATT table (iOS and Android). After a firmware
@@ -513,6 +530,7 @@ static void bleStart()
 
   bleRunning = true;
   DEBUG("BLE - advertising as %s", name);
+  return true;
 }
 
 static void bleStop()
@@ -547,9 +565,12 @@ static void bleTask(void *arg)
   while (1)
   {
     const bool wanted = bleEnabled && !lowPowerMode;
-    if (wanted && !bleRunning)
+    if (wanted && !bleRunning && !bleInitFailed)
     {
-      bleStart();
+      if (!bleStart())
+      {
+        bleInitFailed = true;
+      }
       notifiedMode = notifiedCtrl = 0xFF;
       memset(notifiedSettings, 0, sizeof(notifiedSettings));
     }

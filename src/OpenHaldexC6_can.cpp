@@ -155,8 +155,11 @@ void setupCAN()
   twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();                                                          // accept all messages
 
   // g_config.intr_flags = ESP_INTR_FLAG_LOWMED;  //Optional - move canbus irq to free up the default level 1 IRQ it will take up.  Todo
-  g_config.tx_queue_len = 1024; //<TWAI_GENERAL_CONFIG_DEFAULT default is 5, use this to increase if needed
-  g_config.rx_queue_len = 2048; //<TWAI_GENERAL_CONFIG_DEFAULT default is 5, use this to increase if needed // 4096
+  // Queues come out of heap at 13 B per frame, per bus. Was 1024/2048 (~80 KB for both buses).
+  // 512 RX = ~115 ms of a 100%-loaded 500k bus; the parse tasks are the top app priority.
+  // Check the debugMemory "CAN" line for missed/overrun counts if this is ever in doubt.
+  g_config.tx_queue_len = 256;
+  g_config.rx_queue_len = 512;
   // g_config.intr_flags = ESP_INTR_FLAG_IRAM;
 
   // Allow the TWAI power domain to be powered down during light sleep; the
@@ -588,6 +591,13 @@ void parseCAN_chs(void *arg)
           received_vehicle_boost = (boost_mbar > 0) ? (uint16_t)boost_mbar : 0;
           break;
         }
+
+        case KLEMMEN_STATUS_01:
+          // MQB Klemmen_Status_01 (0x3C0), MQB_ACAN_KMatrix:
+          //   SG_ ZAS_Kl_15 : 17|1@1+ -> byte 2 bit 1, ignition (terminal 15) on
+          received_kl15 = (rx_message_chs.data[2] >> 1) & 0x01;
+          lastKl15Ms = millis();
+          break;
 
         case MOTOR_20:
           // MQB Motor_20 (0x121) - accelerator/raw pedal broadcast.

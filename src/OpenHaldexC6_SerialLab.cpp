@@ -376,19 +376,13 @@ static void labUdsRawCmd(const uint8_t *req, size_t reqLen, uint32_t timeoutMs)
 static void labSetStandalone(bool on)
 {
   isStandalone = on;
-  // Mirror /api/settings: the frame tasks only run while standalone.
-  TaskHandle_t hs[] = {handle_frames1000, handle_frames200, handle_frames100, handle_frames25,
-                       handle_frames20, handle_frames10, handle_frames13, handle_frames50,
-                       handle_frames250, handle_gen41_dual_bus_rates};
-  for (TaskHandle_t h : hs)
-  {
-    if (h == nullptr)
-      continue;
-    if (on)
-      vTaskResume(h);
-    else
-      vTaskSuspend(h);
-  }
+  // Mirror /api/settings: the frame task only runs while standalone.
+  if (handle_standaloneFrames == nullptr)
+    return;
+  if (on)
+    vTaskResume(handle_standaloneFrames);
+  else
+    vTaskSuspend(handle_standaloneFrames);
 }
 
 // Direct lock request. Piggybacks the learn plumbing (haldexLearnActive makes

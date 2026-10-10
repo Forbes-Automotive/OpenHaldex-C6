@@ -19,6 +19,9 @@ static uint32_t lpLastHaldexSnap     = 0;
 static uint32_t lpChassisFps         = 0;
 static uint32_t lpHaldexFps          = 0;
 
+static uint32_t sleepCalSum          = 0; // chassis fps summed over the current window
+static uint16_t sleepCalSecs         = 0; // seconds in the current window
+
 // Bench mode support (PR #39): latches true the first time real CAN traffic is
 // seen on either bus this power cycle. Once set, benchMode stops suppressing
 // sleep - the unit is demonstrably harnessed - so a forgotten toggle can't
@@ -40,16 +43,7 @@ struct LpManagedTask { TaskHandle_t *handle; bool standaloneOnly; };
 static const LpManagedTask lpManagedTasks[] = {
   { &handle_broadcastOpenHaldex,   false },
   { &handle_showHaldexState,       false },
-  { &handle_frames1000,            true  },
-  { &handle_frames250,             true  },
-  { &handle_frames200,             true  },
-  { &handle_frames100,             true  },
-  { &handle_frames50,              true  },
-  { &handle_frames25,              true  },
-  { &handle_frames20,              true  },
-  { &handle_frames13,              true  },
-  { &handle_frames10,              true  },
-  { &handle_gen41_dual_bus_rates,  true  },
+  { &handle_standaloneFrames,      true  },
 };
 
 // GPIO ISRs - fire on the first falling edge of CAN_RX while the
@@ -137,6 +131,40 @@ static void lpResumeBackgroundTasks()
     }
   }
   lpTasksSuspended = false;
+}
+
+// One second of the sleep auto-setup. Counts only while nobody is connected,
+// the car is parked with the ignition off (KL15, where the car sends it) and
+// CAN has been seen this session (not on the bench). Anything else restarts
+// the 15 min window.
+static void sleepCalTick(bool noClients)
+{
+  const bool parked = received_vehicle_speed == 0 && (received_vehicle_rpm == 0 || !hasCANChassis) && !ignitionOn();
+  if (!noClients || !parked || !everSawCANThisSession)
+  {
+    sleepCalSum = 0;
+    sleepCalSecs = 0;
+    return;
+  }
+
+  if (sleepCalSecs == 0)
+  {
+    canSleepEnabled = true;
+    canSleepAggressive = true;
+    DEBUG("Sleep auto-setup: measuring parked bus for %u s", (unsigned)SLEEP_CAL_WINDOW_S);
+  }
+  sleepCalSum += lpChassisFps;
+  sleepCalSecs++;
+  if (sleepCalSecs < SLEEP_CAL_WINDOW_S)
+    return;
+
+  sleepCalAvgFps = (uint16_t)(sleepCalSum / sleepCalSecs);
+  uint32_t t = sleepCalAvgFps + SLEEP_CAL_MARGIN_FPS;
+  t = ((t + 9) / 10) * 10; // slider step
+  lpWakeThresholdFps = (uint16_t)constrain(t, 100UL, 2000UL);
+  sleepCalState = SLEEP_CAL_DONE;
+  DEBUG("Sleep auto-setup: parked avg %u fps -> wake threshold %u fps",
+        (unsigned)sleepCalAvgFps, (unsigned)lpWakeThresholdFps);
 }
 
 void setupIO()
@@ -350,8 +378,10 @@ void updateTriggers(void *arg)
     // everything back.
     {
       // Compute frames-per-second once per second from the running frame counters.
+      bool fpsUpdated = false;
       if ((now - lpLastFpsCheck) >= 1000UL)
       {
+        fpsUpdated = true;
         lpChassisFps = lpChassisFrameCount - lpLastChassisSnap;
         lpHaldexFps = lpHaldexFrameCount - lpLastHaldexSnap;
         lpLastChassisSnap = lpChassisFrameCount;
@@ -366,11 +396,12 @@ void updateTriggers(void *arg)
         }
         else
         {
-          DEBUG("LP_WATCHING: chassis=%lu fps  haldex=%lu fps  threshold=%u  standalone=%d  clients=%d  noClientSince=%lu",
+          DEBUG("LP_WATCHING: chassis=%lu fps  haldex=%lu fps  threshold=%u  standalone=%d  clients=%d  noClientSince=%lu  kl15=%d  sleepCal=%u %us",
                 (unsigned long)lpChassisFps, (unsigned long)lpHaldexFps,
                 (unsigned)lpWakeThresholdFps, (int)isStandalone,
                 (int)WiFi.softAPgetStationNum(),
-                lpNoClientsSince ? (unsigned long)(now - lpNoClientsSince) : 0UL);
+                lpNoClientsSince ? (unsigned long)(now - lpNoClientsSince) : 0UL,
+                (int)ignitionOn(), (unsigned)sleepCalState, (unsigned)sleepCalSecs);
         }
       }
 
@@ -389,13 +420,18 @@ void updateTriggers(void *arg)
       // (everSawCANThisSession latches) this stops applying.
       const bool benchHold = benchMode && !everSawCANThisSession;
 
+      // Sleep auto-setup: hold sleep off until the parked bus has been measured once.
+      const bool sleepCalHold = (sleepCalState == SLEEP_CAL_ARMED) && !isStandalone;
+      if (sleepCalHold && fpsUpdated)
+        sleepCalTick(noClients);
+
       switch (lpState)
       {
       case LP_WATCHING:
         // canSleepEnabled is the UI toggle: it used to gate only the CPU
         // frequency scaling in main.cpp, never this WiFi shutdown, so turning
         // it off did nothing visible (PR #39 fix).
-        if (canSleepEnabled && noClients && !canActive && !benchHold)
+        if (canSleepEnabled && noClients && !canActive && !benchHold && !sleepCalHold)
         {
           if (lpNoClientsSince == 0)
             lpNoClientsSince = now;

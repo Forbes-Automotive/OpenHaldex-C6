@@ -16,7 +16,7 @@
 #include <OpenHaldexC6_canID.h>
 #include <OpenHaldexC6_ver.h>
 
-#include "Freenove_WS2812_Lib_for_ESP32.h" // for RGB LED
+#include <OpenHaldexC6_led.h>              // for RGB LED (single WS2812, replaces Freenove lib - see header)
 #include <Preferences.h>                   // for eeprom/remember settings
 
 #include <WiFi.h>    // included for WiFi pages
@@ -48,6 +48,7 @@
 #define detailedDebugIO 0           // set to 1 to enable detailed IO debug messages (only recommended when debugging IO-related issues, as it can be very verbose)
 #define detailedDebugArray 0        // set to 1 to enable detailed debug messages for arrays (like throttle/speed/lock curves) - only recommended when debugging issues related to those, as it can be very verbose
 #define debugCANSleep 0             // set to 1 to skip the 5-min idle/60-s count and sleep after ~2 s with no clients
+#define debugMemory 1               // set to 1 to print heap + every task's unused stack 15 s after boot, then every 60 s
 
 // refresh rates
 #define eepRefresh 2000           // EEPROM save in ms
@@ -140,16 +141,7 @@ extern twai_message_t rx_message_chs; // incoming chassis message
 extern twai_message_t tx_message_hdx; // outgoing haldex message
 extern twai_message_t tx_message_chs; // outgoing chassis message
 
-extern TaskHandle_t handle_frames1000;           // for enabling/disabling 1000ms frames
-extern TaskHandle_t handle_frames250;            // for enabling/disabling 250ms frames
-extern TaskHandle_t handle_frames200;            // for enabling/disabling 200ms frames
-extern TaskHandle_t handle_frames100;            // for enabling/disabling 100ms frames
-extern TaskHandle_t handle_frames50;             // for enabling/disabling 50ms frames
-extern TaskHandle_t handle_frames25;             // for enabling/disabling 25ms frames
-extern TaskHandle_t handle_frames20;             // for enabling/disabling 20ms frames
-extern TaskHandle_t handle_frames13;             // for enabling/disabling 13ms frames
-extern TaskHandle_t handle_frames10;             // for enabling/disabling 10ms frames
-extern TaskHandle_t handle_gen41_dual_bus_rates; // dedicated Gen41 dual-bus cadence task
+extern TaskHandle_t handle_standaloneFrames;     // standalone frame scheduler (runs only while standalone)
 extern TaskHandle_t handle_broadcastOpenHaldex;  // OpenHaldex CAN broadcast task (suspended in aggressive sleep)
 extern TaskHandle_t handle_showHaldexState;      // serial state logger (suspended in aggressive sleep)
 extern TaskHandle_t handle_updateTriggers;       // notified by CAN_RX wake ISRs in aggressive sleep
@@ -162,7 +154,7 @@ extern bool isMPH;       // 0 = kph, 1 = mph
 extern Preferences pref; // for EEPROM / storing settings
 
 // for LED
-extern Freenove_ESP32_WS2812 strip; // 1 led, gpio pin, channel, type of LED
+extern OneLed strip; // 1 led, gpio pin, colour order
 
 // for mode changing (buttons & external inputs)
 extern InterruptButton btnMode;     // pin, GPIO_MODE_INPUT, state when pressed, long press, autorepeat, double-click, debounce
@@ -171,12 +163,7 @@ extern InterruptButton btnMode_ext; // pin, GPIO_MODE_INPUT, state when pressed,
 extern AsyncWebServer webServer;
 
 // functions
-void frames10(void *arg);
-void frames20(void *arg);
-void frames25(void *arg);
-void frames100(void *arg);
-void frames200(void *arg);
-void frames1000(void *arg);
+void standaloneFramesTask(void *arg);
 
 void parseCAN_chs(void *arg);
 void parseCAN_hdx(void *arg);
@@ -279,6 +266,9 @@ extern bool received_kickdown;
 extern float received_pedal_value;
 extern uint16_t received_vehicle_speed;
 extern uint16_t received_vehicle_rpm;
+extern bool received_kl15;          // MQB ZAS_Kl_15 (ignition on), from Klemmen_Status_01
+extern uint32_t lastKl15Ms;         // millis() of the last Klemmen_Status_01; 0 = never seen
+bool ignitionOn();                  // KL15 on and fresh; false when unknown
 extern uint16_t received_vehicle_boost;
 extern uint8_t haldexGeneration;
 // Steering-wheel angle magnitude (deg, abs) decoded from chassis CAN + last-seen time.
@@ -445,6 +435,7 @@ extern uint64_t frameEditMask[FE_GEN_COUNT];                 // passthrough (nor
 extern uint64_t frameEditMaskSA[FE_GEN_COUNT];               // standalone enable bits per generation
 extern const uint64_t frameEditMaskDefaults[FE_GEN_COUNT];   // normal-mode defaults (historically-edited frames on)
 extern const uint64_t frameEditMaskDefaultsSA[FE_GEN_COUNT]; // standalone defaults (all frames on)
+extern const uint64_t frameEditLockDriven[FE_GEN_COUNT];     // blocks whose payload follows lock_target (Long Learn core)
 extern const FrameEditBlock frameEditBlocks[];            // descriptor table for UI/API
 extern const uint16_t frameEditBlockCount;                // number of entries in frameEditBlocks[]
 int frameEditGenIdx(uint8_t generation);                  // haldexGeneration -> FE_GEN_* (-1 if not gated)
@@ -509,6 +500,17 @@ extern bool analyzerSerial; // Serial GVRET (1 Mbaud, SavvyCAN serial connection
 // Default 1100 fps on chassis bus; Standalone uses a hardcoded 50 fps threshold.
 // Frames required = lpWakeThresholdFps * lowPowerProbeMs / 1000
 extern uint16_t lpWakeThresholdFps; // runtime wake threshold (fps), adjustable via UI
+
+// One-shot sleep auto-setup (offered for Gen5): measure the parked chassis bus
+// for 15 min, then wake threshold = average + SLEEP_CAL_MARGIN_FPS.
+#define SLEEP_CAL_NONE 0     // never offered
+#define SLEEP_CAL_ARMED 1    // waiting for the car to be left parked
+#define SLEEP_CAL_DONE 2     // measured; threshold set
+#define SLEEP_CAL_DECLINED 3 // user said no; don't ask again
+#define SLEEP_CAL_WINDOW_S 900
+#define SLEEP_CAL_MARGIN_FPS 300
+extern uint8_t sleepCalState;    // persisted
+extern uint16_t sleepCalAvgFps;  // parked-bus average measured by the auto-setup (persisted, for display)
 
 // Analyzer protocol for the TCP bridge (GVRET for SavvyCAN, Lawicel/SLCAN for CANHacker).
 #define ANALYZER_PROTOCOL_GVRET 0
@@ -662,15 +664,6 @@ extern uint32_t rxtxcount; // frame counter
 extern uint32_t stackCHS;
 extern uint32_t stackHDX;
 
-extern uint32_t stackframes10;
-extern uint32_t stackframes13;
-extern uint32_t stackframes20;
-extern uint32_t stackframes25;
-extern uint32_t stackframes50;
-extern uint32_t stackframes100;
-extern uint32_t stackframes200;
-extern uint32_t stackframes250;
-extern uint32_t stackframes1000;
 
 extern uint32_t stackbroadcastOpenHaldex;
 extern uint32_t stackupdateLabels;

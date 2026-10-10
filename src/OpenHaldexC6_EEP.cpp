@@ -77,6 +77,8 @@ void readEEP() // function to read stored preferences into runtime variables
     pref.putBool("benchMode", benchMode);                      // save bench mode (off)
     pref.putBool("canSleepAggr", canSleepAggressive);          // save aggressive CAN sleep enable
     pref.putUShort("lpWakeFps", lpWakeThresholdFps);           // save LP wake threshold (fps)
+    pref.putUChar("sleepCal", sleepCalState);                  // save sleep auto-setup state
+    pref.putUShort("sleepCalAvg", sleepCalAvgFps);             // save parked-bus average (fps)
     pref.putUChar("ledBrightness", ledBrightness);             // save LED brightness
     pref.putUShort("slipWheelbase", slipWheelbaseMm);                         // save vehicle wheelbase (mm)
     pref.putUShort("slipTrackFront", slipTrackFrontMm);                       // save vehicle front track (mm)
@@ -135,6 +137,8 @@ void readEEP() // function to read stored preferences into runtime variables
     blePasskey = pref.getUInt("blePasskey", 0);                             // load BLE pairing code (0 = generate)
     canSleepAggressive = pref.getBool("canSleepAggr", false);               // load aggressive CAN sleep enable
     lpWakeThresholdFps = pref.getUShort("lpWakeFps", 1100);                  // load LP wake threshold (fps)
+    sleepCalState = pref.getUChar("sleepCal", SLEEP_CAL_NONE);              // load sleep auto-setup state
+    sleepCalAvgFps = pref.getUShort("sleepCalAvg", 0);                      // load parked-bus average (fps)
     ledBrightness = pref.getUChar("ledBrightness", led_brightness_default); // load LED brightness
     slipWheelbaseMm = pref.getUShort("slipWheelbase", 2505);                     // load vehicle wheelbase (mm), default Audi TT Mk3
     slipTrackFrontMm = pref.getUShort("slipTrackFront", 1572);                  // load vehicle front track (mm), default Audi TT Mk3
@@ -291,6 +295,8 @@ void writeEEP(void *arg) // task function to periodically write preferences
     pref.putUInt("blePasskey", blePasskey);                    // write BLE pairing code
     pref.putBool("canSleepAggr", canSleepAggressive);          // write aggressive CAN sleep enable
     pref.putUShort("lpWakeFps", lpWakeThresholdFps);           // write LP wake threshold (fps)
+    pref.putUChar("sleepCal", sleepCalState);                  // write sleep auto-setup state
+    pref.putUShort("sleepCalAvg", sleepCalAvgFps);             // write parked-bus average (fps)
     pref.putUChar("ledBrightness", ledBrightness);             // write LED brightness
     pref.putUShort("slipWheelbase", slipWheelbaseMm);                         // write vehicle wheelbase (mm)
     pref.putUShort("slipTrackFront", slipTrackFrontMm);                       // write vehicle front track (mm)
