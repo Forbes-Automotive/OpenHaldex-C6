@@ -11,16 +11,7 @@ twai_message_t rx_message_chs; // incoming chassis message
 twai_message_t tx_message_hdx; // outgoing haldex message
 twai_message_t tx_message_chs; // outgoing chassis message
 
-TaskHandle_t handle_frames1000; // for enabling/disabling 1000ms frames
-TaskHandle_t handle_frames250;  // for enabling/disabling 250ms frames
-TaskHandle_t handle_frames200;  // for enabling/disabling 200ms frames
-TaskHandle_t handle_frames100;  // for enabling/disabling 100ms frames
-TaskHandle_t handle_frames50;   // for enabling/disabling 50ms frames
-TaskHandle_t handle_frames25;   // for enabling/disabling 25ms frames
-TaskHandle_t handle_frames20;   // for enabling/disabling 20ms frames
-TaskHandle_t handle_frames13;   // for enabling/disabling 13ms frames
-TaskHandle_t handle_frames10;   // for enabling/disabling 10ms frames
-TaskHandle_t handle_gen41_dual_bus_rates; // dedicated Gen41 dual-bus cadence task
+TaskHandle_t handle_standaloneFrames = nullptr; // standalone frame scheduler (runs only while standalone)
 TaskHandle_t handle_broadcastOpenHaldex = nullptr; // OpenHaldex CAN broadcast task (suspended in aggressive sleep)
 TaskHandle_t handle_showHaldexState     = nullptr; // serial state logger (suspended in aggressive sleep)
 TaskHandle_t handle_updateTriggers      = nullptr; // notified by CAN_RX wake ISRs in aggressive sleep
@@ -29,7 +20,7 @@ TaskHandle_t handle_updateTriggers      = nullptr; // notified by CAN_RX wake IS
 Preferences pref; // for EEPROM / storing settings
 
 // for LED - will be initialized in setupIO()
-Freenove_ESP32_WS2812 strip = Freenove_ESP32_WS2812(1, gpio_led, led_channel, TYPE_RGB); // 1 led, gpio pin, channel, type of LED
+OneLed strip(gpio_led, LED_COLOR_ORDER_RGB); // 1 led, gpio pin, colour order (was Freenove TYPE_RGB)
 
 // for mode changing (buttons & external inputs) - will be initialized in setupButtons()
 InterruptButton btnMode(gpio_mode, HIGH, GPIO_MODE_INPUT, 1000, 500, 750, 80000);         // pin, GPIO_MODE_INPUT, state when pressed, long press, autorepeat, double-click, debounce
@@ -90,6 +81,15 @@ uint16_t slipTrackFrontMm = 1572;          // front track
 uint16_t slipTrackRearMm = 1543;           // rear track
 uint16_t slipMinSpeedRaw = 667;            // ~5 km/h floor below which slip is untrustworthy
 uint16_t received_vehicle_rpm;
+bool received_kl15 = false;
+uint32_t lastKl15Ms = 0;
+
+// Klemmen_Status_01 is sent every 100 ms and stops when the bus sleeps,
+// so an old value means "unknown", not "on".
+bool ignitionOn()
+{
+  return lastKl15Ms != 0 && (millis() - lastKl15Ms) < 2000UL && received_kl15;
+}
 uint16_t received_vehicle_boost;
 uint8_t haldexGeneration;
 uint8_t tcForceModeValue     = 2; // default 50:50
@@ -213,6 +213,17 @@ const uint64_t frameEditMaskDefaultsSA[FE_GEN_COUNT] = {
 
 uint64_t frameEditMaskSA[FE_GEN_COUNT] = {
     0x0000000FULL, 0x00001FFFULL, 0x00000FFFULL, 0x0FFFFFFFULL, 0x0003FFFFULL};
+
+// Blocks whose payload is built from lock_target (get_lock_target_adjusted_value)
+// - the ones we MUST edit to have control. Long Learn always sends these and
+// only tests the rest (the static payloads). Keep in step with getLockData().
+const uint64_t frameEditLockDriven[FE_GEN_COUNT] = {
+    0x0000000FULL, // FE_GEN_1 : Motor_1, Motor_3, Bremse_1, Bremse_3
+    0x0000001FULL, // FE_GEN_2 : Motor_1, Motor_3, Bremse_1, Bremse_2, Bremse_3
+    0x0000003EULL, // FE_GEN_4 : Motor_1, Bremse_1, Bremse_2, Bremse_3, Bremse_4
+    0x0000001DULL, // FE_GEN_50: ESP_19 (lock-biased wheel speeds), Motor_12, Motor_11, ESP_14
+    0x00000007ULL, // FE_GEN_51: Motor_1, Bremse_3, Bremse_4
+};
 
 // Descriptor table used by the API/UI. Order per generation defines the bit index.
 const FrameEditBlock frameEditBlocks[] = {
@@ -352,6 +363,8 @@ bool bleEnabled = true;          // BLE link to the DashCAN app
 uint32_t blePasskey = 0;         // 0 = not made yet; setupBLE() generates one
 volatile bool canWakeRequest = false; // ISR-set wake flag when transceivers in standby see bus activity
 uint16_t lpWakeThresholdFps = 1100; // wake threshold fps; default 1100 — user adjustable via UI
+uint8_t sleepCalState = SLEEP_CAL_NONE;
+uint16_t sleepCalAvgFps = 0;
 
 bool otaUpdate = false;
 
@@ -433,16 +446,6 @@ uint32_t rxtxcount = 0; // frame counter
 uint32_t stackCHS = 0;
 uint32_t stackHDX = 0;
 
-uint32_t stackframes10 = 0;
-uint32_t stackframes13 = 0;
-uint32_t stackframes20 = 0;
-uint32_t stackframes25 = 0;
-uint32_t stackframes50 = 0;
-uint32_t stackframes100 = 0;
-uint32_t stackframes200 = 0;
-uint32_t stackframes250 = 0;
-uint32_t stackframes1000 = 0;
-
 uint32_t stackbroadcastOpenHaldex = 0;
 uint32_t stackupdateLabels = 0;
 uint32_t stackshowHaldexState = 0;
@@ -507,6 +510,10 @@ uint8_t longLearnFloorResult = 0;
 uint64_t longLearnMaskStart = 0;
 uint16_t longLearnBpkStart = 0;
 bool longLearnBpkAdjusted = false;
+uint8_t longLearnFailReason = 0;
+uint8_t longLearnNoise = 0;
+uint8_t longLearnTol = 0;
+bool longLearnInteraction = false;
 LongLearnSweep longLearnSweeps[LL_MAX_SWEEPS];
 uint8_t longLearnSweepCount = 0;
 uint32_t longLearnStartMs = 0;

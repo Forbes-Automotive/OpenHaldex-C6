@@ -362,6 +362,8 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
     data["canSleepAggressive"] = canSleepAggressive;
     data["benchMode"] = benchMode;
     data["lpWakeThresholdFps"] = lpWakeThresholdFps;
+    data["sleepCalState"] = sleepCalState;
+    data["sleepCalAvgFps"] = sleepCalAvgFps;
 
     data["analyzerMode"] = analyzerMode;
     data["analyzerSerial"] = analyzerSerial;
@@ -515,29 +517,11 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
 
         if (!isStandalone)
         {
-            vTaskSuspend(handle_frames1000);
-            vTaskSuspend(handle_frames200);
-            vTaskSuspend(handle_frames100);
-            vTaskSuspend(handle_frames25);
-            vTaskSuspend(handle_frames20);
-            vTaskSuspend(handle_frames10);
-            vTaskSuspend(handle_frames13);
-            vTaskSuspend(handle_frames50);
-            vTaskSuspend(handle_frames250);
-            vTaskSuspend(handle_gen41_dual_bus_rates);
+            vTaskSuspend(handle_standaloneFrames);
         }
         else
         {
-            vTaskResume(handle_frames1000);
-            vTaskResume(handle_frames200);
-            vTaskResume(handle_frames100);
-            vTaskResume(handle_frames25);
-            vTaskResume(handle_frames20);
-            vTaskResume(handle_frames10);
-            vTaskResume(handle_frames13);
-            vTaskResume(handle_frames50);
-            vTaskResume(handle_frames250);
-            vTaskResume(handle_gen41_dual_bus_rates);
+            vTaskResume(handle_standaloneFrames);
         }
     }
 
@@ -612,6 +596,10 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
     if (data["lpWakeThresholdFps"].is<uint16_t>())
     {
         lpWakeThresholdFps = constrain((uint16_t)data["lpWakeThresholdFps"], 0, 2000);
+    }
+    if (data["sleepCalArm"].is<bool>())
+    {
+        sleepCalState = data["sleepCalArm"] ? SLEEP_CAL_ARMED : SLEEP_CAL_DECLINED;
     }
     if (data["invertBrake"].is<bool>())
     {
@@ -1098,6 +1086,13 @@ void setupAPI()
                      data["bpkAdjusted"]  = longLearnBpkAdjusted;
                      data["fixHunting"]   = fixHunting;
                      data["isStandalone"] = isStandalone;
+                     data["failReason"]   = longLearnFailReason;
+                     data["noise"]        = longLearnNoise;
+                     data["tol"]          = longLearnTol;
+                     data["interaction"]  = longLearnInteraction;
+                     JsonArray ptCF = data["ptCF"].to<JsonArray>(); // CF of each sweeps[].pts entry
+                     for (uint8_t k = 0; k < LL_NPTS; k++)
+                         ptCF.add(LL_POINT_CF[k]);
                      const uint32_t endMs = longLearnActive ? millis() : longLearnEndMs;
                      data["elapsedS"]   = (longLearnStartMs && endMs >= longLearnStartMs) ? (endMs - longLearnStartMs) / 1000 : 0;
                      // live sweep position (mirrors /api/learn/status)
@@ -1138,6 +1133,7 @@ void setupAPI()
                              o["canId"]   = frameEditBlocks[i].canId;
                              o["enabled"] = (bool)((m >> frameEditBlocks[i].bit) & 0x1ULL);
                              o["def"]     = (bool)((frameEditMaskDefaults[gi] >> frameEditBlocks[i].bit) & 0x1ULL);
+                             o["core"]    = (bool)((frameEditLockDriven[gi] >> frameEditBlocks[i].bit) & 0x1ULL);
                              o["result"]  = longLearnBlockResult[frameEditBlocks[i].bit];
                          }
                      }
@@ -1153,6 +1149,14 @@ void setupAPI()
                          o["floor"]   = e.floorPct;
                          o["bpk"]     = e.bpkNm;
                          o["verdict"] = e.verdict;
+                         o["dev"]     = e.maxDev;
+                         o["dMean"]   = e.meanDelta;
+                         if (e.kind == LLS_POINTS || e.kind == LLS_BLOCK)
+                         {
+                             JsonArray p = o["pts"].to<JsonArray>();
+                             for (uint8_t k = 0; k < LL_NPTS; k++)
+                                 p.add(e.pts[k]);
+                         }
                          putScore(o, e.s);
                      }
                      sendJSON(request, 200, data); });

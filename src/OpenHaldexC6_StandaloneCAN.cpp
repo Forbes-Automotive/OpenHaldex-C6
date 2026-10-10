@@ -55,6 +55,7 @@ static const uint8_t *idSeqFor(uint32_t id)
 
 static inline void standaloneTx(twai_message_t &f)
 {
+  f.self = 0; // a self-received frame reads as a live Haldex (flicker to ✓ with lock 0)
   int genid = frameEditGenIdx(haldexGeneration);
   if (genid >= 0)
   {
@@ -93,265 +94,187 @@ static inline void standaloneTx(twai_message_t &f)
 }
 
 // Periodic frame tasks
-void frames10(void *arg)
+static void frames10()
 {
-  while (1)
+  switch (haldexGeneration)
   {
-    // Analyzer mode runs as a passive bridge; skip standalone frame generation.
-    if (analyzerMode)
-    {
-      vTaskDelay(10 / portTICK_PERIOD_MS);
-      continue;
-    }
-    if (isStandalone)
-    {
-      switch (haldexGeneration)
-      {
-      case 1:
-        Gen1_frames10();
-        break;
-      case 2:
-        Gen2_frames10();
-        break;
-      case 4:
-        Gen4_frames10();
-        break;
-      case 41:
-        Gen41_frames10();
-        break;
-      case 42:
-        Gen42_frames10();
-        break;
-      case 50:
-        Gen5_0CQ_frames10();
-        break;
-      case 51:
-        Gen5_0AY_frames10();
-        break;
-      case 52:
-        Gen5_0CQ_VAQ_frames10();
-        break;
-      }
-    }
-    vTaskDelay(10 / portTICK_PERIOD_MS);
+  case 1:
+    Gen1_frames10();
+    break;
+  case 2:
+    Gen2_frames10();
+    break;
+  case 4:
+    Gen4_frames10();
+    break;
+  case 41:
+    Gen41_frames10();
+    break;
+  case 42:
+    Gen42_frames10();
+    break;
+  case 50:
+    Gen5_0CQ_frames10();
+    break;
+  case 51:
+    Gen5_0AY_frames10();
+    break;
+  case 52:
+    Gen5_0CQ_VAQ_frames10();
+    break;
   }
 }
 
-void frames20(void *arg)
+static void frames20()
 {
-  while (1)
+  switch (haldexGeneration)
   {
-    // Analyzer mode runs as a passive bridge; skip standalone frame generation.
-    if (analyzerMode)
-    {
-      vTaskDelay(20 / portTICK_PERIOD_MS);
-      continue;
-    }
-    if (isStandalone)
-    {
-      switch (haldexGeneration)
-      {
-      case 1:
-        Gen1_frames20();
-        break;
-      case 2:
-        Gen2_frames20();
-        break;
-      case 4:
-        Gen4_frames20();
-        break;
-      case 41:
-        Gen41_frames20();
-        break;
-      case 42:
-        Gen42_frames20();
-        break;
-      case 50:
-        Gen5_0CQ_frames20();
-        break;
-      case 51:
-        Gen5_0AY_frames20();
-        break;
-      case 52:
-        Gen5_0CQ_VAQ_frames20();
-        break;
-      }
-    }
-    vTaskDelay(20 / portTICK_PERIOD_MS);
+  case 1:
+    Gen1_frames20();
+    break;
+  case 2:
+    Gen2_frames20();
+    break;
+  case 4:
+    Gen4_frames20();
+    break;
+  case 41:
+    Gen41_frames20();
+    break;
+  case 42:
+    Gen42_frames20();
+    break;
+  case 50:
+    Gen5_0CQ_frames20();
+    break;
+  case 51:
+    Gen5_0AY_frames20();
+    break;
+  case 52:
+    Gen5_0CQ_VAQ_frames20();
+    break;
   }
 }
 
-void frames25(void *arg)
+static void frames25()
 {
-  while (1)
+  switch (haldexGeneration)
   {
-    // Analyzer mode runs as a passive bridge; skip standalone frame generation.
-    if (analyzerMode)
-    {
-      vTaskDelay(25 / portTICK_PERIOD_MS);
-      continue;
-    }
-    if (isStandalone)
-    {
-      switch (haldexGeneration)
-      {
-      case 1:
-        Gen1_frames25();
-        break;
-      case 2:
-        Gen2_frames25();
-        break;
-      case 4:
-        Gen4_frames25();
-        break;
-      case 41:
-        Gen41_frames25();
-        break;
-      case 50:
-        Gen5_0CQ_frames25();
-        break;
-      case 51:
-        Gen5_0AY_frames25();
-        break;
-      case 52:
-        Gen5_0CQ_VAQ_frames25();
-        break;
-      }
-    }
-    vTaskDelay(25 / portTICK_PERIOD_MS);
+  case 1:
+    Gen1_frames25();
+    break;
+  case 2:
+    Gen2_frames25();
+    break;
+  case 4:
+    Gen4_frames25();
+    break;
+  case 41:
+    Gen41_frames25();
+    break;
+  case 50:
+    Gen5_0CQ_frames25();
+    break;
+  case 51:
+    Gen5_0AY_frames25();
+    break;
+  case 52:
+    Gen5_0CQ_VAQ_frames25();
+    break;
   }
 }
 
-void frames100(void *arg)
+static void frames100()
 {
-  while (1)
+  lock_target = get_lock_target_adjustment();
+  switch (haldexGeneration)
   {
-    // Analyzer mode runs as a passive bridge; skip standalone frame generation.
-    if (analyzerMode)
-    {
-      vTaskDelay(100 / portTICK_PERIOD_MS);
-      continue;
-    }
-    if (isStandalone)
-    {
-      lock_target = get_lock_target_adjustment();
-      switch (haldexGeneration)
-      {
-      case 1:
-        Gen1_frames100();
-        break;
-      case 2:
-        Gen2_frames100();
-        break;
-      case 4:
-        Gen4_frames100();
-        break;
-      case 41:
-        Gen41_frames100();
-        break;
-      case 42:
-        Gen42_frames100();
-        break;
-      case 50:
-        Gen5_0CQ_frames100();
-        break;
-      case 51:
-        Gen5_0AY_frames100();
-        break;
-      case 52:
-        Gen5_0CQ_VAQ_frames100();
-        break;
-      }
-    }
-    vTaskDelay(100 / portTICK_PERIOD_MS);
+  case 1:
+    Gen1_frames100();
+    break;
+  case 2:
+    Gen2_frames100();
+    break;
+  case 4:
+    Gen4_frames100();
+    break;
+  case 41:
+    Gen41_frames100();
+    break;
+  case 42:
+    Gen42_frames100();
+    break;
+  case 50:
+    Gen5_0CQ_frames100();
+    break;
+  case 51:
+    Gen5_0AY_frames100();
+    break;
+  case 52:
+    Gen5_0CQ_VAQ_frames100();
+    break;
   }
 }
 
-void frames200(void *arg)
+static void frames200()
 {
-  while (1)
+  switch (haldexGeneration)
   {
-    // Analyzer mode runs as a passive bridge; skip standalone frame generation.
-    if (analyzerMode)
-    {
-      vTaskDelay(200 / portTICK_PERIOD_MS);
-      continue;
-    }
-    if (isStandalone)
-    {
-      switch (haldexGeneration)
-      {
-      case 1:
-        Gen1_frames200();
-        break;
-      case 2:
-        Gen2_frames200();
-        break;
-      case 4:
-        Gen4_frames200();
-        break;
-      case 41:
-        Gen41_frames200();
-        break;
-      case 42:
-        Gen42_frames200();
-        break;
-      case 50:
-        Gen5_0CQ_frames200();
-        break;
-      case 51:
-        Gen5_0AY_frames200();
-        break;
-      case 52:
-        Gen5_0CQ_VAQ_frames200();
-        break;
-      }
-    }
-    vTaskDelay(200 / portTICK_PERIOD_MS);
+  case 1:
+    Gen1_frames200();
+    break;
+  case 2:
+    Gen2_frames200();
+    break;
+  case 4:
+    Gen4_frames200();
+    break;
+  case 41:
+    Gen41_frames200();
+    break;
+  case 42:
+    Gen42_frames200();
+    break;
+  case 50:
+    Gen5_0CQ_frames200();
+    break;
+  case 51:
+    Gen5_0AY_frames200();
+    break;
+  case 52:
+    Gen5_0CQ_VAQ_frames200();
+    break;
   }
 }
 
-void frames1000(void *arg)
+static void frames1000()
 {
-  while (1)
+  switch (haldexGeneration)
   {
-    // Analyzer mode runs as a passive bridge; skip standalone frame generation.
-    if (analyzerMode)
-    {
-      vTaskDelay(1000 / portTICK_PERIOD_MS);
-      continue;
-    }
-    if (isStandalone)
-    {
-      switch (haldexGeneration)
-      {
-      case 1:
-        Gen1_frames1000();
-        break;
-      case 2:
-        Gen2_frames1000();
-        break;
-      case 4:
-        Gen4_frames1000();
-        break;
-      case 41:
-        Gen41_frames1000();
-        break;
-      case 42:
-        Gen42_frames1000();
-        break;
-      case 50:
-        Gen5_0CQ_frames1000();
-        break;
-      case 51:
-        Gen5_0AY_frames1000();
-        break;
-      case 52:
-        Gen5_0CQ_VAQ_frames1000();
-        break;
-      }
-    }
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
+  case 1:
+    Gen1_frames1000();
+    break;
+  case 2:
+    Gen2_frames1000();
+    break;
+  case 4:
+    Gen4_frames1000();
+    break;
+  case 41:
+    Gen41_frames1000();
+    break;
+  case 42:
+    Gen42_frames1000();
+    break;
+  case 50:
+    Gen5_0CQ_frames1000();
+    break;
+  case 51:
+    Gen5_0AY_frames1000();
+    break;
+  case 52:
+    Gen5_0CQ_VAQ_frames1000();
+    break;
   }
 }
 
@@ -365,7 +288,7 @@ void Gen1_frames10()
 
 void Gen1_frames20()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // PQ Motor_1 (0x280, DLC 8) - main engine ECU broadcast (vw_pq.dbc: Motor_1).
   frame.identifier = MOTOR1_ID;
   frame.extd = 0;
@@ -469,7 +392,7 @@ void Gen1_frames1000()
 // All transmitted on the haldex bus (twai_bus_1).
 void Gen2_frames10()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // PQ Bremse_1 (0x1A0, DLC 8) - ABS/ESP main broadcast (vw_pq.dbc: Bremse_1).
   frame.identifier = BRAKES1_ID;
   frame.data_length_code = 8;
@@ -605,7 +528,7 @@ void Gen2_frames10()
 
 void Gen2_frames20()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // PQ Motor_1 (0x280, DLC 8) - engine ECU broadcast (vw_pq.dbc: Motor_1).
   // Lock-adjusted bytes bias inneres_Motor_Moment / mechanisches_Verlustmoment so the
   // haldex thinks the engine is producing more torque than it actually is.
@@ -675,7 +598,7 @@ void Gen2_frames20()
 
 void Gen2_frames25()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // PQ Kombi_1 (0x320, DLC 8) - instrument-cluster broadcast (vw_pq.dbc: Kombi_1).
   frame.identifier = mKombi_1;
   frame.data_length_code = 8;
@@ -700,7 +623,7 @@ void Gen2_frames1000() {}
 // All frames go out on the haldex bus (twai_bus_1).
 void Gen4_frames10()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // PQ LW_1 / mLW_1 (0x0C2, DLC 8) - steering-angle replay (vw_pq.dbc: LW_1).
   frame.identifier = mLW_1;
   frame.extd = 0;
@@ -796,7 +719,7 @@ void Gen4_frames10()
 
 void Gen4_frames20()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // PQ Bremse_2 (0x5A0, DLC 8) - ESP/ABS sensor broadcast (vw_pq.dbc: Bremse_2).
   frame.identifier = BRAKES2_ID;
   frame.data_length_code = 8;
@@ -816,7 +739,7 @@ void Gen4_frames20()
 
 void Gen4_frames25()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // PQ Kombi_1 (0x320, DLC 8) - instrument-cluster broadcast (vw_pq.dbc: Kombi_1).
   frame.identifier = mKombi_1;
   frame.data_length_code = 8;
@@ -846,7 +769,7 @@ void Gen4_frames25()
 
 void Gen4_frames100()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // PQ Gate_Komf_1 (0x390, DLC 8) - gateway-comfort broadcast (vw_pq.dbc: Gate_Komf_1).
   frame.identifier = mGate_Komf_1;
   frame.data_length_code = 8;
@@ -877,7 +800,7 @@ void Gen4_frames100()
 
 void Gen4_frames200()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // PQ Kombi_2 (0x420, DLC 8) - cluster temps (vw_pq.dbc: Kombi_2).
   frame.identifier = mKombi_2;
   frame.data_length_code = 8;
@@ -894,7 +817,7 @@ void Gen4_frames200()
 
 void Gen4_frames1000()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // PQ Diagnose_1 (0x7D0, DLC 8) - diagnostic timestamp broadcast (vw_pq.dbc: Diagnose_1).
   frame.identifier = mDiagnose_1;
   frame.data_length_code = 8;
@@ -912,145 +835,113 @@ void Gen4_frames1000()
     mDiagnose_1_counter = 0;
 }
 
-void frames13(void *arg)
+static void frames13()
 {
-  while (1)
+  switch (haldexGeneration)
   {
-    // Analyzer mode runs as a passive bridge; skip standalone frame generation.
-    if (analyzerMode)
-    {
-      vTaskDelay(1 / portTICK_PERIOD_MS);
-      continue;
-    }
-    if (isStandalone)
-    {
-#if detailedDebugStack
-      stackframes13 = uxTaskGetStackHighWaterMark(NULL);
-#endif
-      switch (haldexGeneration)
-      {
-      case 41:
-        Gen41_frames13();
-        break;
-      }
-    }
-    vTaskDelay(13 / portTICK_PERIOD_MS);
+  case 41:
+    Gen41_frames13();
+    break;
   }
 }
 
-void frames50(void *arg)
+static void frames50()
 {
-  while (1)
+  switch (haldexGeneration)
   {
-    // Analyzer mode runs as a passive bridge; skip standalone frame generation.
-    if (analyzerMode)
-    {
-      vTaskDelay(50 / portTICK_PERIOD_MS);
-      continue;
-    }
-    if (isStandalone)
-    {
-#if detailedDebugStack
-      stackframes50 = uxTaskGetStackHighWaterMark(NULL);
-#endif
-      switch (haldexGeneration)
-      {
-      case 41:
-        Gen41_frames50();
-        break;
-      }
-    }
-    vTaskDelay(50 / portTICK_PERIOD_MS);
+  case 41:
+    Gen41_frames50();
+    break;
   }
 }
 
-void frames250(void *arg)
+static void frames250()
 {
-  while (1)
+  switch (haldexGeneration)
   {
-    // Analyzer mode runs as a passive bridge; skip standalone frame generation.
-    if (analyzerMode)
-    {
-      vTaskDelay(250 / portTICK_PERIOD_MS);
-      continue;
-    }
-    if (isStandalone)
-    {
-#if detailedDebugStack
-      stackframes250 = uxTaskGetStackHighWaterMark(NULL);
-#endif
-      switch (haldexGeneration)
-      {
-      case 41:
-        Gen41_frames250();
-        break;
-      }
-    }
-    vTaskDelay(250 / portTICK_PERIOD_MS);
+  case 41:
+    Gen41_frames250();
+    break;
   }
 }
 
-void gen41DualBusRatesTask(void *arg)
+// Gen4.1 dual-bus: repeat the cached chassis 0x0C1 / 0x0C5 frames onto bus 0.
+static void gen41Bus0Frames20()
 {
-  static const uint32_t GEN41_BUS0_C1_MS = 20;
-  static const uint32_t GEN41_BUS0_C5_MS = 20;
+  if (haldexGeneration != 41)
+    return;
 
-  uint32_t last_c1_ms = 0;
-  uint32_t last_c5_ms = 0;
+  extern twai_message_t gen41_bus0_cache_c1;
+  extern twai_message_t gen41_bus0_cache_c5;
+  extern bool gen41_bus0_cache_valid_c1;
+  extern bool gen41_bus0_cache_valid_c5;
+  extern portMUX_TYPE gen41_bus0_cache_mux;
+
+  twai_message_t c1, c5;
+  bool has_c1, has_c5;
+  taskENTER_CRITICAL(&gen41_bus0_cache_mux);
+  has_c1 = gen41_bus0_cache_valid_c1;
+  has_c5 = gen41_bus0_cache_valid_c5;
+  if (has_c1)
+    c1 = gen41_bus0_cache_c1;
+  if (has_c5)
+    c5 = gen41_bus0_cache_c5;
+  taskEXIT_CRITICAL(&gen41_bus0_cache_mux);
+
+  if (has_c1)
+    twai_transmit_v2(twai_bus_0, &c1, 0);
+  if (has_c5)
+    twai_transmit_v2(twai_bus_0, &c5, 0);
+}
+
+// One task drives every standalone rate. These used to be ten tasks (one per
+// rate, plus the Gen4.1 bus-0 repeater), each with its own stack and all of them
+// held suspended for an entire OEM-mode drive; as one task they give ~23 KB back
+// to the C6's shared SRAM (WiFi + BLE + web server). Buckets are listed in the
+// old task-priority order, so a tick due for several rates sends them in the
+// same order as before. Every TX is non-blocking, so no bucket stalls the rest.
+void standaloneFramesTask(void *arg)
+{
+  struct Bucket
+  {
+    uint16_t periodMs;
+    void (*run)();
+    uint32_t dueMs;
+  };
+  Bucket buckets[] = {
+      {10, frames10, 0},
+      {13, frames13, 0},
+      {20, gen41Bus0Frames20, 0},
+      {20, frames20, 0},
+      {25, frames25, 0},
+      {50, frames50, 0},
+      {100, frames100, 0},
+      {200, frames200, 0},
+      {250, frames250, 0},
+      {1000, frames1000, 0},
+  };
 
   while (1)
   {
-    if (analyzerMode || !isStandalone || haldexGeneration != 41)
+    // Analyzer mode runs as a passive bridge; skip standalone frame generation.
+    if (analyzerMode || !isStandalone)
     {
       vTaskDelay(10 / portTICK_PERIOD_MS);
       continue;
     }
 
-    const uint32_t now_ms = millis();
-
-    if ((now_ms - last_c1_ms) >= GEN41_BUS0_C1_MS)
+    const uint32_t now = millis();
+    for (Bucket &b : buckets)
     {
-      extern twai_message_t gen41_bus0_cache_c1;
-      extern bool gen41_bus0_cache_valid_c1;
-      extern portMUX_TYPE gen41_bus0_cache_mux;
-      twai_message_t tx;
-      bool has_frame = false;
-      taskENTER_CRITICAL(&gen41_bus0_cache_mux);
-      if (gen41_bus0_cache_valid_c1)
-      {
-        tx = gen41_bus0_cache_c1;
-        has_frame = true;
-      }
-      taskEXIT_CRITICAL(&gen41_bus0_cache_mux);
-      if (has_frame)
-      {
-        twai_transmit_v2(twai_bus_0, &tx, 0);
-      }
-      last_c1_ms = now_ms;
+      if ((int32_t)(now - b.dueMs) < 0)
+        continue;
+      b.run();
+      b.dueMs += b.periodMs;
+      if ((int32_t)(now - b.dueMs) >= 0) // first run, or back from suspend / analyzer: restart the cadence, don't burst
+        b.dueMs = now + b.periodMs;
     }
 
-    if ((now_ms - last_c5_ms) >= GEN41_BUS0_C5_MS)
-    {
-      extern twai_message_t gen41_bus0_cache_c5;
-      extern bool gen41_bus0_cache_valid_c5;
-      extern portMUX_TYPE gen41_bus0_cache_mux;
-      twai_message_t tx;
-      bool has_frame = false;
-      taskENTER_CRITICAL(&gen41_bus0_cache_mux);
-      if (gen41_bus0_cache_valid_c5)
-      {
-        tx = gen41_bus0_cache_c5;
-        has_frame = true;
-      }
-      taskEXIT_CRITICAL(&gen41_bus0_cache_mux);
-      if (has_frame)
-      {
-        twai_transmit_v2(twai_bus_0, &tx, 0);
-      }
-      last_c5_ms = now_ms;
-    }
-
-    vTaskDelay(1 / portTICK_PERIOD_MS);
+    vTaskDelay(1); // one tick
   }
 }
 
@@ -1295,7 +1186,7 @@ static inline uint8_t gen41_wheel_status_byte(uint8_t roll, uint8_t seq,
 
 void Gen41_frames10()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   frame.extd = 0;
   frame.rtr = 0;
 
@@ -1425,7 +1316,7 @@ void Gen41_frames20()
   uint8_t step = static_cast<uint8_t>(Gen41_1CE234_counter & 0x03);
   uint8_t d4_common = (step == 0) ? 0x00 : static_cast<uint8_t>(0x100 - step);
 
-  twai_message_t frame;
+  twai_message_t frame = {};
   frame.extd = 0;
   frame.rtr = 0;
 
@@ -1501,7 +1392,7 @@ void Gen41_frames20()
 
 void Gen41_frames25()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   frame.extd = 0;
   frame.rtr = 0;
 
@@ -1590,7 +1481,7 @@ void Gen41_frames25()
 
 void Gen41_frames100()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   frame.extd = 0;
   frame.rtr = 0;
 
@@ -1659,7 +1550,7 @@ void Gen41_frames100()
 
 void Gen41_frames200()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   frame.extd = 0;
   frame.rtr = 0;
 
@@ -1709,7 +1600,7 @@ void Gen41_frames200()
 
 void Gen41_frames1000()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   frame.extd = 0;
   frame.rtr = 0;
   const uint32_t now_ms = millis();
@@ -1751,7 +1642,7 @@ void Gen41_frames1000()
 
 void Gen41_frames13()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   frame.extd = 0;
   frame.rtr = 0;
 
@@ -1779,7 +1670,7 @@ void Gen41_frames13()
 
 void Gen41_frames50()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   frame.extd = 0;
   frame.rtr = 0;
 
@@ -1804,7 +1695,7 @@ void Gen41_frames50()
 
 void Gen41_frames250()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   frame.extd = 0;
   frame.rtr = 0;
 
@@ -1839,7 +1730,7 @@ void Gen41_frames250()
 // only established at steady 30% on a bench - not during transitions or at speed.
 void Gen5_0CQ_frames10()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // MQB ESP_18 (0x135, DLC 8) - ESP minor broadcast. Fixed response, no changes.
   frame.identifier = ESP_18; // 0x135.  Fixed response, no changes
   frame.extd = 0;
@@ -2059,7 +1950,7 @@ void Gen5_0CQ_frames10()
 
 void Gen5_0CQ_frames20()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // MQB Motor_20 (0x121, DLC 8) - accelerator pedal raw/filtered + status.
   // MO_Accelerator_Raw_Value_01 (raw pedal), MO_Fahrpedal_Roh, MO_Pedal_Filt.
   frame.identifier = MOTOR_20;      // MOTOR_20 0x121
@@ -2212,7 +2103,7 @@ void Gen5_0CQ_frames20()
 
 void Gen5_0CQ_frames25()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // MQB Kombi_01 (0x30B, DLC 8) - instrument cluster broadcast.
   // KBI_Kilometerstand (odometer), KBI_Geschw_Anzeige (displayed speed), warning lamps.
   frame.identifier = KOMBI_01; // kombi 1 0x30b
@@ -2230,7 +2121,7 @@ void Gen5_0CQ_frames25()
 
 void Gen5_0CQ_frames100()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // MQB ESP_23 (0x5BE, DLC 8) - longitudinal/lateral acceleration, tyre data.
   // BR_Laengsbeschleunigung (longitudinal G), BR_Querbeschleunigung (lateral G), BR_Tire_Circumference.
   frame.identifier = ESP_23;                            // ESP_23 0x5be - this is fixed in Savvy but CHKS in Kmatrix?
@@ -2359,7 +2250,7 @@ void Gen5_0CQ_frames100()
 
 void Gen5_0CQ_frames200()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // PQ mKombi_2 (0x0C2, DLC 8) - electronic power steering / instrument-cluster slow.
   // Transmit currently disabled (commented out below).
   frame.identifier = mKombi_2; // electronic power steering 0x0C2
@@ -2377,7 +2268,7 @@ void Gen5_0CQ_frames200()
 
 void Gen5_0CQ_frames1000()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // MQB Motor_07 (0x640, DLC 8) - engine slow-rate diagnostics broadcast.
   frame.identifier = MOTOR_07; // motor 07, 1000ms
   frame.data_length_code = 8;  // DLC 8
@@ -2506,7 +2397,7 @@ void Gen5_0CQ_frames1000()
 // =============================================================================
 void Gen5_0CQ_VAQ_frames10()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // MQB ESP_18 (0x135, DLC 8) - ESP minor broadcast. Fixed response, no changes.
   // VAQ K-matrix: NOT in the VAQ receive list (no VAQ signal on ESP_18). Kept
   // like-for-like; block 10 can drop it to prove it is dead weight on this unit.
@@ -2761,7 +2652,7 @@ void Gen5_0CQ_VAQ_frames10()
 
 void Gen5_0CQ_VAQ_frames20()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // MQB Motor_20 (0x121, DLC 8) - accelerator pedal raw/filtered + status.
   // MO_Accelerator_Raw_Value_01 (raw pedal), MO_Fahrpedal_Roh, MO_Pedal_Filt.
   // VAQ K-matrix: reads MO_Fahrpedalrohwert_01 (b1[4-7]+b2[0-3], 0.4 %/bit)
@@ -2938,7 +2829,7 @@ void Gen5_0CQ_VAQ_frames20()
 
 void Gen5_0CQ_VAQ_frames25()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // MQB Kombi_01 (0x30B, DLC 8) - instrument cluster broadcast.
   // KBI_Kilometerstand (odometer), KBI_Geschw_Anzeige (displayed speed), warning lamps.
   // VAQ K-matrix: reads only KBI_Handbremse (b2 bit 7). 0CQ b2 = 0x02 -> off.
@@ -2963,7 +2854,7 @@ void Gen5_0CQ_VAQ_frames25()
 
 void Gen5_0CQ_VAQ_frames100()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // MQB ESP_23 (0x5BE, DLC 8) - longitudinal/lateral acceleration, tyre data.
   // BR_Laengsbeschleunigung (longitudinal G), BR_Querbeschleunigung (lateral G), BR_Tire_Circumference.
   // VAQ K-matrix: NOT in the VAQ receive list. Kept like-for-like.
@@ -3102,7 +2993,7 @@ void Gen5_0CQ_VAQ_frames100()
 
 void Gen5_0CQ_VAQ_frames200()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // PQ mKombi_2 (0x0C2, DLC 8) - electronic power steering / instrument-cluster slow.
   // Transmit currently disabled (commented out below).
   // VAQ K-matrix: PQ-era ID, not an MQB FCAN message at all. Transmit stays
@@ -3122,7 +3013,7 @@ void Gen5_0CQ_VAQ_frames200()
 
 void Gen5_0CQ_VAQ_frames1000()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // MQB Motor_07 (0x640, DLC 8) - engine slow-rate diagnostics broadcast.
   // VAQ K-matrix: NOT in the VAQ receive list. Kept like-for-like.
   frame.identifier = MOTOR_07; // motor 07, 1000ms
@@ -3265,7 +3156,7 @@ void Gen5_0CQ_VAQ_frames1000()
 // =============================================================================
 void Gen5_0AY_frames10()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // PQ LW_1 / mLW_1 (0x0C2, DLC 8) - steering-angle replay (vw_pq.dbc: LW_1).
   frame.identifier = mLW_1;
   frame.extd = 0;
@@ -3426,7 +3317,7 @@ void Gen5_0AY_frames10()
 
 void Gen5_0AY_frames20()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // PQ Bremse_2 (0x5A0, DLC 8) - ESP/ABS sensor broadcast (vw_pq.dbc: Bremse_2).
   frame.identifier = BRAKES2_ID;
   frame.data_length_code = 8;
@@ -3480,7 +3371,7 @@ void Gen5_0AY_frames20()
 
 void Gen5_0AY_frames25()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // PQ Kombi_1 (0x320, DLC 8) - instrument-cluster broadcast (vw_pq.dbc: Kombi_1).
   frame.identifier = mKombi_1;
   frame.data_length_code = 8;
@@ -3510,7 +3401,7 @@ void Gen5_0AY_frames25()
 
 void Gen5_0AY_frames100()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // PQ Gate_Komf_1 (0x390, DLC 8) - gateway-comfort broadcast (vw_pq.dbc: Gate_Komf_1).
   frame.identifier = mGate_Komf_1;
   frame.data_length_code = 8;
@@ -3568,7 +3459,7 @@ void Gen5_0AY_frames100()
 
 void Gen5_0AY_frames200()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // PQ Kombi_2 (0x420, DLC 8) - cluster temps (vw_pq.dbc: Kombi_2).
   frame.identifier = mKombi_2;
   frame.data_length_code = 8;
@@ -3585,7 +3476,7 @@ void Gen5_0AY_frames200()
 
 void Gen5_0AY_frames1000()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   // PQ Diagnose_1 (0x7D0, DLC 8) - diagnostic timestamp broadcast (vw_pq.dbc: Diagnose_1).
   frame.identifier = mDiagnose_1;
   frame.data_length_code = 8;
@@ -3630,7 +3521,7 @@ void Gen5_0AY_frames1000()
 
 void Gen42_frames10()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   frame.extd = 0;
   frame.rtr = 0;
 
@@ -3739,7 +3630,7 @@ void Gen42_frames10()
 
 void Gen42_frames20()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   frame.extd = 0;
   frame.rtr = 0;
 
@@ -3847,7 +3738,7 @@ void Gen42_frames20()
 
 void Gen42_frames100()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   frame.extd = 0;
   frame.rtr = 0;
 
@@ -3881,7 +3772,7 @@ void Gen42_frames100()
 
 void Gen42_frames200()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   frame.extd = 0;
   frame.rtr = 0;
 
@@ -3934,7 +3825,7 @@ void Gen42_frames200()
 
 void Gen42_frames1000()
 {
-  twai_message_t frame;
+  twai_message_t frame = {};
   frame.extd = 0;
   frame.rtr = 0;
 

@@ -2,17 +2,8 @@
 
 #include <OpenHaldexC6_defs.h>
 
-// Periodic frame tasks (dispatcher tasks per generation)
-void frames10(void *arg);
-void frames13(void *arg);
-void frames20(void *arg);
-void frames25(void *arg);
-void frames50(void *arg);
-void frames100(void *arg);
-void frames200(void *arg);
-void frames250(void *arg);
-void frames1000(void *arg);
-void gen41DualBusRatesTask(void *arg);
+// Periodic frame task: one scheduler for every standalone rate and generation
+void standaloneFramesTask(void *arg);
 
 // Gen1 standalone frames
 void Gen1_frames10();

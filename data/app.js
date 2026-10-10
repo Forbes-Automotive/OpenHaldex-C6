@@ -269,6 +269,9 @@ async function initStoredSettings() {
       lpWakeRange.value = data.lpWakeThresholdFps;
       if (lpWakeVal) lpWakeVal.textContent = data.lpWakeThresholdFps;
     }
+    _sleepCalState = data.sleepCalState ?? 0;
+    _sleepCalAvgFps = data.sleepCalAvgFps ?? 0;
+    renderSleepCal();
 
     const analyzerModeElem = document.getElementById("analyzerMode");
     if (analyzerModeElem) analyzerModeElem.checked = data.analyzerMode || false;
@@ -294,6 +297,7 @@ async function initStoredSettings() {
     _isStandalone = data.isStandalone || false;
     _useCANifAvailable = data.useCANifAvailable || false;
     _disableController = data.disableController || false;
+    setTimeout(() => maybeOfferSleepSetup(_haldexGeneration), 1000);
 
     // parse speed/throttle/lock array from the ESP
     speedHeader = data.speedArray;
@@ -756,6 +760,29 @@ function updateCachedSetting(key, value) {
   if (key === "extButtonForceMode") _extBtnForceMode = value;
 }
 
+// ---- Sleep auto-setup (offered once, Gen5) ---------------------------------
+let _sleepCalState = 0; // 0 never asked, 1 armed, 2 done, 3 declined
+let _sleepCalAvgFps = 0;
+
+function renderSleepCal() {
+  const el = document.getElementById("sleepCalStatus");
+  if (!el) return;
+  if (_sleepCalState === 1) el.textContent = "Auto-setup armed: next time the car is left, the parked bus is measured for 15 min.";
+  if (_sleepCalState === 2) el.textContent = `Auto-set from the parked bus (average ${_sleepCalAvgFps} fps).`;
+  el.hidden = _sleepCalState !== 1 && _sleepCalState !== 2;
+}
+
+// On page load: only if never asked. On a generation change to Gen5: always.
+async function maybeOfferSleepSetup(gen, changed = false) {
+  if (![50, 51, 52].includes(gen) || (!changed && _sleepCalState !== 0)) return;
+  const yes = confirm("Enable CAN sleep and set it up automatically?\n\n" +
+    "Next time the car is left, the controller measures the parked bus for 15 min and sets the wake threshold. Runs once.");
+  if (await saveSetting("sleepCalArm", yes)) {
+    _sleepCalState = yes ? 1 : 3;
+    renderSleepCal();
+  }
+}
+
 // ---- Frame-edit gating (Diagnostics > Frame Editing) ----------------------
 // Render the per-generation editable-frame checkboxes from /api/settings data.
 function renderFrameBlocks(blocks) {
@@ -944,7 +971,11 @@ function initSettings() {
       elem.addEventListener("change", async () => {
         await saveSetting(id, parseInt(elem.value));
         // Generation change alters which frames are editable — refresh the list.
-        if (id === "haldexGeneration") refreshFrameBlocks();
+        if (id === "haldexGeneration") {
+          _haldexGeneration = parseInt(elem.value);
+          refreshFrameBlocks();
+          maybeOfferSleepSetup(_haldexGeneration, true); // picking Gen5 always asks again
+        }
       });
     }
   });
@@ -1507,11 +1538,19 @@ function initLearn() {
 // Drives /api/longlearn/*: polls status while a run is active, renders the
 // tracker + per-block verdicts, keeps the chassis notes on the unit, and
 // exports a plain-text report of the car, calibration, block set and sweeps.
-const LL_PHASE_NAMES = ["Idle", "Initial Sweep (all blocks on)", "BPK Adjust (torque ceiling)",
-                        "Sweeping Blocks", "Confirmation learn on final set", "Complete", "Cancelled", "Failed"];
+const LL_PHASE_NAMES = ["Idle", "Reference (all blocks on)", "BPK Adjust (hunting)",
+                        "Testing blocks (one off, point reads)", "Confirmation sweep", "Complete", "Cancelled", "Failed"];
 const LL_RESULT = { 0: ["untested", ""], 1: ["core", "core"], 2: ["needed", "needed"],
-                    3: ["not needed", "removed"], 4: ["affects (better without)", "harmful"] };
-const LL_SWEEP_KIND = ["baseline", "floor", "block", "final", "bpk ceiling"];
+                    3: ["no effect", "removed"], 4: ["affects (higher without)", "harmful"] };
+const LL_SWEEP_KIND = ["reference", "reference points", "block", "final", "bpk"];
+const LL_FAIL = ["", "no Haldex data with all blocks on",
+                 "all blocks on is not a smooth 100% - fix that first, nothing to compare blocks against",
+                 "the two all-on point reads disagree too much (noisy) to judge blocks"];
+// Block-off sweep for a bit -> " (dev N%)" suffix, or "" if not tested yet.
+function llDev(data, bit) {
+  const sw = (data.sweeps || []).find((x) => x.kind === 2 && x.bit === bit);
+  return sw ? ` (dev ${sw.dev}%)` : "";
+}
 
 function llScoreText(sc) {
   if (!sc) return "--";
@@ -1560,8 +1599,8 @@ function initLongLearn() {
       if (data.active && data.currentBit === b.bit) { cls = "testing"; txt = "testing\u2026"; }
       else {
         const r = LL_RESULT[b.result] || LL_RESULT[0];
-        txt = r[0]; cls = r[1];
-        if (b.result === 0) txt = b.def ? "default" : (data.phase === 0 ? (b.enabled ? "on" : "off") : "queued");
+        txt = r[0] + llDev(data, b.bit); cls = r[1];
+        if (b.result === 0) txt = b.core ? "core" : (data.phase === 0 ? (b.enabled ? "on" : "off") : "queued");
       }
       tag.className = "ll-tag " + cls;
       tag.textContent = txt;
@@ -1596,16 +1635,16 @@ function initLongLearn() {
     } else if (running && data.phase === 1) {
       testing = "all blocks on";
     } else if (running && data.phase === 2) {
-      testing = `raising torque ceiling (${data.bpkNow} Nm)`;
+      testing = `BPK packing / torque ceiling (${data.bpkNow} Nm)`;
     } else if (running && data.phase === 4) {
       testing = "final block set";
     }
     setText("llTesting", testing);
     const isGen5 = data.generation === 50 || data.generation === 52;
     setText("llFloor", isGen5 ? `${data.floorNow}%` + (data.phase >= 2 ? ` (was ${data.floorStart}%)` : "") : "n/a (Gen5 only)");
-    setText("llBpk", isGen5 ? `${data.bpkNow} Nm` + (data.bpkAdjusted ? ` (was ${data.bpkStart} Nm)` : "") +
-      (data.phase >= 3 && !running ? ` — Fix Hunting reverted to ${data.fixHunting ? "on" : "off"}, turn it on to use this` : "") : "n/a (Gen5 only)");
-    setText("llBaseline", llScoreText(data.baseline));
+    setText("llBpk", isGen5 ? `${data.bpkNow} Nm, Fix Hunting ${data.fixHunting ? "on" : "off"}` +
+      (data.bpkAdjusted ? ` (was ${data.bpkStart} Nm)` : "") : "n/a (Gen5 only)");
+    setText("llBaseline", llScoreText(data.baseline) + (data.phase >= 3 && data.phase !== 7 ? ` · noise ${data.noise}%, threshold ${data.tol}%` : ""));
     setText("llElapsed", llFmtElapsed(data.elapsedS));
 
     const cf = data.cf ?? 0, eng = data.eng ?? 0;
@@ -1623,14 +1662,15 @@ function initLongLearn() {
       const kept = (data.blocks || []).filter((b) => b.enabled).length;
       statusText.textContent = `Long Learn complete \u2713 \u2014 ${kept} of ${(data.blocks || []).length} blocks enabled, ` +
         (isGen5 ? `PWM floor ${data.floorResult}%, ` : "") +
-        (isGen5 && data.bpkAdjusted ? `torque ceiling ${data.bpkNow} Nm (turn Fix Hunting on to use it), ` : "") +
+        (isGen5 && data.bpkAdjusted ? `BPK kept: Fix Hunting ${data.fixHunting ? "on" : "off"}, ceiling ${data.bpkNow} Nm, ` : "") +
+        (data.interaction ? "the no-effect blocks changed the curve when off TOGETHER, so all were left on, " : "") +
         `final: ${llScoreText(f)}`;
-      statusText.style.color = f && f.smooth ? "var(--success)" : "var(--warning)";
+      statusText.style.color = f && f.smooth && !data.interaction ? "var(--success)" : "var(--warning)";
     } else if (data.phase === 6) {
       statusText.textContent = "Long Learn cancelled \u2014 previous blocks, floor, torque ceiling and learn table restored";
       statusText.style.color = "var(--warning)";
     } else if (data.phase === 7) {
-      statusText.textContent = "Long Learn failed \u2014 no Haldex data during a sweep. Previous settings restored";
+      statusText.textContent = `Long Learn stopped \u2014 ${LL_FAIL[data.failReason] || "sweep failed"}. Previous settings restored`;
       statusText.style.color = "var(--danger)";
     } else {
       statusText.textContent = "Not run yet";
@@ -1740,19 +1780,22 @@ function buildLongLearnReport(settings, ll, learn, notesText) {
   L.push(`  Launch PWM Floor: ${settings.esp14MinFloorPct} %` +
          (ll.phase === 5 && isGen5 ? `  (Long Learn: ${ll.floorStart} % -> ${ll.floorResult} %)` : ""));
   if (ll.phase === 5 && isGen5 && ll.bpkAdjusted) {
-    L.push(`  Torque ceiling raised by Long Learn: ${ll.bpkStart} Nm -> ${ll.bpkNow} Nm (Fix Hunting reverted - turn it on to use this)`);
+    L.push(`  BPK set by Long Learn (kept): Fix Hunting ${ll.fixHunting ? "on" : "off"}, ceiling ${ll.bpkStart} Nm -> ${ll.bpkNow} Nm`);
   }
   L.push("");
   L.push(`Long Learn: ${LL_PHASE_NAMES[ll.phase] || "--"}` +
          (ll.phase >= 5 ? `  (${ll.sweepIdx} sweeps, ${llFmtElapsed(ll.elapsedS)}, test-all ${ll.testAll ? "on" : "off"})` : ""));
+  if (ll.phase === 7) L.push(`  Stopped: ${LL_FAIL[ll.failReason] || "sweep failed"}`);
   if (ll.baseline) L.push(`  Reference (all on): ${llScoreText(ll.baseline)}`);
+  if (ll.phase === 5) L.push(`  Reference noise ${ll.noise}%, block threshold ${ll.tol}% (worst of the points CF ${(ll.ptCF || []).join("/")})`);
   if (ll.final)    L.push(`  Final (kept set):   ${llScoreText(ll.final)}`);
+  if (ll.interaction) L.push("  INTERACTION: the no-effect blocks changed the curve when off together - all left on");
   L.push("");
   L.push(`Frame blocks (mask ${ll.mask || "--"}) - [x] = enabled. Edit and re-apply under Diagnostics > Frame Editing:`);
   (ll.blocks || []).forEach((b) => {
     const r = LL_RESULT[b.result] || LL_RESULT[0];
     const verdict = b.result === 0 ? (ll.phase === 0 ? "" : "untested") : r[0];
-    L.push(`  [${b.enabled ? "x" : " "}] ${pad(b.name, 22)} bit ${pad(b.bit, 3)} ${pad(b.def ? "default" : "added", 8)} ${verdict}`);
+    L.push(`  [${b.enabled ? "x" : " "}] ${pad(b.name, 22)} bit ${pad(b.bit, 3)} ${pad(b.core ? "core" : "static", 8)} ${verdict}${llDev(ll, b.bit)}`);
   });
   L.push("");
   if (Array.isArray(ll.sweeps) && ll.sweeps.length) {
@@ -1763,11 +1806,14 @@ function buildLongLearnReport(settings, ll, learn, notesText) {
         const b = (ll.blocks || []).find((x) => x.bit === sw.bit);
         what = `without ${b ? b.name : "bit " + sw.bit}`;
       } else if (sw.kind === 4) {
-        what = `ceiling ${sw.bpk} Nm`;
+        what = `bpk ${sw.bpk} Nm`;
       }
-      const verdict = sw.kind === 2 ? ((LL_RESULT[sw.verdict] || ["?"])[0]) : (sw.verdict ? "smooth/100%" : "not smooth/100%");
-      L.push(`  #${pad(i + 1, 3)} ${pad(what, 28)} floor ${pad(sw.floor + "%", 5)} reach ${pad(sw.reach, 4)} step ${pad(sw.maxStep, 3)} ` +
-             `engage@${pad(sw.engageCF > 100 ? "--" : sw.engageCF, 3)}->${pad(sw.engageJump, 3)} score ${pad(sw.score, 3)} => ${verdict}`);
+      const pts = Array.isArray(sw.pts) ? sw.pts : null; // point reads, not a curve
+      const verdict = sw.kind === 2 ? ((LL_RESULT[sw.verdict] || ["?"])[0]) : sw.kind === 1 ? "" : (sw.verdict ? "smooth" : "NOT smooth");
+      const dev = sw.kind === 2 || sw.kind === 3 ? ` dev ${pad(sw.dev, 3)} mean ${pad((sw.dMean > 0 ? "+" : "") + sw.dMean, 4)}` : "";
+      L.push(`  #${pad(i + 1, 3)} ${pad(what, 28)} ` + (pts ? pts.map((v, k) => `@${(ll.ptCF || [])[k]} ${pad(v, 4)}`).join("") :
+             `reach ${pad(sw.reach, 4)} step ${pad(sw.maxStep, 3)} engage@${pad(sw.engageCF > 100 ? "--" : sw.engageCF, 3)}->${pad(sw.engageJump, 3)} score ${pad(sw.score, 3)}`) +
+             `${dev}${verdict ? " => " + verdict : ""}`);
     });
     L.push("");
   }
@@ -2183,17 +2229,15 @@ function initUpdateCheck() {
     try { sta = await fetchJson("/api/wifi/sta"); } catch (e) { /* advice below still stands */ }
     const why = detail ? " (" + detail + ")" : "";
     if (sta && sta.ssid && sta.connected) {
-      return ["This browser has no internet" + why + ". The controller is already on “" + sta.ssid + "” at http://" + sta.ip +
-        "/ - join this phone to “" + sta.ssid + "”, open http://" + sta.ip + "/ (or http://openhaldex.local/), come back to this tab and press Retry.", false];
+      return ["No internet" + why + ". The controller is on “" + sta.ssid + "”: join this phone to it, open http://" + sta.ip +
+        "/ and press Retry.", false];
     }
     if (sta && sta.ssid) {
-      return ["This browser has no internet" + why + ". The controller is set up for “" + sta.ssid + "” but isn't connected right now - " +
-        "out of range, wrong password, or still trying (it retries every 5 minutes). Check the Home WiFi card below (Save & Apply " +
-        "reconnects straight away), then join this phone to the same network, open the address the card shows and press Retry.", true];
+      return ["No internet" + why + ". The controller isn't connected to “" + sta.ssid + "” (out of range or wrong password). " +
+        "Check Home WiFi below, then join this phone to the same network, open the address shown and press Retry.", true];
     }
-    return ["This browser has no internet while on the OpenHaldex WiFi" + why + ". Connect the controller to your home router in the " +
-      "Home WiFi (Bridge Mode) card below, join this phone to that same network, open the address the card shows and press Retry. " +
-      "No router available? Use “Update from Files” below - it needs no internet here.", true];
+    return ["No internet on the OpenHaldex WiFi" + why + ". Connect the controller to your router under Home WiFi below, join this " +
+      "phone to the same network, open the address shown and press Retry. No router? Use “Update from Files”.", true];
   }
 
   async function check() {
@@ -2223,9 +2267,8 @@ function initUpdateCheck() {
     } catch (e) { /* unreachable - handled below */ }
     if (!info || !info.version) {
       setState("Controller unreachable", "upd-bad");
-      setStatus("Can't reach the controller from this browser (gave up after " + secs() + "). Stay on the OpenHaldex‑C6 WiFi - or, if you're using the home router, " +
-        "make sure the Home WiFi card shows Connected and that you opened this page at the address it gives. The controller also " +
-        "switches WiFi off after 5 minutes with no CAN traffic unless Bench Mode is on. Then press Retry.", "error");
+      setStatus("Can't reach the controller (gave up after " + secs() + "). Stay on the OpenHaldex WiFi, or check Home WiFi shows " +
+        "Connected and you're on the address it gives. WiFi turns off after 5 min without CAN unless Bench Mode is on.", "error");
       finish(false);
       return;
     }
@@ -2245,8 +2288,8 @@ function initUpdateCheck() {
       // is fine and the published files are the problem.
       if (ir.reached || fr.reached) {
         setState("Release list unavailable", "upd-bad");
-        setStatus("The phone is online but the release list could not be read: " + (ir.reached || fr.reached) +
-          ". Nothing is wrong with the controller or the phone - the published releases are missing or broken. Use “Update from Files” below.", "error");
+        setStatus("Release list unreadable: " + (ir.reached || fr.reached) + ". The published files are the problem, not this " +
+          "device. Use “Update from Files”.", "error");
         finish(false);
       } else {
         setState("No internet access", "upd-bad");
@@ -2318,7 +2361,7 @@ function initUpdateCheck() {
     // Not every mirror sends Content-Length (jsDelivr may not); never guess.
     if (!len) return { unknown: "this mirror does not report a size" };
     if (len !== want) return { changed: true, published: len, indexed: want };
-    return { unknown: "the firmware is the size the index expects, which does not rule out a rebuild" };
+    return { unknown: "same size as indexed, may still be a rebuild" };
   }
 
   // streamed download with progress; returns a Blob and checks size when known
@@ -2391,14 +2434,14 @@ function initUpdateCheck() {
             setTimeout(() => location.reload(), 2500);
           } else {
             setState("Rolled back", "upd-bad");
-            setStatus("Device came back on v" + i.version + " instead of v" + rel.version + " - the new image was rejected or rolled back. Try again or use “Update from Files”.", "error");
+            setStatus("Came back on v" + i.version + ", not v" + rel.version + ": the new image was rolled back. Try again or use “Update from Files”.", "error");
           }
           return;
         }
       } catch (e) { /* still rebooting - AP may drop and rejoin, or the home router lease takes a moment */ }
       await new Promise((r) => setTimeout(r, 2000));
     }
-    setStatus("Device didn't respond within 90 s. Reconnect to the OpenHaldex WiFi (or the home network) and reload this page.", "error");
+    setStatus("No response within 90 s. Reconnect to the OpenHaldex WiFi and reload.", "error");
   }
 
   // Install sequence for a release from the list: web UI first (downloaded,
@@ -2444,8 +2487,8 @@ function initUpdateCheck() {
       if (stage === "fs" || stage === "verify") {
         // The device wipes a rejected filesystem image, so the firmware keeps
         // running but this web UI is gone until littlefs.bin goes on again.
-        msg += " The controller is still running v" + installed() + "; the web UI partition was cleared. Press Install again " +
-          "(or upload littlefs.bin under “Update from Files”). If this page won't load, the controller now shows a recovery page at its address.";
+        msg += " Still running v" + installed() + " but the web UI was cleared. Press Install again or upload littlefs.bin " +
+          "under “Update from Files”. If the page won't load, the controller serves a recovery page.";
       }
       setStatus(msg, "error");
       if (wrap) wrap.hidden = true;
@@ -2463,13 +2506,9 @@ function initUpdateCheck() {
     const cur = installed();
     const dir = updCompareVersions(rel.version, cur);
     const what = dir < 0 ? "roll back to v" + rel.version : (dir === 0 ? "re-install v" + rel.version : "update to v" + rel.version);
-    let msg = "This will " + what + " (currently v" + cur + ").\n\nThe web UI is replaced first, then the firmware, then the device reboots. Keep this page open.";
-    if (dir < 0) msg += "\n\nRolling back: older releases may not have this update page, so coming forward again could mean a USB flash. Settings may also be reset - export a backup first (Diagnostics tab).";
-    if (dir === 0) {
-      msg += "\n\nSame version number: this re-downloads whatever is published under v" + rel.version + " right now. If that " +
-        "build was rebuilt after release it will bring the newer code in; if it was not, you end up back where you started. " +
-        "It is not a published release in its own right, so export a settings backup first (Diagnostics tab).";
-    }
+    let msg = "This will " + what + " (currently v" + cur + "). Keep this page open until it reboots.";
+    if (dir < 0) msg += "\n\nOlder releases may lack this update page, so updating again could need USB. Export a backup first.";
+    if (dir === 0) msg += "\n\nRe-downloads whatever is published as v" + rel.version + " now. Export a backup first.";
     if (!confirm(msg + "\n\nContinue?")) return;
     rel._blobs = {};
     runInstall(rel);
@@ -2485,10 +2524,8 @@ function initUpdateCheck() {
     if (chanSel) chanSel.value = updChannel;
     if (!chanHint) return;
     if (updChannel === "latest") {
-      chanHint.textContent = "main is the live development branch: when a fix lands before the next version is cut, the newest " +
-        "release folder is rebuilt in place under the same version number. On this channel the newest release stays installable " +
-        "even when its version matches what you already have, and a check reports whether it has been rebuilt since it was " +
-        "indexed. These builds have not been through a release - keep a settings backup (Diagnostics tab).";
+      chanHint.textContent = "Development builds: the newest release can be rebuilt under the same version number, so it stays " +
+        "installable. Not fully released; keep a settings backup.";
       chanHint.hidden = false;
     } else {
       chanHint.hidden = true;

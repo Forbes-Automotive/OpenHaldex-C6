@@ -792,6 +792,10 @@ bool startLongLearn(bool testAll)
   longLearnBaselineValid = false;
   longLearnFinalValid = false;
   longLearnBpkAdjusted = false;
+  longLearnFailReason = LLF_NONE;
+  longLearnNoise = 0;
+  longLearnTol = LL_TOLERANCE;
+  longLearnInteraction = false;
   longLearnStartMs = millis();
   longLearnEndMs = 0;
   memset(longLearnBlockResult, 0, sizeof(longLearnBlockResult));

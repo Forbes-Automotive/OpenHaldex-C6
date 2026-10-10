@@ -16,6 +16,40 @@ Version: 8.00.5
 #include <OpenHaldexC6_BLE.h>
 #include <ESPmDNS.h> // for mDNS responder to allow openhaldex.local access to the web UI without needing to know the IP address
 #include "esp_pm.h"  // for power management when CAN sleep enabled
+#include "esp_heap_caps.h"
+
+#if debugMemory
+// Heap and per-task stack headroom, to size task stacks from evidence. On the
+// C6, IRAM code, static RAM, task stacks, WiFi and BLE all come out of the same
+// 512 KB SRAM - with too little left, BLE fails to init and the web server
+// truncates pages. Stack "free" = high-water mark: the least unused stack that
+// task has ever had (bytes on ESP-IDF).
+static void printMemoryReport()
+{
+  DEBUG("MEM: heap free %u, min ever %u, largest block %u",
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+        (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+        (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+  twai_status_info_t s0 = {}, s1 = {};
+  twai_get_status_info_v2(twai_bus_0, &s0);
+  twai_get_status_info_v2(twai_bus_1, &s1);
+  DEBUG("MEM: CAN rx missed/overrun chassis %lu/%lu, haldex %lu/%lu",
+        s0.rx_missed_count, s0.rx_overrun_count, s1.rx_missed_count, s1.rx_overrun_count);
+  const UBaseType_t n = uxTaskGetNumberOfTasks();
+  TaskStatus_t *ts = static_cast<TaskStatus_t *>(malloc(n * sizeof(TaskStatus_t)));
+  if (ts == nullptr)
+  {
+    DEBUG("MEM: no heap for the task list");
+    return;
+  }
+  const UBaseType_t got = uxTaskGetSystemState(ts, n, nullptr);
+  for (UBaseType_t i = 0; i < got; i++)
+  {
+    DEBUG("MEM:   %-20s stack free %5u", ts[i].pcTaskName, (unsigned)ts[i].usStackHighWaterMark);
+  }
+  free(ts);
+}
+#endif
 
 void setup()
 {
@@ -71,6 +105,17 @@ void loop()
   vTaskDelay(pdMS_TO_TICKS(100)); // yield the Arduino loop task so other FreeRTOS tasks can run
 
   otaRollbackTick(); // confirm a freshly-installed OTA image once the device has proven itself
+
+#if debugMemory
+  {
+    static uint32_t nextMemReport = 15000; // after WiFi, web server, ESP-NOW and BLE have all started
+    if (millis() >= nextMemReport)
+    {
+      nextMemReport = millis() + 60000;
+      printMemoryReport();
+    }
+  }
+#endif
 
   { // temp counters for debugging, just left in because they can be useful for testing timing of various functions/tasks
     tempCounter++;
