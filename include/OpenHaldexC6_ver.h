@@ -233,6 +233,15 @@ V9.00.6 - GitHub main after 9.00.5, plus a toolchain update:
           confirmation sweep with all no-effect blocks off together, else
           everything left on (interaction flag). ~6-8 min on Gen5. Gen5
           BPK Adjust kept (hunting -> Fix Hunting + ceiling walk), result kept.
+        - #51 canBusRecovery() now restarts ANY stopped controller (was only
+          one it had put into bus-off recovery itself). Light sleep can power
+          down the TWAI domain (sleep_allow_pd), leaving a controller stopped:
+          no frames to the Haldex, and in non-aggressive low power the wake
+          check never saw the car come back.
+        - #51 with CAN sleep enabled, an ESP_PM_NO_LIGHT_SLEEP lock is held
+          while awake; updateTriggers releases it only when the low-power
+          state machine deliberately sleeps and takes it back on wake, so
+          automatic light sleep can't power down CAN with the car running.
 
 */
 
