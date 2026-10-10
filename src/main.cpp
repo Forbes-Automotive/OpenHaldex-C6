@@ -92,6 +92,17 @@ void setup()
     {
       DEBUG("ESP Power Management Failed: %d (continuing without CPU frequency scaling)", (int)pm_err);
     }
+
+    // Automatic light sleep can power down the TWAI domain (sleep_allow_pd in
+    // setupCAN). Hold a no-light-sleep lock while the module is awake so that
+    // can't happen with the car running; updateTriggers releases it only when
+    // the low-power state machine deliberately sleeps, and takes it back on wake.
+    esp_pm_lock_handle_t lk = nullptr;
+    if (esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "can_awake", &lk) == ESP_OK)
+    {
+      pmNoLightSleepLock = (void *)lk;
+      esp_pm_lock_acquire(lk);
+    }
   }
 
   if (needsFirmwareConfirmation())

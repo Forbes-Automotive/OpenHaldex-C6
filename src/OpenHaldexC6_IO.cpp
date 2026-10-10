@@ -3,6 +3,20 @@
 #include <OpenHaldexC6_WiFi.h>
 #include <OpenHaldexC6_OTA.h> // otaWebClientActive(): bridge-mode browsers hold WiFi up
 #include <OpenHaldexC6_Analyzer.h> // setAnalyzerMode(): enabling the controller leaves analyzer mode
+#include "esp_pm.h"                // release/take the no-light-sleep lock around deliberate sleep
+
+// Light sleep is only allowed while the low-power state machine has
+// deliberately put the module to sleep. No-op when CAN sleep is off (no lock).
+static void pmAllowLightSleep(bool allow)
+{
+  if (pmNoLightSleepLock == nullptr)
+    return;
+  esp_pm_lock_handle_t lk = (esp_pm_lock_handle_t)pmNoLightSleepLock;
+  if (allow)
+    esp_pm_lock_release(lk);
+  else
+    esp_pm_lock_acquire(lk);
+}
 
 // Low-power state: 
 //   WATCHING = WiFi Active, Normal IO
@@ -443,6 +457,7 @@ void updateTriggers(void *arg)
           {
             lowPowerMode = true;
             lpState = LP_SLEEPING;
+            pmAllowLightSleep(true);
             DEBUG("Low power: no clients + CAN idle (%lu fps) - shutting down WiFi+LED%s",
                   (unsigned long)(isStandalone ? lpHaldexFps : lpChassisFps),
                   canSleepAggressive ? " + transceivers standby (ISR wake)" : "");
@@ -488,6 +503,7 @@ void updateTriggers(void *arg)
           // Ensure transceivers are back to normal before we re-enable WiFi/IO.
           lpSetTransceiverStandby(false);
           lpResumeBackgroundTasks();
+          pmAllowLightSleep(false);
           lowPowerMode = false;
           lpNoClientsSince = 0;
           lpState = LP_WATCHING;
