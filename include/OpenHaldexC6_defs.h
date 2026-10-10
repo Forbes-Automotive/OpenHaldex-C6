@@ -462,6 +462,7 @@ extern volatile bool canWakeRequest; // set by CAN_RX GPIO ISR when transceivers
 
 extern bool rebootWiFi;
 extern bool lowPowerMode;
+extern void *pmNoLightSleepLock; // esp_pm_lock_handle_t: held while awake so light sleep cannot power down the CAN controllers mid-drive
 extern char wifiPassword[65]; // WiFi AP password - empty = open network
 
 extern bool hazardForceMode;     // setting: use hazard lights to activate force mode

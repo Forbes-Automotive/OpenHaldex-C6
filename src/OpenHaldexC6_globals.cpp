@@ -115,6 +115,7 @@ bool invertHandbrake = false;
 
 bool rebootWiFi = false;
 bool lowPowerMode = false;
+void *pmNoLightSleepLock = nullptr; // created in setup() when CAN sleep is enabled
 volatile uint32_t lpChassisFrameCount = 0; // incremented by chassis CAN task; used to measure bus activity during probe window
 volatile uint32_t lpHaldexFrameCount = 0;  // incremented by haldex CAN task; used for standalone probe window
 char wifiPassword[65] = ""; // WiFi AP password - empty string = open network
