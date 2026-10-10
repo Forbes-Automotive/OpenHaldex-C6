@@ -213,9 +213,11 @@ void setupCAN()
 //   RECOVERING  -> wait for the 128x11-recessive-bit recovery to complete.
 //   STOPPED     -> recovery finished (driver stops here); restart the bus.
 //
-// Only a controller we ourselves put into recovery is auto-restarted from the
-// STOPPED state, so this never fights the intentional stop used for light
-// sleep. `isBusFailure` is owned here: it is set while any bus is unhealthy and
+// A STOPPED controller is always restarted. Nothing in the firmware stops a
+// controller on purpose (light sleep saves and restores it in the driver), so a
+// stopped one is either finishing our own bus-off recovery or has come back
+// stopped from a power-down, and in both cases nothing else will restart it.
+// `isBusFailure` is owned here: it is set while any bus is unhealthy and
 // cleared once both controllers are running again.
 // ============================================================================
 void canBusRecovery()
@@ -261,16 +263,15 @@ void canBusRecovery()
       break;
 
     case TWAI_STATE_STOPPED:
-      // Restart only if we stopped it via recovery (and NOT a sleep-induced stop).
-      if (recovering[i])
+      // Restart it whether or not we started the recovery: a controller left
+      // stopped means no frames, and in non-aggressive low power no frames
+      // also means the module never sees the car wake up.
+      if (twai_start_v2(bus) == ESP_OK)
       {
-        if (twai_start_v2(bus) == ESP_OK)
-        {
-          recovering[i] = false;
-          DEBUG("CAN bus %d: recovered - controller restarted", i);
-        }
-        anyFault = true;
+        recovering[i] = false;
+        DEBUG("CAN bus %d: controller was stopped - restarted", i);
       }
+      anyFault = true;
       break;
 
     case TWAI_STATE_RUNNING:

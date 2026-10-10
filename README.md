@@ -193,16 +193,17 @@ Use the 'Learn Haldex' in the Settings page and within one minute the controller
 
 *Settings: pick the Haldex generation, then run **Learn Haldex**. The card reports whether a learned table is active and carries the Gen5 **Fix Hunting** toggle described below.*
 
-### Long Learn (automated block bisection)
+### Long Learn (which static blocks are needed)
 
-If a normal learn isn't clean (jumps, plateaus, never reaches 100%), **Long Learn** on the Settings page automates the manual "add/remove a frame, learn again" loop, in four phases:
+The **lock-driven** blocks (the frames whose payload follows the lock target, e.g. Motor_11 / Motor_12 / ESP_14 / ESP_19 on Gen5) always have to be edited to have control, so they are always sent. Everything else is a **static** payload. **Long Learn** on the Settings page finds out which of those the Haldex actually needs:
 
-1. **Initial Sweep** — every editable frame block for the selected generation is switched **on** and one learn is run at the **Launch PWM Floor** currently configured. The floor governs the *ramp* (how fast the clutch takes up and releases lock), not how far it can ultimately go, so it isn't hunted through candidate values here — this step just establishes the baseline shape and whether 100% is already reachable as configured.
-2. **BPK Adjust** *(Gen5 only, only runs if step 1 didn't reach 100%)* — if the floor alone can't get to 100%, the torque ceiling itself (**Lock Calibration**, `bpkCeilingNm`) is what's capping it. This step forces **Fix Hunting** on for the rest of the run (the default packing has no ceiling concept at all and would otherwise let the sweep silently ignore whatever ceiling is set) and walks the ceiling up in fixed steps, using quick single-point checks at full lock rather than a full sweep, until 100% is reached or the ceiling hits its safe maximum. Fix Hunting itself is **always reverted** to whatever it was before at the end of the run, win or lose — only the calibrated ceiling *value* is kept, so it needs turning on by hand afterward to actually take effect.
-3. **Sweeping Blocks** — with the calibrated floor/ceiling locked in, each *additional* block (anything outside the generation's default set) is removed one at a time and checked with a quick **release-to-0-then-back-to-100%** cycle (not a full 101-step re-sweep, but a real cycle rather than a frozen hold — holding steady at 100% and just flipping the mask bit turned out to be unreliable, since the controller doesn't cleanly re-evaluate a step change while already sitting at max). Any block whose removal *affects* the result goes back on — **needed** if it got worse (including feedback dropping to nothing — that's the strongest possible "needed" signal, not a failure), flagged **affects (better without)** if it improved; one that makes no difference is **not needed** and stays off. Tick *Also test the default (core) blocks* to bisect everything.
-4. **Confirmation** — a full sweep is stored against the final block set (this is the one place a full 0–100% sweep still matters, since the stored table is used to interpolate every lock target, not just 100%).
+1. **Reference** — every block for the generation is switched **on** (as standalone sends the bus) and a full 0–100% sweep is run on the unit's own settings.
+2. **BPK Adjust** *(Gen5 only, only if that sweep hunts — not smooth — or falls short)* — **Fix Hunting** (BPK packing) is switched on and kept only if a full sweep is genuinely better; if it is still short on level, the torque ceiling (**Lock Calibration**, `bpkCeilingNm`) is walked up to the lowest value that reaches 100%. Whatever wins is **kept** when the run completes.
+3. **Prove it** — the all-on sweep on the settled settings must be smooth (it is re-swept if BPK moved the ceiling). Then two quick reads at **20 / 40 / 70 / 100%** with everything on: their average is the reference, and their spread is the **noise** floor every block is judged against (minimum 4%). If all-on is not a smooth 100%, or the two reads differ by more than 10% at any point, the run stops — there is nothing trustworthy to compare blocks with.
+4. **Testing blocks** — each static block is switched off **on its own** (everything else on), read at the same four points (releasing to 0% before each one, since a held lock doesn't re-evaluate cleanly), and switched back on. A change beyond the noise floor at any point = **needed** (or **affects (higher without)** if it read higher — still kept on). No change = **no effect**. Spreading the points over the ramp means a block that only matters at part lock isn't missed on a clean 100%. Tick *Also test the lock-driven (core) blocks* to test those too.
+5. **Confirmation** — every "no effect" block off together, full sweep compared CF-by-CF with the step-3 curve. If it still matches, that becomes the final set and stored learn table. If not (a step between the two test points, or two frames covering for each other) every block is left on, the reference table is stored and the run is flagged as an **interaction**.
 
-Expect 10–20 minutes with the car running and Haldex CAN active. The tracker shows the current phase, sweep count, the block under test, the current floor and torque ceiling, the reference score and the live Sent/Returned bars. Cancelling (or losing Haldex data during the Initial Sweep or Confirmation phases) restores the blocks, floor, torque ceiling, Fix Hunting toggle and learn table that were in place before the run.
+On the bench (standalone) "off" means the frame is not sent at all; in the car (normal mode) it means the car's own frame passes through untouched. A full sweep takes about a minute and a four-point block read 6–12 seconds, so a Gen5 run is roughly 6–8 minutes. The tracker shows the phase, sweep count, the block under test, Fix Hunting / torque ceiling, the reference score with its noise and threshold, and the live Sent/Returned bars; each tested block shows its worst deviation. Cancelling, or a failed proof, restores the blocks, floor, torque ceiling, Fix Hunting toggle and learn table that were in place before the run.
 
 Below the tracker, a **Chassis / car notes** box (saved on the unit) and **Export report (.txt)** produce a plain-text record of the car, calibration values, the recommended block set (as a checklist plus the raw mask), the full sweep log and the stored learn table — handy for sharing a known-good layout for a given chassis.
 
@@ -348,7 +349,7 @@ If the Wi‑Fi interface becomes unresponsive:
 
 - Long‑press the `Mode` button to clear the WiFi password and restart the AP to an open state.
 
-> The Web UI is built on Forbes Automotive's shared dark theme (the same look used across the Can2Cluster, SpeedPulser, SpeedPulserPro, can2rpm, MQB Steering Wheel Controller and AirLift Controller firmware), so the interface and status conventions stay consistent across the whole product line. Current firmware version: **9.00.0** (shown in the UI footer and at `/ota/info`).
+> The Web UI is built on Forbes Automotive's shared dark theme (the same look used across the Can2Cluster, SpeedPulser, SpeedPulserPro, can2rpm, MQB Steering Wheel Controller and AirLift Controller firmware), so the interface and status conventions stay consistent across the whole product line. Current firmware version: **9.00.6** (shown in the UI footer and at `/ota/info`).
 
 ---
 
@@ -365,11 +366,11 @@ There are three layers of power saving. Each layer builds on the previous one an
 
 ---
 
-### Layer 1 — Idle AP Shutdown *(always active, no setup needed)*
+### Layer 1 — Idle AP Shutdown *(on with CAN Sleep, which is on by default)*
 
-After **5 minutes** with no WiFi clients connected and no CAN activity, the controller automatically shuts down the WiFi AP and turns off the LED. This runs regardless of any other Low Power settings.
+After **5 minutes** with no WiFi clients and the bus below the wake threshold, the controller shuts down the WiFi AP, Bluetooth and the LED. Turning **CAN Sleep** off keeps them up permanently.
 
-As soon as CAN traffic resumes — typically the instant the car wakes up — WiFi is restored automatically. No user action required.
+When the frame rate rises above the threshold again (car unlocked or started), WiFi comes back on its own.
 
 ---
 
@@ -380,6 +381,8 @@ Enable the **CAN Sleep** toggle in Settings. When active:
 - The ESP32-C6 CPU enters **light sleep** whenever FreeRTOS is idle, cutting CPU power consumption significantly.
 - The TWAI (CAN) peripheral powers down during sleep but **preserves its registers and receive queue** across cycles, so no messages are lost on wake-up.
 - The CAN transceiver chips remain powered and continue listening on the bus, so the first incoming frame wakes the controller instantly.
+
+Light sleep and the CPU clock floor are set at boot, so toggling CAN Sleep takes full effect after a restart.
 
 This mode gives the majority of power savings for most installs and is the recommended starting point.
 
@@ -400,18 +403,31 @@ Use Aggressive mode when the car sits unused for days at a time and you want the
 
 ### How to set it up
 
-Low Power Mode requires **one short calibration step** the first time, because every car idles its CAN bus at a slightly different rate.
+Every car idles its CAN bus at a different rate, so the wake threshold has to sit just above your car's parked rate.
+
+**Gen5: automatic**
+
+Selecting a Gen5 generation asks *Enable CAN sleep and set it up automatically?* (and asks again whenever you switch back to Gen5). Say yes, then just use the car. The next time it is left with no phone connected, the controller:
+
+1. switches on CAN Sleep and CAN Sleep (Aggressive),
+2. waits until the car is parked: speed 0, engine off and ignition off (`ZAS_Kl_15` in Klemmen_Status_01, `0x3C0`),
+3. averages the chassis frame rate for **15 minutes**, restarting if a phone connects, the ignition comes on or the car moves,
+4. sets **LP Wake Threshold** to that average **+ 300 fps** and saves it.
+
+It runs once. Sleep stays off until it has finished, so the controller never sleeps on a wrong threshold. The Controller Options card shows *armed* or the measured average.
+
+**Manual (any generation)**
 
 **Step 1 — Measure your Sleeping CAN rate**
 
 1. Park and lock the car. Wait 15 minutes or until the Chassis bus goes fully quiet.
 2. Stay connected to the OpenHaldex WiFi AP — the controller will remain awake while a client is connected.
 3. Open the Web UI → **Settings** and watch the **Chassis fps** and **Haldex fps** counters.
-4. Note the highest reading you see while the car is asleep. Most cars show **800 fps**; some show a handful of fps from a periodic gateway heartbeat.
+4. Note the highest reading you see while the car is asleep. Some cars go fully quiet; others keep a gateway heartbeat of several hundred fps.
 
 **Step 2 — Set the wake threshold**
 
-5. Set the **LP Wake Threshold (fps)** slider to a value slightly **above** the parked-bus reading — e.g. if the bus is quiet at 0 fps, set the slider to **5**; if it idles at 8 fps, set the slider to **15**.
+5. Set the **LP Wake Threshold (fps)** slider a few hundred above the parked reading, e.g. parked at 800 fps → **1100** (the default).
 
 **Step 3 — Enable Sleep and Disconnect**
 
@@ -424,10 +440,10 @@ The controller will now sleep, drawing ~14 mA, and **wake automatically whenever
   <img src="/Images/ui-controller-options.png" alt="Settings — Controller Options card: CAN Sleep, CAN Sleep (Aggressive), Bench Mode, LP Wake Threshold with the live Chassis / Haldex frame rate, plus Broadcast over CAN, SavvyCAN and Live Diagnostics toggles" width="300">
 </p>
 
-*Settings → **Controller Options**: everything in this section lives on one card — the two CAN Sleep toggles, Bench Mode, the **LP Wake Threshold** slider with the live **Chassis / Haldex fps** readout beneath it — alongside Broadcast over CAN, the SavvyCAN outputs, Live Diagnostics and LED brightness.*
+*Settings → **Controller Options**: the two CAN Sleep toggles, Bench Mode, the **LP Wake Threshold** slider (here set by the Gen5 auto-setup) and the live **Chassis / Haldex fps** readout, alongside Broadcast over CAN, the SavvyCAN outputs, Live Diagnostics and LED brightness.*
 
 > [!NOTE]
-> **Standalone mode:** with no chassis bus, the Haldex ECU itself sleeps fully, so any Haldex-bus CAN traffic wakes the module regardless of the slider value.
+> **Standalone mode:** with no chassis bus, the Haldex ECU itself sleeps fully, so the slider is ignored: the module wakes at a fixed 50 fps of Haldex-bus traffic.
 
 > [!NOTE]
 > **Switched-ignition installs:** if the module is already powered off with the ignition, Low Power Mode saves little and is optional.  
@@ -495,14 +511,20 @@ The controller also talks **Bluetooth LE** to the **DashCAN** mobile app, so the
 **Connecting.** With Bluetooth enabled (default), the app finds the controller as `OpenHaldex‑XXXX` and connects to the first one in range by itself; it can also be picked on the app's Bluetooth screen. Live data needs no pairing. The first change from a phone pairs it once:
 
 - the **first phone** pairs without a code (the phone at most asks you to confirm);
-- after that, **every new phone needs the 6‑digit pairing code**. It is shown in the app on an already paired phone and on the web UI (**Settings → Bluetooth**).
+- after that, **every new phone needs the 6‑digit pairing code**. It is shown in the app on an already paired phone and on the web UI (**Diagnostics → Bluetooth**).
 
-**On the controller:** **Settings → Bluetooth (DashCAN App)** has the enable switch, a *phone connected* indicator, the pairing code and **Forget Paired Phones** — this removes every paired phone, makes a new code, and lets the next phone pair without one again (also forget the device in the phone's Bluetooth settings). Bluetooth follows the WiFi into [Low Power Mode](#low-power-mode): it switches off when the car is parked and comes back with it.
+**On the controller:** **Diagnostics → Bluetooth (DashCAN App)** has the enable switch, a *phone connected* indicator, the pairing code and **Forget Paired Phones** — this removes every paired phone, makes a new code, and lets the next phone pair without one again (also forget the device in the phone's Bluetooth settings). Bluetooth follows the WiFi into [Low Power Mode](#low-power-mode): it switches off when the car is parked and comes back with it.
+
+<p align="center">
+  <img src="/Images/ui-bluetooth.png" alt="Diagnostics — Bluetooth (DashCAN App) card: Enable Bluetooth on, phone connected, pairing code for another phone, Forget Paired Phones" width="300">
+</p>
+
+*Diagnostics → **Bluetooth (DashCAN App)** with a phone connected: the pairing code shown is the one a second phone needs.*
 
 > [!NOTE]
 > Until the first phone has paired — on a new controller, or right after Forget Paired Phones — anyone within Bluetooth range could be that first phone. Pair yours straight away; if a phone you don't know got there first, use Forget Paired Phones. Firmware updates are never done over Bluetooth.
 
-The protocol is documented in [`documents/MOBILE_APP_OPENHALDEX.md`](documents/MOBILE_APP_OPENHALDEX.md), so other apps can use it too. Endpoints: `POST /api/ble/forget`; `bleEnabled`, `blePasskey`, `bleCodeRequired` in `/api/settings`; `bleConnected`, `bleCodeRequired` in `/api/status`.
+The protocol is documented in [`documents/MOBILE_APP_OPENHALDEX.md`](documents/MOBILE_APP_OPENHALDEX.md), so other apps can use it too. Endpoints: `POST /api/ble/forget`; `bleEnabled`, `blePasskey`, `bleCodeRequired` in `/api/settings`; `bleConnected`, `bleCodeRequired` in `/api/dashboard`.
 
 ---
 
