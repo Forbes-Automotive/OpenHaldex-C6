@@ -3,6 +3,23 @@
   "latest": "9.00.0",
   "releases": [
     {
+      "version": "9.00.6",
+      "channel": "stable",
+      "date": "2026-10-10",
+      "ota": false,
+      "notes": "USB flash required (new partition table: larger app slots, LittleFS 0x70000 at 0x390000) - not available over OTA from 9.00.0 or older. Bluetooth LE for the DashCAN app, ESP-NOW, Vehicle Geometry card, Stable/Latest update channel, PWA icons, web UI recovery page, CAN controller restart fix.",
+      "firmware": {
+        "path": "V9.00.6/firmware.bin",
+        "size": 1763152,
+        "sha256": "b82dbae74d9e220d3cb71c6960d7e2d0be313946f9625f97155bdf296148393f"
+      },
+      "filesystem": {
+        "path": "V9.00.6/littlefs.bin",
+        "size": 458752,
+        "sha256": "eec25d314f28696174c7ab25a569466b97bee56257a316907815bda4de13cbe5"
+      }
+    },
+    {
       "version": "9.00.0",
       "channel": "stable",
       "date": "2026-09-20",
@@ -10,13 +27,13 @@
       "notes": "Forbes Automotive UI theme, OTA tab, Long Learn, Gen5 (0CQ VAQ) fixes, PQ handbrake from CAN, Home WiFi bridge mode, Backup & Restore, Bench Mode.",
       "firmware": {
         "path": "V9.00.0/firmware.bin",
-        "size": 1337792,
-        "sha256": "a14549ef42201613d2b4ac69f4f94a7638a71520dc00b1691b12ced36fed19d3"
+        "size": 1346368,
+        "sha256": "eecacbfde1b582e429b661a855763f1d7f00463ab7ffbb2923f186cbe90e9a53"
       },
       "filesystem": {
         "path": "V9.00.0/littlefs.bin",
         "size": 720896,
-        "sha256": "ed168098195b11c3c1e77f25c971855dc153c517911d453357a64bdf875e35a3"
+        "sha256": "87ff11a036504eec3c1f5091a687cbb25397589ab124a1854fdaf9fb8f97a87a"
       }
     },
     {
@@ -27,13 +44,13 @@
       "notes": "Add/remove CAN signals when the learn isn't clean, bus recovery fix, TP2.0 (1K0 554C) and 0CQ 554C/D UDS scaling, force-mode UI tidy.",
       "firmware": {
         "path": "V8.00.3/firmware.bin",
-        "size": 1258688,
-        "sha256": "16c294dc846d74d4e247c4f3110a79725cafd17740cb00f792d05bb6561b58af"
+        "size": 1258880,
+        "sha256": "4f3428dd094d845f4634e5aa0aa2a086575af053def4e7ace3fc08d4d9afd924"
       },
       "filesystem": {
         "path": "V8.00.3/littlefs.bin",
         "size": 720896,
-        "sha256": "1f577c386cf1d96effbb52a4fd8d80089df364921d9241323746cea1f90f80b8"
+        "sha256": "c150979fdc22e15ad8715550df659cf58c49cb065aeac99f9631df68c9499a68"
       }
     },
     {
