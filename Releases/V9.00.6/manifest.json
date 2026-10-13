@@ -8,7 +8,7 @@
         { "path": "bootloader.bin", "offset": 0 },
         { "path": "partitions.bin", "offset": 32768 },
         { "path": "firmware.bin", "offset": 65536 },
-        { "path": "littlefs.bin", "offset": 3473408 }
+        { "path": "littlefs.bin", "offset": 3735552 }
       ]
     }
   ]
