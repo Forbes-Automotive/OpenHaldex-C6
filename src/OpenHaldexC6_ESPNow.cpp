@@ -1,6 +1,7 @@
 #include <OpenHaldexC6_ESPNow.h>
 #include <OpenHaldexC6_Calculations.h> // learn / long learn state
 #include <ohx_proto.h>
+#include <cannow_tx.h> // CAN frame relay (shared with adc2can)
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include <esp_random.h>
@@ -53,7 +54,10 @@ static void nowStart()
     peer.ifidx = WIFI_IF_AP;
     peer.encrypt = false;
     if (esp_now_add_peer(&peer) == ESP_OK)
+    {
       nowUp = true;
+      cannLink(true);
+    }
     else
       esp_now_deinit();
   }
@@ -69,6 +73,7 @@ void espNowStop()
   if (nowUp)
   {
     nowUp = false;
+    cannLink(false);
     esp_now_unregister_recv_cb();
     esp_now_deinit();
   }
@@ -207,7 +212,7 @@ static uint8_t execute(const OhxCommand &c)
   case OHX_C_GENERATION: // as POST /api/settings {haldexGeneration}
   {
     const uint8_t g = c.arg[0];
-    if (!(g == 1 || g == 2 || g == 4 || g == 50 || g == 51 || g == 52 || g == 41))
+    if (!(g == 1 || g == 2 || g == 4 || g == 50 || g == 51 || g == 52 || g == 41 || isVolvoOrSaabGeneration(g)))
       return OHX_R_INVALID;
     if (!stopped())
       return OHX_R_MOVING;
@@ -295,6 +300,9 @@ static void handle(const RxCmd &r)
   statusNow = true;
 }
 
+// the relay's packets: the task holds nowMutex with ESP-NOW up while cannPump calls this
+static bool relaySend(const uint8_t *data, size_t len) { return esp_now_send(bcast, data, len) == ESP_OK; }
+
 // ---------------------------------------------------------------------------
 // task
 // ---------------------------------------------------------------------------
@@ -322,7 +330,13 @@ static void espNowTask(void *)
       lastStatus = now;
       sendStatus();
     }
-    vTaskDelay(pdMS_TO_TICKS(10));
+    if (nowUp && xSemaphoreTake(nowMutex, pdMS_TO_TICKS(5)) == pdTRUE) // the CAN frame relay
+    {
+      if (nowUp)
+        cannPump(relaySend);
+      xSemaphoreGive(nowMutex);
+    }
+    vTaskDelay(pdMS_TO_TICKS(cannRate != CANN_R_OFF ? 4 : 10)); // relaying: well inside CANN_FLUSH_MS
   }
 }
 
@@ -331,5 +345,20 @@ void setupESPNow()
   nowMutex = xSemaphoreCreateMutex();
   cmdQ = xQueueCreate(4, sizeof(RxCmd));
   nonce = esp_random() | 1;
+  cannBegin(CANN_K_OPENHALDEX);
   xTaskCreate(espNowTask, "espNow", 4096, nullptr, 2, nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// CAN frame relay (include/cannow_tx.h)
+// ---------------------------------------------------------------------------
+void espNowTapFrame(const twai_message_t &m) { cannTap(m); }
+uint8_t espNowRelayRate() { return cannRate; }
+void espNowSetRelayRate(uint8_t rate) { cannSetRate(rate); }
+void espNowRelayStats(uint32_t &framesPerSec, uint32_t &lostPerSec, uint32_t &frames, uint32_t &lost)
+{
+  framesPerSec = cannStat.framesPerSec;
+  lostPerSec = cannStat.lostPerSec;
+  frames = cannStat.frames;
+  lost = cannStat.lost;
 }

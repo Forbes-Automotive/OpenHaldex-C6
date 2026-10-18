@@ -117,6 +117,7 @@ void readEEP() // function to read stored preferences into runtime variables
     broadcastOpenHaldexOverCAN = pref.getBool("broadcastOpen", false);      // load broadcast setting
     espNowEnabled = pref.getBool("espNowOn", true);                        // load gauges over ESP-NOW (default on)
     espNowControl = pref.getBool("espNowCtl", true);                       // load gauge control over ESP-NOW (default on)
+    espNowSetRelayRate(pref.getUChar("canRelay", 0));                       // load CAN frame relay to gauges (default off)
     isStandalone = pref.getBool("isStandalone", false);                     // load standalone setting
     useCANifAvailable = pref.getBool("useCANifAvail", false);               // load use CAN if available setting
     disableController = pref.getBool("disableControl", false);              // load controller disable
@@ -275,6 +276,7 @@ void writeEEP(void *arg) // task function to periodically write preferences
     pref.putBool("broadcastOpen", broadcastOpenHaldexOverCAN); // write broadcast setting
     pref.putBool("espNowOn", espNowEnabled);                   // write gauges over ESP-NOW
     pref.putBool("espNowCtl", espNowControl);                  // write gauge control over ESP-NOW
+    pref.putUChar("canRelay", espNowRelayRate());              // write CAN frame relay to gauges
     pref.putBool("isStandalone", isStandalone);                // write standalone setting
     pref.putBool("useCANifAvail", useCANifAvailable);          // write use CAN if available setting
     pref.putBool("disableControl", disableController);         // write controller disable

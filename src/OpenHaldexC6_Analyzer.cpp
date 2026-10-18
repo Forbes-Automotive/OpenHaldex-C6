@@ -25,7 +25,7 @@
 // 1. Keep the OpenHaldex Wi-Fi AP connected.
 // 2. In SavvyCAN: **Add New Device Connection** -> **Network Connection (GVRET)**.
 // 3. IP address: `192.168.1.1` (port 23 is implicit in SavvyCAN's GVRET UI).
-// 4. Set CAN speed to `500000`.
+// 4. Set CAN speed to `500000` (`250000` with Volvo P2 Gen2 selected).
 
 // ### Notes
 // - Analyzer mode is intended for inline sniffing; it does not generate any control frames.
@@ -136,8 +136,9 @@ static void gvretSendNumBuses() {
 
 static void gvretSendBusInfo() {
   // Minimal bus info response (10 bytes payload) for SavvyCAN compatibility.
-  // Speeds are expressed in kbit (500 = 0x01F4).
-  const uint16_t speedKbit = 500;
+  // Speeds are expressed in kbit (500 = 0x01F4). Report the speed the buses are
+  // really running at: 250 on Volvo P2 Gen2, otherwise 500.
+  const uint16_t speedKbit = canBusSpeedKbps;
   const uint8_t payload[] = {
     0xF1, 0x06,
     0x01, 0x00,  // can0 enabled, not listen-only

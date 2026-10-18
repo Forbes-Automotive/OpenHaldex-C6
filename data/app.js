@@ -110,6 +110,25 @@ async function fetchJson(url, options) {
   }
 }
 
+// Volvo / SAAB generations (V10.00.0) and the CAN bus speed each one needs
+const VOLVO_SAAB_GENERATIONS = [21, 3, 43, 44];
+let _canSpeedKbps = 500; // speed the controller is running at (from /api/settings)
+
+// 250 kbit/s for Volvo P2 (Pre-Facelift), 500 kbit/s for everything else - matches the firmware
+function canSpeedForGeneration(gen) {
+  if (gen === 21) return 250;
+  return 500;
+}
+
+// show the "new, standalone only" note and the bus speed under the generation picker
+function updateVolvoSaabHint(gen) {
+  const hint = document.getElementById("genVolvoSaabHint");
+  if (!hint) return;
+  hint.style.display = VOLVO_SAAB_GENERATIONS.includes(gen) ? "" : "none";
+  const speed = document.getElementById("canSpeedKbps");
+  if (speed) speed.textContent = canSpeedForGeneration(gen);
+}
+
 // initialise stored settings (async function)
 async function initStoredSettings() {
   // initialise stored settings and parse them
@@ -118,6 +137,8 @@ async function initStoredSettings() {
     // values
     document.getElementById("haldexGeneration").value =
       data.haldexGeneration || 1;
+    _canSpeedKbps = data.canSpeedKbps || 500;
+    updateVolvoSaabHint(data.haldexGeneration || 1);
     document.getElementById("tcForceModeValue").value     = data.tcForceModeValue     ?? 2;
     document.getElementById("hazardForceModeValue").value  = data.hazardForceModeValue  ?? 2;
     document.getElementById("extBtnForceModeValue").value  = data.extBtnForceModeValue  ?? 2;
@@ -222,6 +243,7 @@ async function initStoredSettings() {
       data.broadcastOpenHaldexOverCAN || false;
     document.getElementById("espNowEnabled").checked = data.espNowEnabled !== false;
     document.getElementById("espNowControl").checked = data.espNowControl !== false;
+    document.getElementById("canRelay").value = data.canRelay ?? 0;
 
     document.getElementById("disableOnboardButton").checked =
       data.disableOnboardButton || false;
@@ -413,6 +435,14 @@ async function refreshStatus() {
     canStatus.textContent = `CAN: ${chassisOk ? "✓" : "X"} Chassis | ${haldexOk ? "✓" : "X"} Haldex`;
 
     if (data.bleCodeRequired !== undefined) renderBlePairing(data.bleCodeRequired);
+
+    const relayStatus = document.getElementById("canRelayStatus");
+    if (relayStatus && data.canRelay) {
+      const r = data.canRelay; // same wording as adc2can's CAN relay card
+      relayStatus.textContent = !r.rate ? "" :
+        `Relaying ${r.fps} frames/s` + (r.lostPerSec ? `, ${r.lostPerSec} lost/s - cap each ID's rate` : "") +
+        `  |  ${r.frames} relayed, ${r.lost} lost since boot`;
+    }
 
     const bleStatus = document.getElementById("bleStatus");
     if (bleStatus && data.bleConnected !== undefined) {
@@ -648,6 +678,8 @@ function renderHaldexStateLegend(rawHex, gen) {
       `</table><p style="margin:4px 0 0;">Note: bit 4–5 of byte 1 = longitudinal lock state (0=open, 1=partial, 2=closed) — separate from this byte.</p>`;
   } else if (gen === 41) {
     el.innerHTML = `<em>Gen 4.1: dedicated status variables used — see Gen41 card above.</em>`;
+  } else if (VOLVO_SAAB_GENERATIONS.includes(gen)) {
+    el.innerHTML = `<em>Volvo / SAAB: this is byte 0 of the Haldex reply, shown raw. Its bits aren't decoded yet - logs needed.</em>`;
   } else {
     el.innerHTML = "";
   }
@@ -964,7 +996,7 @@ function initModeButtons() {
 // initialise settings with immediate save on change
 function initSettings() {
   // Selects (dropdown menus)
-  const selectIds = ["haldexGeneration", "tcForceModeValue", "hazardForceModeValue", "extBtnForceModeValue", "forceModesPriority"];
+  const selectIds = ["haldexGeneration", "tcForceModeValue", "hazardForceModeValue", "extBtnForceModeValue", "forceModesPriority", "canRelay"];
   selectIds.forEach((id) => {
     const elem = document.getElementById(id);
     if (elem) {
@@ -973,6 +1005,13 @@ function initSettings() {
         // Generation change alters which frames are editable — refresh the list.
         if (id === "haldexGeneration") {
           _haldexGeneration = parseInt(elem.value);
+          updateVolvoSaabHint(_haldexGeneration);
+          // Volvo P2 (Pre-Facelift) needs 250 kbit/s: the controller saves and
+          // restarts ~2 s after the change, so warn and reload once it is back.
+          if (canSpeedForGeneration(_haldexGeneration) !== _canSpeedKbps) {
+            showNotification("CAN bus speed changing to " + canSpeedForGeneration(_haldexGeneration) + " kbit/s - controller restarting");
+            setTimeout(() => location.reload(), 10000);
+          }
           refreshFrameBlocks();
           maybeOfferSleepSetup(_haldexGeneration, true); // picking Gen5 always asks again
         }
@@ -2842,7 +2881,7 @@ function initWifiSta(prefix) {
 // ---------------------------------------------------------------------------
 const BACKUP_GENERAL_KEYS = [
   "haldexGeneration", "isStandalone", "useCANifAvailable", "broadcastOpenHaldexOverCAN", "disableController",
-  "espNowEnabled", "espNowControl",
+  "espNowEnabled", "espNowControl", "canRelay",
   "disengageUnderSpeed", "disengageAboveSpeed", "disableThrottle",
   "tcForceMode", "tcForceModeValue", "hazardForceMode", "hazardForceModeValue",
   "extButtonForceMode", "extBtnForceModeValue", "disableOnboardButton", "disableExternalButton",

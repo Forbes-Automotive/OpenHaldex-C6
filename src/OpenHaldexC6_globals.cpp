@@ -842,6 +842,28 @@ uint8_t gen42_20F_d6        = 0x00; // 0x20F D6 (+0x10 per frame, mod 256)
 uint8_t gen42_190_counter   = 0x00; // 4-bit (0-15): 0x190 D6
 uint8_t gen42_275_counter   = 0x80; // 0x275 D1 (+0x20 per 100 ms, mod 256)
 
+// Volvo / SAAB standalone counters and heartbeats (V10.00.0)
+bool volvoHeartbeatFlip = false; // Volvo 100 ms network frame: false = send the first byte 6-7 pair, true = its opposite
+uint8_t saab140Counter = 0;      // SAAB 0x140 byte 0 bits 0-1, counts 0-3
+uint8_t saab160Step = 0;         // SAAB 0x160 bytes 2/3 pair to send next, 0-3
+
+// Volvo / SAAB Haldex feedback (V10.00.0)
+int16_t received_haldex_temp_c = -128; // SAAB 0x210 byte 2 - 40 (degC); -128 = not received yet
+
+// CAN bus speed the two controllers were started at (set in setupCAN from the generation)
+uint16_t canBusSpeedKbps = 500;
+
+// True for the Volvo and SAAB generations added in V10.00.0. They share a lot:
+// no VW chassis decode, no VW checksums, linear lock scaling until learned.
+bool isVolvoOrSaabGeneration(uint8_t generation)
+{
+  if (generation == GEN_VOLVO_P2_GEN2) return true; // Volvo P2 Gen2
+  if (generation == GEN_VOLVO_P2_GEN3) return true; // Volvo P2 Gen3
+  if (generation == GEN_VOLVO_GEN4) return true;    // Volvo Gen4
+  if (generation == GEN_SAAB_93_XWD) return true;   // SAAB 9-3 XWD
+  return false;
+}
+
 // 0x1CE Secondary Axle Torque Request (Nm). 0.0 = no request (open clutch).
 // Set from the API/mode handler. Encoding: 4 Nm/LSB (empirical; 0xFF = 1020 Nm max).
 float g_1ce_torque_request_nm = 0.0f;

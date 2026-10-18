@@ -71,3 +71,23 @@ void Gen42_frames20();
 void Gen42_frames100();
 void Gen42_frames200();
 void Gen42_frames1000();
+
+// Volvo P2 Gen2 (pre-facelift, 250 kbit/s) standalone frames
+void VolvoP2Gen2_frames10();
+void VolvoP2Gen2_frames20();
+void VolvoP2Gen2_frames100();
+
+// Volvo P2 Gen3 (facelift) standalone frames
+void VolvoP2Gen3_frames10();
+void VolvoP2Gen3_frames100();
+
+// Volvo Gen4 (P3 family) standalone frames
+void VolvoGen4_frames10();
+void VolvoGen4_frames20();
+void VolvoGen4_frames100();
+
+// SAAB 9-3 XWD standalone frames
+void Saab93_frames10();
+void Saab93_frames20();
+void Saab93_frames100();
+void Saab93_frames1000();

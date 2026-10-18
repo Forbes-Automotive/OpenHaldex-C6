@@ -86,7 +86,9 @@ static inline void standaloneTx(twai_message_t &f)
   if (overridden)
   {
     const uint8_t *seq = idSeqFor(f.identifier);
-    if (seq)
+    // Volvo / SAAB frames carry no VW checksum: SAAB's 0x110 shares an ID with
+    // a checksummed VW frame, so only recompute the CRC on the VW generations.
+    if (seq && !isVolvoOrSaabGeneration(haldexGeneration))
       f.data[0] = calcChecksum(f.data, seq);
   }
 
@@ -112,6 +114,18 @@ static void frames10()
     break;
   case 42:
     Gen42_frames10();
+    break;
+  case GEN_VOLVO_P2_GEN2:
+    VolvoP2Gen2_frames10();
+    break;
+  case GEN_VOLVO_P2_GEN3:
+    VolvoP2Gen3_frames10();
+    break;
+  case GEN_VOLVO_GEN4:
+    VolvoGen4_frames10();
+    break;
+  case GEN_SAAB_93_XWD:
+    Saab93_frames10();
     break;
   case 50:
     Gen5_0CQ_frames10();
@@ -143,6 +157,15 @@ static void frames20()
     break;
   case 42:
     Gen42_frames20();
+    break;
+  case GEN_VOLVO_P2_GEN2:
+    VolvoP2Gen2_frames20();
+    break;
+  case GEN_VOLVO_GEN4:
+    VolvoGen4_frames20();
+    break;
+  case GEN_SAAB_93_XWD:
+    Saab93_frames20();
     break;
   case 50:
     Gen5_0CQ_frames20();
@@ -203,6 +226,18 @@ static void frames100()
     break;
   case 42:
     Gen42_frames100();
+    break;
+  case GEN_VOLVO_P2_GEN2:
+    VolvoP2Gen2_frames100();
+    break;
+  case GEN_VOLVO_P2_GEN3:
+    VolvoP2Gen3_frames100();
+    break;
+  case GEN_VOLVO_GEN4:
+    VolvoGen4_frames100();
+    break;
+  case GEN_SAAB_93_XWD:
+    Saab93_frames100();
     break;
   case 50:
     Gen5_0CQ_frames100();
@@ -265,6 +300,9 @@ static void frames1000()
     break;
   case 42:
     Gen42_frames1000();
+    break;
+  case GEN_SAAB_93_XWD:
+    Saab93_frames1000();
     break;
   case 50:
     Gen5_0CQ_frames1000();
@@ -3930,4 +3968,406 @@ void Gen42_frames1000()
   frame.data[6] = 0x36;
   frame.data[7] = 0x35; // '6' '5'
   standaloneTx(frame);
+}
+
+// =============================================================================
+// Volvo / SAAB Standalone Frames (V10.00.0)
+// =============================================================================
+// Starting point for four new Haldex generations: IDs, send rates, counters
+// and the bytes that carry the lock request. The Volvo network heartbeat
+// matches a real Volvo PCAN trace.
+//
+// What each static byte MEANS is not known yet: those frames are sent with
+// fixed starting values, untouched. Adjust any byte live with the serial lab
+// (OVR <id> <byte> <value>) and watch the result in SavvyCAN, then replace these
+// with decoded values once we have our own logs.
+//
+// Lock request: the strongest known lock value for each car is used as "100 %",
+// scaled down by get_lock_target_adjusted_value() (0 when lock is off).
+// All frames go out on the Haldex bus through standaloneTx().
+// =============================================================================
+
+// Send one 8-byte Volvo / SAAB frame. isExtended = true for Volvo's 29-bit IDs.
+static void sendVolvoSaabFrame(uint32_t id, bool isExtended, const uint8_t data[8])
+{
+  twai_message_t frame = {};
+  frame.identifier = id;
+  frame.extd = 0; // 11-bit ID
+  if (isExtended)
+  {
+    frame.extd = 1; // 29-bit ID
+  }
+  frame.rtr = 0;
+  frame.data_length_code = 8;
+  for (uint8_t i = 0; i < 8; i++)
+  {
+    frame.data[i] = data[i];
+  }
+  standaloneTx(frame);
+}
+
+// --- Volvo P2 Gen2 (pre-facelift, 250 kbit/s, 29-bit IDs) -------------------
+// Haldex replies on VOLVO_P2G2_HALDEX_ID (0x0120000A), decoded in parseCAN_hdx.
+
+// Static frames: starting values, byte meanings not known yet
+static const uint8_t VOLVO_P2G2_224024_DATA[8] = {0xE9, 0xC9, 0x00, 0x1F, 0x01, 0xFF, 0x08, 0x00};  // 0x00224024
+static const uint8_t VOLVO_P2G2_C24000_DATA[8] = {0x40, 0x00, 0x00, 0x00, 0xC1, 0x42, 0xC1, 0x42};  // 0x00C24000
+static const uint8_t VOLVO_P2G2_1E2402C_DATA[8] = {0xC4, 0xF9, 0x20, 0xC6, 0x44, 0xF6, 0xAE, 0x4D}; // 0x01E2402C
+static const uint8_t VOLVO_P2G2_3200002_DATA[8] = {0x04, 0xC3, 0x62, 0xAE, 0x01, 0xF4, 0x01, 0xF4}; // 0x03200002
+static const uint8_t VOLVO_P2G2_3400002_DATA[8] = {0x01, 0x00, 0x10, 0x01, 0x00, 0x00, 0x00, 0x00}; // 0x03400002
+
+void VolvoP2Gen2_frames10()
+{
+  uint8_t data[8];
+
+  // lock request: 0 = no lock, 0xF4 = the strongest value seen (100 %)
+  const uint8_t lockByte = get_lock_target_adjusted_value(0xF4, false);
+  const bool isLockActive = (lockByte > 0);
+
+  sendVolvoSaabFrame(VOLVO_P2G2_224024_ID, true, VOLVO_P2G2_224024_DATA);
+
+  // 0x0042401E - carries the lock request
+  data[0] = 0xC4; // static
+  data[1] = 0x00; // static
+  data[2] = 0x20; // 0x20 normally, 0x21 only at full lock
+  if (isLockActive && lock_target >= 95.0f)
+  {
+    data[2] = 0x21;
+  }
+  data[3] = lockByte; // lock request
+  data[4] = 0x45;     // static
+  data[5] = 0xF4;     // static
+  data[6] = 0xAE;     // static
+  data[7] = 0x4C;     // static
+  sendVolvoSaabFrame(VOLVO_P2G2_LOCK_ID, true, data);
+
+  // 0x0062401E - "lock active" flags in bytes 6-7
+  data[0] = 0xC0; // static
+  data[1] = 0x00; // static
+  data[2] = 0xD8; // static
+  data[3] = 0x00; // static
+  data[4] = 0x68; // static
+  data[5] = 0x11; // static
+  data[6] = 0x60; // 0x60 idle, 0x67 lock active
+  data[7] = 0x00; // 0x00 idle, 0xD0 lock active
+  if (isLockActive)
+  {
+    data[6] = 0x67;
+    data[7] = 0xD0;
+  }
+  sendVolvoSaabFrame(VOLVO_P2G2_ACTIVE_ID, true, data);
+
+  sendVolvoSaabFrame(VOLVO_P2G2_C24000_ID, true, VOLVO_P2G2_C24000_DATA);
+}
+
+void VolvoP2Gen2_frames20()
+{
+  sendVolvoSaabFrame(VOLVO_P2G2_1E2402C_ID, true, VOLVO_P2G2_1E2402C_DATA);
+}
+
+void VolvoP2Gen2_frames100()
+{
+  uint8_t data[8];
+
+  // 0x0242C07C - network heartbeat: bytes 6-7 swap to their exact opposite on each send
+  data[0] = 0x01; // page 1 (the real car multiplexes this frame by byte 0)
+  data[1] = 0x1F; // static
+  data[2] = 0x49; // static
+  data[3] = 0xDE; // static
+  data[4] = 0x38; // static
+  data[5] = 0x08; // static
+  data[6] = 0xFE; // FE F8, then 01 07 on the next send
+  data[7] = 0xF8;
+  if (volvoHeartbeatFlip)
+  {
+    data[6] = 0x01;
+    data[7] = 0x07;
+  }
+  volvoHeartbeatFlip = !volvoHeartbeatFlip;
+  sendVolvoSaabFrame(VOLVO_P2G2_NETWORK_ID, true, data);
+
+  sendVolvoSaabFrame(VOLVO_P2G2_3200002_ID, true, VOLVO_P2G2_3200002_DATA);
+  sendVolvoSaabFrame(VOLVO_P2G2_3400002_ID, true, VOLVO_P2G2_3400002_DATA);
+}
+
+// --- Volvo P2 Gen3 (facelift, 500 kbit/s, 29-bit IDs) ------------------------
+// Haldex replies on VOLVO_P2G3_HALDEX_ID (0x1020000A), decoded in parseCAN_hdx.
+
+// Static frames: starting values, byte meanings not known yet
+static const uint8_t VOLVO_P2G3_42406C_DATA[8] = {0x80, 0x88, 0x00, 0x71, 0x60, 0x00, 0xC1, 0xF3}; // 0x0042406C
+static const uint8_t VOLVO_P2G3_224024_DATA[8] = {0x3F, 0xF8, 0x00, 0x00, 0x13, 0xFF, 0xC0, 0x00}; // 0x00224024
+static const uint8_t VOLVO_P2G3_E24026_DATA[8] = {0x00, 0x01, 0xE0, 0xE4, 0x9F, 0x08, 0x00, 0x00}; // 0x00E24026
+
+void VolvoP2Gen3_frames10()
+{
+  uint8_t data[8];
+
+  // lock request: 0 = no lock, 0xBC = the strongest value seen (100 %)
+  const uint8_t lockByte = get_lock_target_adjusted_value(0xBC, false);
+  const bool isLockActive = (lockByte > 0);
+
+  // 0x10004002 - "lock active" flags in bytes 4-7
+  data[0] = 0xC0; // static
+  data[1] = 0x00; // static
+  data[2] = 0x00; // static
+  data[3] = 0x00; // static
+  data[4] = 0xC0; // C0 00 C0 00 idle, C1 42 C1 42 lock active
+  data[5] = 0x00;
+  data[6] = 0xC0;
+  data[7] = 0x00;
+  if (isLockActive)
+  {
+    data[4] = 0xC1;
+    data[5] = 0x42;
+    data[6] = 0xC1;
+    data[7] = 0x42;
+  }
+  sendVolvoSaabFrame(VOLVO_P2G3_ACTIVE_ID, true, data);
+
+  sendVolvoSaabFrame(VOLVO_P2G3_42406C_ID, true, VOLVO_P2G3_42406C_DATA);
+
+  // 0x0062401E - carries the lock request
+  data[0] = 0x00;     // 0x00 idle, 0x02 lock active
+  data[1] = lockByte; // lock request
+  data[2] = 0x42;     // static
+  data[3] = 0xEE;     // static
+  data[4] = 0xE8;     // E8 00 64 00 idle, E9 F4 65 F4 lock active
+  data[5] = 0x00;
+  data[6] = 0x64;
+  data[7] = 0x00;
+  if (isLockActive)
+  {
+    data[0] = 0x02;
+    data[4] = 0xE9;
+    data[5] = 0xF4;
+    data[6] = 0x65;
+    data[7] = 0xF4;
+  }
+  sendVolvoSaabFrame(VOLVO_P2G3_LOCK_ID, true, data);
+
+  // 0x0080401E - mode flags in bytes 2-3
+  data[0] = 0x1E; // static
+  data[1] = 0x03; // static
+  data[2] = 0x80; // 80 00 idle, 87 D0 lock active
+  data[3] = 0x00;
+  data[4] = 0x00; // static
+  data[5] = 0x19; // static
+  data[6] = 0x72; // static
+  data[7] = 0x00; // static
+  if (isLockActive)
+  {
+    data[2] = 0x87;
+    data[3] = 0xD0;
+  }
+  sendVolvoSaabFrame(VOLVO_P2G3_MODE_ID, true, data);
+
+  sendVolvoSaabFrame(VOLVO_P2G3_224024_ID, true, VOLVO_P2G3_224024_DATA);
+  sendVolvoSaabFrame(VOLVO_P2G3_E24026_ID, true, VOLVO_P2G3_E24026_DATA);
+}
+
+void VolvoP2Gen3_frames100()
+{
+  uint8_t data[8];
+
+  // 0x10A2407C - network heartbeat: bytes 6-7 swap to their exact opposite on each send
+  data[0] = 0x01; // page 1
+  data[1] = 0x1F; // static
+  data[2] = 0xB8; // static
+  data[3] = 0xFA; // static
+  data[4] = 0xC2; // static
+  data[5] = 0x7A; // static
+  data[6] = 0xFE; // FE F5, then 01 0A on the next send
+  data[7] = 0xF5;
+  if (volvoHeartbeatFlip)
+  {
+    data[6] = 0x01;
+    data[7] = 0x0A;
+  }
+  volvoHeartbeatFlip = !volvoHeartbeatFlip;
+  sendVolvoSaabFrame(VOLVO_P2G3_NETWORK_ID, true, data);
+}
+
+// --- Volvo Gen4 (P3 family, 500 kbit/s, 11-bit IDs) --------------------------
+// Haldex replies on VOLVO_G4_HALDEX_ID (0x243), decoded in parseCAN_hdx.
+// Only three lock steps are known here, so the request is stepped.
+
+// Static frames: starting values, byte meanings not known yet
+static const uint8_t VOLVO_G4_20A_DATA[8] = {0xFD, 0x00, 0x94, 0x00, 0x02, 0x00, 0x00, 0x00}; // 0x20A
+static const uint8_t VOLVO_G4_220_DATA[8] = {0x8B, 0x11, 0xF0, 0x00, 0x80, 0x00, 0x80, 0x00}; // 0x220
+
+void VolvoGen4_frames10()
+{
+  uint8_t data[8];
+
+  // lock request as 0-100 %, after the learn table / lock-enable rules
+  const uint8_t lockPercent = get_lock_target_adjusted_value(100, false);
+
+  // 0x12A - EngineData (volvo_v60_2015_pt.dbc): byte 4 bit 6 = brake pressed,
+  // engine RPM = 13 bits from byte 6 bits 4-0 and byte 7. The three lock steps
+  // below are really three engine-speed values (842 / 700 / 1980 rpm), with
+  // 0 rpm for no lock. Next step: drive lock from the pedal (0x020) instead.
+  data[0] = 0xE9; // static
+  data[1] = 0xFE; // static
+  data[2] = 0xC7; // static
+  data[3] = 0xF6; // static
+  data[4] = 0x98; // static (bit 6 = 0: brake not pressed)
+  data[5] = 0x04; // static
+  if (lockPercent == 0)
+  {
+    data[6] = 0xE0; // 0 rpm
+    data[7] = 0x00;
+  }
+  else if (lockPercent >= 67)
+  {
+    data[6] = 0xE3; // 0x34A = 842 rpm (strongest step)
+    data[7] = 0x4A;
+  }
+  else if (lockPercent >= 34)
+  {
+    data[6] = 0xE2; // 0x2BC = 700 rpm (middle step)
+    data[7] = 0xBC;
+  }
+  else
+  {
+    data[6] = 0xE7; // 0x7BC = 1980 rpm (lightest step)
+    data[7] = 0xBC;
+  }
+  sendVolvoSaabFrame(VOLVO_G4_MODE_ID, false, data);
+}
+
+void VolvoGen4_frames20()
+{
+  sendVolvoSaabFrame(VOLVO_G4_20A_ID, false, VOLVO_G4_20A_DATA);
+  sendVolvoSaabFrame(VOLVO_G4_220_ID, false, VOLVO_G4_220_DATA);
+}
+
+void VolvoGen4_frames100()
+{
+  uint8_t data[8];
+
+  // 0x405 - network heartbeat: bytes 6-7 swap to their exact opposite on each send
+  data[0] = 0x01; // page 1
+  data[1] = 0x67; // static
+  data[2] = 0x79; // static
+  data[3] = 0x04; // static
+  data[4] = 0x6C; // static
+  data[5] = 0xB7; // static
+  data[6] = 0xF4; // F4 45, then 0B BA on the next send
+  data[7] = 0x45;
+  if (volvoHeartbeatFlip)
+  {
+    data[6] = 0x0B;
+    data[7] = 0xBA;
+  }
+  volvoHeartbeatFlip = !volvoHeartbeatFlip;
+  sendVolvoSaabFrame(VOLVO_G4_NETWORK_ID, false, data);
+}
+
+// --- SAAB 9-3 XWD (GM family, 500 kbit/s, 11-bit IDs) ------------------------
+// Haldex replies on SAAB_93_HALDEX_ID (0x210), decoded in parseCAN_hdx.
+// Uses the GM "alive rolling count" idea, like our Gen41: a 2-bit counter, and
+// on 0x160 a protection byte that is 0 minus the counter.
+
+// Static frames: starting values, byte meanings not known yet
+static const uint8_t SAAB_93_180_DATA[8] = {0x20, 0x0F, 0xFF, 0x68, 0x98, 0x00, 0x00, 0x00}; // 0x180
+static const uint8_t SAAB_93_288_DATA[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}; // 0x288
+static const uint8_t SAAB_93_280_DATA[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}; // 0x280
+static const uint8_t SAAB_93_300_DATA[8] = {0x10, 0x08, 0x00, 0x00, 0x7D, 0xFD, 0x00, 0x20}; // 0x300
+static const uint8_t SAAB_93_301_DATA[8] = {0x00, 0x2E, 0xFF, 0x00, 0x00, 0x00, 0x62, 0xC2}; // 0x301
+static const uint8_t SAAB_93_410_DATA[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}; // 0x410
+static const uint8_t SAAB_93_3ED_DATA[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0x00, 0x00}; // 0x3ED
+static const uint8_t SAAB_93_320_DATA[8] = {0x00, 0x0A, 0x0A, 0x04, 0x31, 0x28, 0x00, 0x00}; // 0x320
+static const uint8_t SAAB_93_510_DATA[8] = {0x00, 0x86, 0x6A, 0x00, 0x00, 0x00, 0x00, 0x00}; // 0x510
+static const uint8_t SAAB_93_398_DATA[8] = {0x80, 0x00, 0x50, 0xC3, 0x48, 0x02, 0x00, 0x00}; // 0x398
+
+// 0x160 bytes 2/3 step through these four pairs, one per send
+static const uint8_t SAAB_93_160_BYTE2[4] = {0x00, 0x5F, 0x9F, 0xDF}; // counter in bits 6-7 (step 0 sends 00)
+static const uint8_t SAAB_93_160_BYTE3[4] = {0x00, 0xFF, 0xFE, 0xFD}; // protection: 0 minus the counter
+
+void Saab93_frames10()
+{
+  uint8_t data[8];
+
+  // lock request: 0 = no lock, 0x89 = the strongest value seen (100 %)
+  const uint8_t lockByte = get_lock_target_adjusted_value(0x89, false);
+  const bool isLockActive = (lockByte > 0);
+
+  // 0x140 - 2-bit rolling counter in byte 0 bits 0-1
+  saab140Counter = (saab140Counter + 1) & 0x03; // count 0-3, moved on before sending
+  data[0] = 0xC0 | saab140Counter;               // 0xC0 + counter
+  data[1] = 0x03; // static
+  data[2] = 0x20; // static
+  data[3] = 0xFC; // static
+  data[4] = 0xDD; // static
+  data[5] = 0x00; // static
+  data[6] = 0x00; // static
+  data[7] = 0x00; // static
+  sendVolvoSaabFrame(SAAB_93_140_ID, false, data);
+
+  // 0x110 - bytes 1-2 are engine RPM x 4 on the 9-3 P-bus, so "lock active"
+  // here is really 0 rpm / 0x1F40 = 2000 rpm. Behaviour unchanged for now.
+  data[0] = 0x00; // static
+  data[1] = 0x00; // 00 00 = 0 rpm (off), 1F 40 = 2000 rpm (lock active)
+  data[2] = 0x00;
+  data[3] = 0x00; // static
+  data[4] = 0x00; // static
+  data[5] = 0x08; // static
+  data[6] = 0x00; // static
+  data[7] = 0x00; // static
+  if (isLockActive)
+  {
+    data[1] = 0x1F;
+    data[2] = 0x40;
+  }
+  sendVolvoSaabFrame(SAAB_93_110_ID, false, data);
+
+  // 0x120 - carries the lock request
+  data[0] = 0x00;     // static
+  data[1] = lockByte; // lock request
+  data[2] = 0x00;     // 0x00 off, 0x83 lock active
+  data[3] = 0x2D;     // static
+  data[4] = 0x00;     // static
+  data[5] = 0x5B;     // static
+  data[6] = 0xC0;     // static
+  data[7] = 0x00;     // static
+  if (isLockActive)
+  {
+    data[2] = 0x83;
+  }
+  sendVolvoSaabFrame(SAAB_93_120_ID, false, data);
+
+  // 0x160 - counter / protection pair in bytes 2-3
+  data[0] = 0x00;                           // static
+  data[1] = 0x00;                           // static
+  data[2] = SAAB_93_160_BYTE2[saab160Step]; // counter
+  data[3] = SAAB_93_160_BYTE3[saab160Step]; // protection value
+  data[4] = 0x00;                           // static
+  data[5] = 0x00;                           // static
+  data[6] = 0x00;                           // static
+  data[7] = 0x00;                           // static
+  sendVolvoSaabFrame(SAAB_93_160_ID, false, data);
+  saab160Step = (saab160Step + 1) & 0x03; // next pair, 0-3
+
+  sendVolvoSaabFrame(SAAB_93_288_ID, false, SAAB_93_288_DATA);
+  sendVolvoSaabFrame(SAAB_93_180_ID, false, SAAB_93_180_DATA);
+}
+
+void Saab93_frames20()
+{
+  sendVolvoSaabFrame(SAAB_93_280_ID, false, SAAB_93_280_DATA);
+  sendVolvoSaabFrame(SAAB_93_300_ID, false, SAAB_93_300_DATA);
+}
+
+void Saab93_frames100()
+{
+  sendVolvoSaabFrame(SAAB_93_301_ID, false, SAAB_93_301_DATA);
+  sendVolvoSaabFrame(SAAB_93_410_ID, false, SAAB_93_410_DATA);
+  sendVolvoSaabFrame(SAAB_93_3ED_ID, false, SAAB_93_3ED_DATA);
+  sendVolvoSaabFrame(SAAB_93_320_ID, false, SAAB_93_320_DATA);
+}
+
+void Saab93_frames1000()
+{
+  sendVolvoSaabFrame(SAAB_93_510_ID, false, SAAB_93_510_DATA);
+  sendVolvoSaabFrame(SAAB_93_398_ID, false, SAAB_93_398_DATA);
 }

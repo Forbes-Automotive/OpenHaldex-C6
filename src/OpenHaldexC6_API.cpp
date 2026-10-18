@@ -188,13 +188,15 @@ static void statusOutgoing(AsyncWebServerRequest *request)
     // CAN-decoded brake / handbrake state.
     //   Brake:     PQ Motor_2 MO2_BLS (Gen2/4/51), MQB ESP_05 ESP_Fahrer_bremst (Gen5).
     //   Handbrake: PQ Kombi_1 KO1_Handbremse (Gen2/4/51), MQB Kombi_01 KBI_Handbremse (Gen5).
-    // Gen1 (1J0) and the GM/Ford variants have no CAN handbrake decode -> null ("--").
+    //   Insignia (41) / Focus RS (42): own decode in OpenHaldexC6_ChassisOther.cpp.
+    // Gen1 (1J0), Volvo and SAAB have no CAN handbrake decode -> null ("--").
     if (chassisOk)
     {
         data["brakeFromCAN"] = brakeFromCAN;
         const bool hbFromCANSupported = (haldexGeneration == 2 || haldexGeneration == 4 ||
                                          haldexGeneration == 50 || haldexGeneration == 51 ||
-                                         haldexGeneration == 52);
+                                         haldexGeneration == 52 || haldexGeneration == 41 ||
+                                         haldexGeneration == 42 || haldexGeneration == GEN_SAAB_93_XWD);
         if (hbFromCANSupported)
         {
             data["handbrakeFromCAN"] = handbrakeFromCAN;
@@ -243,6 +245,12 @@ static void statusOutgoing(AsyncWebServerRequest *request)
             hb["drivetrainOk"] = received_drivetrain_state_ok;
             hb["aliveBus0AgeMs"] = received_haldex_alive_bus0_ms ? (millis() - received_haldex_alive_bus0_ms) : 0;
             hb["drivetrainAgeMs"] = received_drivetrain_state_ms ? (millis() - received_drivetrain_state_ms) : 0;
+        }
+
+        // SAAB 9-3 XWD reports a temperature in its 0x210 frame (provisional scaling)
+        if (haldexGeneration == GEN_SAAB_93_XWD && received_haldex_temp_c != -128)
+        {
+            data["haldexTempC"] = received_haldex_temp_c;
         }
     }
     else // if haldex CAN not ok, set related values to null (displayed as "--" in the UI)
@@ -308,6 +316,16 @@ static void statusOutgoing(AsyncWebServerRequest *request)
     data["bleCodeRequired"] = bleCodeIsRequired(); // flips when the first phone pairs
     data["lpChassisFrameCount"] = lpChassisFrameCount;
     data["lpHaldexFrameCount"] = lpHaldexFrameCount;
+    {
+        uint32_t fps, lostPs, frames, lost;
+        espNowRelayStats(fps, lostPs, frames, lost);
+        JsonObject relay = data["canRelay"].to<JsonObject>(); // CAN frames to gauges over ESP-NOW
+        relay["rate"] = espNowRelayRate();
+        relay["fps"] = fps;
+        relay["lostPerSec"] = lostPs;
+        relay["frames"] = frames;
+        relay["lost"] = lost;
+    }
 
     const int cpuUsage = getCPUUsagePercent(); // calculate CPU usage percentage using FreeRTOS task run time stats
     if (cpuUsage >= 0)
@@ -328,6 +346,7 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
     JsonDocument data;
     // values
     data["haldexGeneration"] = haldexGeneration;
+    data["canSpeedKbps"] = canBusSpeedKbps; // 500, or 250 for Volvo P2 Gen2
     data["tcForceModeValue"] = tcForceModeValue;
     data["hazardForceModeValue"] = hazardForceModeValue;
     data["extBtnForceModeValue"] = extBtnForceModeValue;
@@ -377,6 +396,7 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
     data["broadcastOpenHaldexOverCAN"] = broadcastOpenHaldexOverCAN;
     data["espNowEnabled"] = espNowEnabled; // gauges over ESP-NOW (can2gauge)
     data["espNowControl"] = espNowControl;
+    data["canRelay"] = espNowRelayRate(); // CAN frames to gauges (cannRate_t)
 
     data["ledBrightness"] = ledBrightness;
     data["slipWheelbaseMm"] = slipWheelbaseMm;
@@ -459,7 +479,10 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
     if (data["haldexGeneration"].is<uint8_t>())
     {
         int generation = data["haldexGeneration"];
-        if (generation == 1 || generation == 2 || generation == 4 || generation == 50 || generation == 51 || generation == 52 || generation == 41)
+        // Volvo P2 Gen2 runs CAN at 250 kbit/s: picking it (or leaving it) saves and
+        // restarts the controller a couple of seconds later (checkCanSpeedChange).
+        if (generation == 1 || generation == 2 || generation == 4 || generation == 50 || generation == 51 || generation == 52 || generation == 41 ||
+            isVolvoOrSaabGeneration((uint8_t)generation))
         {
             haldexGeneration = (uint8_t)generation;
             udsApplyDefaultIds(); // move the UDS pair with the generation (no-op while the serial lab has it pinned)
@@ -615,6 +638,8 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
         espNowEnabled = data["espNowEnabled"];
     if (data["espNowControl"].is<bool>())
         espNowControl = data["espNowControl"];
+    if (data["canRelay"].is<int>())
+        espNowSetRelayRate((uint8_t)constrain(data["canRelay"].as<int>(), 0, 255)); // out of range = off
 
     if (data["broadcastOpenHaldexOverCAN"].is<bool>())
     {

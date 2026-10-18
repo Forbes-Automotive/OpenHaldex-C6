@@ -431,6 +431,13 @@ uint8_t get_lock_target_adjusted_value(uint8_t value, bool invert)
     // Linear fit: engagement = 2.2 * CF - 24  →  CF = (target + 24) / 2.2
     correction_factor = (uint8_t)constrain(((float)lock_target + 24.0f) / 2.2f, 0, 100);
   }
+  else if (isVolvoOrSaabGeneration(haldexGeneration))
+  {
+    // Volvo / SAAB (V10.00.0): no measured curve yet, so straight through -
+    // 100 % lock sends the strongest known lock value. Run Learn
+    // Haldex once a unit is on the bench to replace this with a real table.
+    correction_factor = (uint8_t)constrain((float)lock_target, 0, 100);
+  }
   else
   {
     // VAG Haldex default — linear fit: engagement = 2 * CF - 20  →  CF = (target + 20) / 2

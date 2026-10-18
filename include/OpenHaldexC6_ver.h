@@ -2,7 +2,7 @@
 #include <OpenHaldexC6_defs.h>
 
 // Current firmware version
-#define FW_VERSION "9.00.6" // also bump data/version.json ("fs")
+#define FW_VERSION "10.00.0" // also bump data/version.json ("fs")
 
 /*
 Version Control:
@@ -242,6 +242,71 @@ V9.00.6 - GitHub main after 9.00.5, plus a toolchain update:
           while awake; updateTriggers releases it only when the low-power
           state machine deliberately sleeps and takes it back on wake, so
           automatic light sleep can't power down CAN with the car running.
+
+V9.00.7 - relay the car's CAN frames to gauges over ESP-NOW:
+        - New "Relay CAN Frames to Gauges" setting (canRelay, default Off) under
+          Controller Options: Off / every frame / each ID up to 50, 20 or 10
+          per second (29-bit IDs never capped). In the backup keys.
+        - Every bus-0 frame is tapped in parseCAN_chs before any brake /
+          handbrake edit, so gauges see the frame as the car sent it; a
+          can2gauge with power only (no CAN wire) then decodes the car.
+        - Up to 24 frames per 250-byte packet, sent when full or 10 ms after
+          its first frame; broadcast peer at 6 Mbit/s while relaying.
+        - Shared files include/cannow_proto.h + cannow_tx.h (identical in
+          can2gauge / adc2can). Relay stats in the status JSON (canRelay).
+          Not yet tested on hardware.
+
+V10.00.0 - (unreleased) new market: Volvo and SAAB. Every new market gets a
+          new major number (V11 = MQB Evo).
+        - Four new Haldex generations, standalone only for now:
+            21  Generation 2 - Volvo P2 (Pre-Facelift)  250 kbit/s, 29-bit IDs
+             3  Generation 3 - Volvo P2 (Facelift)      500 kbit/s, 29-bit IDs
+            43  Generation 4 - Volvo (P3)               500 kbit/s, 11-bit
+            44  Generation 4 - SAAB 9-3 XWD             500 kbit/s, 11-bit
+          IDs, send rates, counters and the lock / "lock active" bytes are a
+          starting point; the Volvo network heartbeat (bytes 6-7 swap to their
+          opposite every 100 ms) matches a real Volvo trace. Static bytes are
+          fixed starting values, NOT decoded yet: tune with the serial lab OVR
+          command + SavvyCAN, then decode from our own logs.
+        - Haldex replies decoded for all four (provisional 0-255 -> 0-100 %
+          until logs give the scaling); SAAB also gives a temperature
+          (0x210 byte 2 - 40) shown as haldexTempC in /api/status.
+        - CAN bus speed now follows the generation: Volvo P2 Gen2 runs both
+          buses at 250 kbit/s (why a P2 user saw no Haldex health at 500k).
+          Changing to or from it saves the generation and restarts the
+          controller ~2 s later; /api/settings reports canSpeedKbps.
+        - Lock scaling for Volvo / SAAB is straight-through (100 % = the
+          strongest known lock value) until Learn is run.
+        - The VW chassis decoder (speed / pedal / brake from 0x280, 0x288,
+          0x320 ...) is skipped on Volvo / SAAB, where those IDs mean other
+          things. Inline (non-standalone) Volvo / SAAB passes frames through
+          untouched.
+        - Chassis decode for the non-VW cars (new OpenHaldexC6_ChassisOther.cpp),
+          so Expert mode, the speed / throttle limits and brake / handbrake
+          follow work on them:
+            41 Insignia  speed 0x34A rear wheels /32, pedal 0x0C9 b4, RPM 0x0C9,
+                         brake 0x0F1 b0 bit1, handbrake 0x1F1 b4 bit4
+            42 Focus RS  speed / RPM / pedal 0x201, brake 0x205 b2 bit6,
+                         handbrake 0x433 b3 bit0
+            43 Volvo P3  speed 0x148, pedal 0x020, brake + RPM 0x12A (no
+                         handbrake yet); from the V60 DBC, not checked on a car
+            44 SAAB 9-3  RPM 0x110, speed 0x280 (four wheels), handbrake 0x380
+                         (no brake / pedal yet)
+            21 Volvo P2  2002 model-year IDs only: speed 0x00D28026, RPM
+                         0x0032C01E, brake 0x0012C024, pedal 0x00E00020 b3
+                         (19 rest .. 187 floored); checked against public 2002
+                         S60 logs (IDs change by model year)
+        - SAAB 0x110 bytes 1-2 are engine RPM: the "lock active" value sent
+          there is 2000 rpm (comment corrected, behaviour unchanged).
+          41 / 42 replayed against our own labelled logs. The VW decoder no
+          longer runs on 41 / 42, where foreign frames could be misread.
+        - Volvo Gen4 0x12A is EngineData: the "lock steps" are engine RPM
+          values (comments corrected, behaviour unchanged).
+        - Serial lab OVR now takes 29-bit IDs (override slot ID widened to
+          32-bit), and no longer writes a VW CRC into SAAB's 0x110.
+        - Web UI: "Generation 3 - Volvo" option (was there but rejected by the
+          firmware) now works; GM option renamed "Generation 4 - GM (Vauxhall /
+          Opel)" so it isn't confused with the 9-3.
 
 */
 

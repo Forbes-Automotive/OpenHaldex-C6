@@ -186,3 +186,56 @@
 
 // ── Haldex (TCCM) response — RX-only on Bus0 ─────────────────────────────────
 #define FORD_GEN42_AWD_STATUS_ID          0x260 // DLC=8, TCCM. AwdLck_Tq_Actl D0:D1 b15|12 (1 Nm/LSB), AwdRnge_D_Actl D0 b2:b0, AwdStat_D_RqDsply D7 b4:b0, TrnAout_Tq_RqMx D5:D6 b47|13 (1 Nm/LSB, −1250). [Information4x4_CG1]
+
+// ─── Volvo / SAAB (V10.00.0) ─────────────────────────────────────────────────
+// Starting point only: IDs, rates and lock bytes. The Volvo network heartbeat
+// matches a real Volvo PCAN trace.
+// Byte meanings are NOT confirmed on our own cars yet - adjust with the serial lab
+// (OVR) / SavvyCAN, then replace with decoded values once logs are in.
+// Volvo uses 29-bit (extended) IDs on P2; send them with frame.extd = 1.
+
+// Volvo P2 Gen2 (pre-facelift) - 250 kbit/s, 29-bit. Haldex replies on 0x0120000A.
+#define VOLVO_P2G2_224024_ID  0x00224024 // 10 ms, static
+#define VOLVO_P2G2_LOCK_ID    0x0042401E // 10 ms, byte 2 = 0x20 (0x21 at full lock), byte 3 = lock request
+#define VOLVO_P2G2_ACTIVE_ID  0x0062401E // 10 ms, bytes 6-7 = 60 00 idle / 67 D0 lock active
+#define VOLVO_P2G2_C24000_ID  0x00C24000 // 10 ms, static
+#define VOLVO_P2G2_1E2402C_ID 0x01E2402C // 20 ms, static
+#define VOLVO_P2G2_NETWORK_ID 0x0242C07C // 100 ms, network heartbeat (bytes 6-7 FE F8 <-> 01 07)
+#define VOLVO_P2G2_3200002_ID 0x03200002 // 100 ms, static
+#define VOLVO_P2G2_3400002_ID 0x03400002 // 100 ms, static
+#define VOLVO_P2G2_HALDEX_ID  0x0120000A // from the Haldex: byte 6 = status (scaling unknown)
+
+// Volvo P2 Gen3 (facelift) - 500 kbit/s, 29-bit. Haldex replies on 0x1020000A.
+#define VOLVO_P2G3_ACTIVE_ID  0x10004002 // 10 ms, bytes 4-7 = C0 00 C0 00 idle / C1 42 C1 42 active
+#define VOLVO_P2G3_42406C_ID  0x0042406C // 10 ms, static
+#define VOLVO_P2G3_LOCK_ID    0x0062401E // 10 ms, byte 1 = lock request, bytes 0/4-7 = active flags
+#define VOLVO_P2G3_MODE_ID    0x0080401E // 10 ms, bytes 2-3 = 80 00 idle / 87 D0 active
+#define VOLVO_P2G3_224024_ID  0x00224024 // 10 ms, static
+#define VOLVO_P2G3_E24026_ID  0x00E24026 // 10 ms, static
+#define VOLVO_P2G3_NETWORK_ID 0x10A2407C // 100 ms, network heartbeat (bytes 6-7 FE F5 <-> 01 0A)
+#define VOLVO_P2G3_HALDEX_ID  0x1020000A // from the Haldex: byte 6 = status (scaling unknown)
+
+// Volvo Gen4 (P3 / Freelander 2 family) - 500 kbit/s, 11-bit. Haldex replies on 0x243.
+#define VOLVO_G4_MODE_ID      0x12A // 10 ms, EngineData: byte 4 bit 6 = brake, bytes 6-7 = engine RPM (13-bit)
+#define VOLVO_G4_20A_ID       0x20A // 20 ms, Brake_Info, static
+#define VOLVO_G4_220_ID       0x220 // 20 ms, rear wheel speeds (0x8000 = 0 km/h), static
+#define VOLVO_G4_NETWORK_ID   0x405 // 100 ms, network heartbeat (bytes 6-7 F4 45 <-> 0B BA)
+#define VOLVO_G4_HALDEX_ID    0x243 // from the Haldex: byte 7 = status (scaling unknown)
+
+// SAAB 9-3 XWD (GM family) - 500 kbit/s, 11-bit. Haldex replies on 0x210.
+// GM-style "alive rolling count" counters, as our Gen41 uses.
+#define SAAB_93_110_ID        0x110 // 10 ms, bytes 1-2 = 00 00 off / 1F 40 lock active
+#define SAAB_93_120_ID        0x120 // 10 ms, byte 1 = lock request, byte 2 = 00 off / 83 active
+#define SAAB_93_140_ID        0x140 // 10 ms, byte 0 bits 0-1 = 2-bit rolling counter
+#define SAAB_93_160_ID        0x160 // 10 ms, bytes 2/3 = counter (bits 6-7) / protection (0 - counter)
+#define SAAB_93_180_ID        0x180 // 10 ms, static
+#define SAAB_93_288_ID        0x288 // 10 ms, static
+#define SAAB_93_280_ID        0x280 // 20 ms, static
+#define SAAB_93_300_ID        0x300 // 20 ms, static
+#define SAAB_93_301_ID        0x301 // 100 ms, static
+#define SAAB_93_320_ID        0x320 // 100 ms, static
+#define SAAB_93_3ED_ID        0x3ED // 100 ms, static
+#define SAAB_93_410_ID        0x410 // 100 ms, static
+#define SAAB_93_398_ID        0x398 // 1000 ms, static
+#define SAAB_93_510_ID        0x510 // 1000 ms, static
+#define SAAB_93_HALDEX_ID     0x210 // from the Haldex: ((b0 & 7) << 8 | b1) >> 3 = status, b2 - 40 = temperature degC

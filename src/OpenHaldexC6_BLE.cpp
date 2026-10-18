@@ -273,7 +273,8 @@ static bool bleSteeringDeci(int16_t &out)
 {
   const bool fresh = hasCANChassis && received_steering_ms != 0 &&
                      (millis() - received_steering_ms) <= steeringStaleMs &&
-                     haldexGeneration != 41 && haldexGeneration != 42;
+                     haldexGeneration != 41 && haldexGeneration != 42 &&
+                     !isVolvoOrSaabGeneration(haldexGeneration); // Volvo / SAAB: not decoded either
   if (!fresh)
   {
     return false;

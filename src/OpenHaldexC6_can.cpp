@@ -2,6 +2,8 @@
 #include <OpenHaldexC6_Calculations.h>
 #include <OpenHaldexC6_Analyzer.h>
 #include <OpenHaldexC6_UDS.h>
+#include <OpenHaldexC6_ESPNow.h> // espNowTapFrame()
+#include <OpenHaldexC6_ChassisOther.h> // Insignia / Focus RS / Volvo P3 chassis decode
 
 // Every bridge / diagnostic transmit goes through this wrapper so a failed send
 // (TX queue still full after the 10 ms wait, driver stopped / bus-off) is
@@ -148,11 +150,68 @@ static void applyBrakeHandbrakeCANOverride(twai_message_t &m)
   }
 }
 
+// Which CAN bus speed a Haldex generation needs. Volvo P2 cars before the 2005
+// facelift run their fast CAN bus at 250 kbit/s; everything else is 500 kbit/s.
+uint16_t canSpeedForGeneration(uint8_t generation)
+{
+  if (generation == GEN_VOLVO_P2_GEN2)
+  {
+    return 250;
+  }
+  return 500;
+}
+
+// Called from loop(). The CAN controllers can only change speed by being
+// re-installed, and the receive tasks are sitting inside them, so the safe way
+// is to save the new generation and restart. Waits 2 s first so the web page
+// (or gauge / serial lab) gets its reply before the controller goes away.
+void checkCanSpeedChange()
+{
+  static uint32_t speedMismatchSinceMs = 0; // when the generation first asked for a different speed (0 = no mismatch)
+
+  if (canSpeedForGeneration(haldexGeneration) == canBusSpeedKbps)
+  {
+    speedMismatchSinceMs = 0; // speeds match, nothing to do
+    return;
+  }
+
+  if (speedMismatchSinceMs == 0)
+  {
+    speedMismatchSinceMs = millis(); // start the 2 s wait
+    if (speedMismatchSinceMs == 0)
+    {
+      speedMismatchSinceMs = 1; // millis() was exactly 0 - keep "waiting" distinct from "no mismatch"
+    }
+    return;
+  }
+
+  if (millis() - speedMismatchSinceMs < 2000)
+  {
+    return; // still waiting
+  }
+
+  DEBUG("CAN - generation %d needs %d kbit/s (running %d) - saving and restarting",
+        haldexGeneration, canSpeedForGeneration(haldexGeneration), canBusSpeedKbps);
+  pref.putUChar("haldexGen", haldexGeneration); // save now: the periodic writeEEP might not have run yet
+  delay(100);                                   // let the flash write and the debug line finish
+  ESP.restart();
+}
+
 void setupCAN()
 {
+  // Bus speed comes from the saved Haldex generation (readEEP runs before this).
+  canBusSpeedKbps = canSpeedForGeneration(haldexGeneration);
+  DEBUG("CAN - Bus speed %d kbit/s (generation %d)", canBusSpeedKbps, haldexGeneration);
+
   twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(gpio_num_t(CAN0_TX), gpio_num_t(CAN0_RX), TWAI_MODE_NO_ACK); // TWAI_MODE_NORMAL, TWAI_MODE_NO_ACK or TWAI_MODE_LISTEN_ONLY
-  twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();                                                            // default CAN speed
-  twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();                                                          // accept all messages
+  twai_timing_config_t t_config_500 = TWAI_TIMING_CONFIG_500KBITS();                                                        // normal CAN speed
+  twai_timing_config_t t_config_250 = TWAI_TIMING_CONFIG_250KBITS();                                                        // Volvo P2 Gen2 CAN speed
+  twai_timing_config_t t_config = t_config_500;                                                                             // the one actually used
+  if (canBusSpeedKbps == 250)
+  {
+    t_config = t_config_250;
+  }
+  twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL(); // accept all messages
 
   // g_config.intr_flags = ESP_INTR_FLAG_LOWMED;  //Optional - move canbus irq to free up the default level 1 IRQ it will take up.  Todo
   // Queues come out of heap at 13 B per frame, per bus. Was 1024/2048 (~80 KB for both buses).
@@ -319,6 +378,7 @@ void parseCAN_chs(void *arg)
     {
       lastCANChassisTick = millis();
       ++lpChassisFrameCount;
+      espNowTapFrame(rx_message_chs); // relay to gauges over ESP-NOW (when on) - the frame as the car sent it
 
       // External diagnostic-tool detection (auto-pause of live polling).
       // A scanner addresses the Haldex from the chassis side; these request IDs
@@ -485,7 +545,18 @@ void parseCAN_chs(void *arg)
         continue;
       }
 
-      if (!isStandalone || useCANifAvailable)
+      // Insignia (41), Focus RS (42) and Volvo P3 (43) have their own chassis
+      // decoder: speed, pedal, RPM, brake and handbrake (OpenHaldexC6_ChassisOther.cpp).
+      if ((!isStandalone || useCANifAvailable) && hasOtherCarChassisDecode(haldexGeneration))
+      {
+        decodeOtherCarChassis(rx_message_chs);
+      }
+
+      // The decoder below reads VW chassis IDs. Other makes reuse some of the same
+      // numbers (SAAB 0x280 / 0x288 / 0x320) for other things, so skip it for
+      // every non-VW generation.
+      if ((!isStandalone || useCANifAvailable) && !isVolvoOrSaabGeneration(haldexGeneration) &&
+          !hasOtherCarChassisDecode(haldexGeneration))
       { // process frames regardless
         switch (rx_message_chs.identifier)
         {
@@ -1121,7 +1192,53 @@ void parseCAN_hdx(void *arg)
           {
             received_haldex_engagement = 100;
           }
-          received_haldex_state = rx_message_hdx.data[0]; 
+          received_haldex_state = rx_message_hdx.data[0];
+        }
+        break;
+
+      // Volvo / SAAB (V10.00.0). What the status number means is not known yet,
+      // so it is shown as 0-255 -> 0-100 % until logs give the real scaling.
+      case GEN_VOLVO_P2_GEN2:
+        if (rx_message_hdx.identifier == VOLVO_P2G2_HALDEX_ID)
+        {
+          received_haldex_engagement_raw = rx_message_hdx.data[6]; // status byte
+          received_haldex_engagement = map(received_haldex_engagement_raw, 0, 255, 0, 100);
+          received_haldex_state = rx_message_hdx.data[0]; // byte 0 kept raw for the logs (not decoded)
+          hdxFbCapture(rx_message_hdx);
+        }
+        break;
+
+      case GEN_VOLVO_P2_GEN3:
+        if (rx_message_hdx.identifier == VOLVO_P2G3_HALDEX_ID)
+        {
+          received_haldex_engagement_raw = rx_message_hdx.data[6]; // status byte
+          received_haldex_engagement = map(received_haldex_engagement_raw, 0, 255, 0, 100);
+          received_haldex_state = rx_message_hdx.data[0]; // byte 0 kept raw for the logs (not decoded)
+          hdxFbCapture(rx_message_hdx);
+        }
+        break;
+
+      case GEN_VOLVO_GEN4:
+        if (rx_message_hdx.identifier == VOLVO_G4_HALDEX_ID)
+        {
+          received_haldex_engagement_raw = rx_message_hdx.data[7]; // status byte
+          received_haldex_engagement = map(received_haldex_engagement_raw, 0, 255, 0, 100);
+          received_haldex_state = rx_message_hdx.data[0]; // byte 0 kept raw for the logs (not decoded)
+          hdxFbCapture(rx_message_hdx);
+        }
+        break;
+
+      case GEN_SAAB_93_XWD:
+        if (rx_message_hdx.identifier == SAAB_93_HALDEX_ID)
+        {
+          // 11-bit value: low 3 bits of byte 0 then all of byte 1, cut down to 0-255
+          uint16_t statusValue = (rx_message_hdx.data[0] & 0x07); // byte 0 bits 0-2 = top 3 bits
+          statusValue = (statusValue << 8) | rx_message_hdx.data[1]; // byte 1 = bottom 8 bits
+          received_haldex_engagement_raw = statusValue >> 3;          // 0-2047 -> 0-255
+          received_haldex_engagement = map(received_haldex_engagement_raw, 0, 255, 0, 100);
+          received_haldex_temp_c = (int16_t)rx_message_hdx.data[2] - 40; // byte 2 = temperature + 40 degC (GM style)
+          received_haldex_state = rx_message_hdx.data[0];                // byte 0 kept raw for the logs (not decoded)
+          hdxFbCapture(rx_message_hdx);
         }
         break;
 
@@ -1139,7 +1256,20 @@ void parseCAN_hdx(void *arg)
       //   bit 6 = Geschwindigkeitsbegrenzung       (speed limit)             -> speedLimit
       // Gen5 byte 3 holds Charisma_FahrPr/Status, not fault flags - skip for Gen5.
       // Gen41 uses dedicated state vars decoded above - skip for Gen41.
-      if (haldexGeneration != 50 && haldexGeneration != 52 && haldexGeneration != 41) // PQ (Gen1/2/4/0AY 5)
+      if (isVolvoOrSaabGeneration(haldexGeneration))
+      {
+        // Volvo / SAAB: no fault-bit layout known yet - report nothing rather than
+        // misread the raw byte with the VW bit names.
+        received_report_clutch1 = false;
+        received_report_clutch2 = false;
+        received_temp_protection = false;
+        received_coupling_open = false;
+        received_limp_mode = false;
+        received_awd_warning = false;
+        received_speed_limit = false;
+        received_long_lock_state = 0;
+      }
+      else if (haldexGeneration != 50 && haldexGeneration != 52 && haldexGeneration != 41) // PQ (Gen1/2/4/0AY 5)
       {
         received_report_clutch1 = (received_haldex_state & (1 << 0));
         received_temp_protection = (received_haldex_state & (1 << 1));

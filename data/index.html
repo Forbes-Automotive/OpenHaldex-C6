@@ -336,13 +336,17 @@
                 <select id="haldexGeneration" class="input-select">
                     <option value="1">Generation 1</option>
                     <option value="2">Generation 2</option>
-                    <option value="3">Generation 3 - Volvo</option>
+                    <option value="21">Generation 2 - Volvo P2 (Pre-Facelift)</option>
+                    <option value="3">Generation 3 - Volvo P2 (Facelift)</option>
                     <option value="4">Generation 4</option>
+                    <option value="41">Generation 4 - GM (Vauxhall / Opel)</option>
+                    <option value="43">Generation 4 - Volvo (P3)</option>
+                    <option value="44">Generation 4 - SAAB 9-3 XWD</option>
                     <option value="50">Generation 5 (0CQ)</option>
                     <option value="52">Generation 5 (0CQ VAQ)</option>
                     <option value="51">Generation 5 (0AY)</option>
-                    <option value="41">Generation 4 - GM/SAAB</option>
                 </select>
+                <p class="hint" id="genVolvoSaabHint" style="display:none;">Volvo and SAAB support is new: standalone only, with starting values to be confirmed from logs. CAN bus: <span id="canSpeedKbps">--</span> kbit/s. Changing to or from Volvo P2 (Pre-Facelift) switches the bus speed and restarts the controller.</p>
             </section>
 
             <section class="card" id="learnSection">
@@ -607,6 +611,18 @@
                         <span class="toggle-label">Allow Gauges to Change Settings</span>
                     </label>
                     <p class="hint">Sends live data to can2gauge gauges over WiFi. With control allowed, a gauge can change mode and generation and run Learn (car stopped).</p>
+                    <div class="brightness-row" style="margin-top:10px;">
+                        <span class="toggle-label">Relay CAN Frames to Gauges</span>
+                        <select id="canRelay" class="input-select">
+                            <option value="0">Off</option>
+                            <option value="1">Every frame</option>
+                            <option value="2">Each ID up to 50 per second</option>
+                            <option value="3">Each ID up to 20 per second</option>
+                            <option value="4">Each ID up to 10 per second</option>
+                        </select>
+                    </div>
+                    <p class="hint">Sends every frame received from the car's CAN to can2gauge gauges over WiFi, so a gauge with power only - no CAN wire - reads the car as if it were wired: its CAN profile, the CAN monitor, DBC and user signals. A busy 500 kbit/s bus is around 2000 frames a second; if frames are lost, cap each ID's rate. It rides on the WiFi broadcast to gauges, so that has to be on too.</p>
+                    <p class="hint" id="canRelayStatus"></p>
                     <label class="toggle">
                         <input type="checkbox" id="dangerZoneEnabled">
                         <span class="toggle-slider"></span>

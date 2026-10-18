@@ -16,12 +16,12 @@
 ![GitHub stars](https://img.shields.io/github/stars/Forbes-Automotive/OpenHaldex-C6)
 ![Last commit](https://img.shields.io/github/last-commit/Forbes-Automotive/OpenHaldex-C6)
 ![Platform](https://img.shields.io/badge/platform-ESP32--C6-blue)
-![Hardware](https://img.shields.io/badge/hardware-Haldex%20Gen1%20%7C%20Gen2%20%7C%20Gen4-green)
+![Hardware](https://img.shields.io/badge/hardware-Haldex%20Gen1%20%7C%20Gen2%20%7C%20Gen3%20%7C%20Gen4%20%7C%20Gen5-green)
 [![Install Firmware](https://img.shields.io/badge/Install%20Firmware-Click%20Here-success?style=for-the-badge)](https://forbes-automotive.com/pages/module-software-updater)
 
 </p>
 
-OpenHaldex is an **open-source Haldex AWD controller** for Volkswagen and Audi Group vehicles using Haldex Generation 1, 2, 4 (PQ Chassis) and 5 (MQB) differentials. The full source and hardware files are published under the permissive **MIT License**, so anyone is free to use, modify, and redistribute them, and it incorporates MIT‑licensed upstream work — see [Licensing](#licensing).
+OpenHaldex is an **open-source Haldex AWD controller** for Volkswagen and Audi Group vehicles using Haldex Generation 1, 2, 4 (PQ Chassis) and 5 (MQB) differentials, with GM, Ford and (new in V10) early **Volvo** and **SAAB** support. The full source and hardware files are published under the permissive **MIT License**, so anyone is free to use, modify, and redistribute them, and it incorporates MIT‑licensed upstream work — see [Licensing](#licensing).
 
 Install is easy with the new harnesses for later PQ & MQB chassis:
 
@@ -46,6 +46,8 @@ It can operate using OEM CAN signals or it is able to run in Standalone mode - w
 - [Overview](#overview)
 - [Hardware](#hardware)
 - [Supported Platforms](#supported-platforms)
+- [Chassis Signals (Non-VW Cars)](#chassis-signals-non-vw-cars)
+- [Volvo & SAAB](#volvo--saab-early-support)
 - [Modes](#modes)
 - [Expert Mode](#expert-mode)
 - [Installation](#installation)
@@ -78,6 +80,9 @@ It can operate using OEM CAN signals or it is able to run in Standalone mode - w
 - Adjustable LED brightness
 - Live diagnostics: UDS (Gen5) and KWP2000‑over‑TP2.0 (Gen2/Gen4) with measurement scaling confirmed against VCDS
 - Selectable CAN frames — enable/disable CAN messages per Generation from the Web UI
+- CAN frame relay to can2gauge gauges over WiFi (ESP-NOW): a gauge with power only, no CAN wire, reads the car as if it were wired (**Relay CAN Frames to Gauges** under Controller Options, off by default)
+- Speed, throttle, RPM, brake and handbrake read from the car on Vauxhall / Opel Insignia, Ford Focus RS and Volvo P3 too, so Expert mode works on them (see [Chassis Signals](#chassis-signals-non-vw-cars))
+- Early Volvo (P2 Gen2 / Gen3, Gen4) and SAAB 9-3 XWD standalone support, with the CAN bus switched to 250 kbit/s automatically for the pre-facelift P2 (see [Volvo & SAAB](#volvo--saab-early-support))
 - Wireless (OTA) firmware and web‑UI updates over Wi‑Fi
 - Bluetooth LE link to the DashCAN mobile app: live data, mode and controller on/off, driving settings and Haldex diagnostics from the phone (see [DashCAN App](#dashcan-app-bluetooth))
 - Colour‑coded status indicators throughout the Web UI (green / orange / red — see [Status Indicators](#status-indicators))
@@ -100,9 +105,10 @@ OpenHaldex-C6 sits between your vehicle and the OEM Haldex controller. It can op
 
 This is the original source of Generation 2, 4 (including GM) and 5 logic - any forks or code copied from this project is NOT the work of Forbes Automotive and therefore we cannot support other work unless it is remains part of this project.
 
-**Supported generations:** Gen1, Gen2, Gen4 and Gen5
+**Supported generations:** Gen1, Gen2, Gen3 (Volvo), Gen4 and Gen5.
 
-> Gen3 is currently unsupported.
+> [!NOTE]
+> The Volvo and SAAB generations are new in V10 and standalone only for now. See [Volvo & SAAB](#volvo--saab-early-support).
 
 ---
 
@@ -131,6 +137,48 @@ These two high‑side drivers for brake/handbrake could be repurposed for other 
 - Generation 5 - MQB (0CQ)
 - Generation 5 - PQ (0AY)
 - Generation 5 - MQB (VAQ)
+- Generation 2 - Volvo P2, pre-facelift (early support)
+- Generation 3 - Volvo P2, facelift (early support)
+- Generation 4 - Volvo P3 (early support)
+- Generation 4 - SAAB 9-3 XWD (early support)
+
+### Chassis Signals (Non-VW Cars)
+
+Expert mode, the speed / throttle limits and brake / handbrake follow need speed, throttle and brake from the car. From V10 these are read on:
+
+| Generation | Speed | Throttle | RPM | Brake | Handbrake |
+|---|---|---|---|---|---|
+| Generation 4 - GM (Vauxhall / Opel) | Yes | Yes | Yes | Yes | Yes |
+| Generation 4 - Ford | Yes | Yes | Yes | Yes | Yes |
+| Generation 4 - Volvo (P3) | Yes | Yes | Yes | Yes | Not yet |
+| Generation 4 - SAAB 9-3 XWD | Yes | Not yet | Yes | Not yet | Yes |
+| Generation 2 - Volvo P2 (Pre-Facelift) | 2002 cars | 2002 cars | 2002 cars | 2002 cars | Not yet |
+| Generation 3 - Volvo P2 (Facelift) | Not yet | Not yet | Not yet | Not yet | Not yet |
+
+The Insignia, Focus RS and 2002 Volvo P2 decodes are checked against real logs from those cars. The SAAB 9-3 decode comes from a published decode of a real car. The Volvo P3 decode isn't confirmed on a car yet.
+
+> [!NOTE]
+> Volvo moves the P2's CAN IDs between model years, so the pre-facelift P2 decode only covers 2002 cars for now. Logs from other years (and from a facelift P2) are what's needed to add them.
+
+## Volvo & SAAB (Early Support)
+
+New in V10. Pick the car under **Settings → Haldex Generation**:
+
+<p align="center">
+  <img src="/Images/ui-volvo-saab.png" alt="Settings — Haldex Generation set to Volvo P2 (Pre-Facelift), showing the 250 kbit/s CAN bus note" width="300">
+</p>
+
+| Generation | Cars | CAN bus | Haldex reply |
+|---|---|---|---|
+| Generation 2 - Volvo P2 (Pre-Facelift) | S60, V70, XC70, XC90 up to the 2005 facelift | **250 kbit/s**, 29-bit IDs | `0x0120000A` |
+| Generation 3 - Volvo P2 (Facelift) | S60, S60R, V70, XC70, XC90 from the facelift | 500 kbit/s, 29-bit IDs | `0x1020000A` |
+| Generation 4 - Volvo (P3) | XC60, V70, XC70, S80 (P3), probably Freelander 2 | 500 kbit/s | `0x243` |
+| Generation 4 - SAAB 9-3 XWD | 9-3 XWD | 500 kbit/s | `0x210` |
+
+- **Standalone only.** The controller sends the frames the Haldex needs, including Volvo's 100 ms network heartbeat and SAAB's rolling counters. It also puts your lock request into the bytes that carry it. In OEM (inline) mode, frames pass through untouched.
+- **The bus speed follows the generation.** Choosing Volvo P2 (Pre-Facelift), or moving away from it, saves the setting and restarts the controller a couple of seconds later, with both CAN buses at the new speed. Without 250 kbit/s a pre-facelift P2 Haldex never answers, so it shows no Haldex health at all.
+- **Starting values, not finished decodes.** The frame list and lock bytes are a starting point. The meaning of most bytes still needs confirming on real cars, and the Haldex status is shown as raw 0–100 % until logs give its true scaling. SAAB also reports a Haldex temperature.
+- **How to help.** Log the car with [SavvyCAN](#can-sniffing-savvycan--gvret), and nudge individual bytes live with the serial lab `OVR <id> <byte> <value>` command (it takes 29-bit Volvo IDs). Logs from a car with the Haldex fitted are what turn these into decoded frames.
 
 ---
 
@@ -349,7 +397,7 @@ If the Wi‑Fi interface becomes unresponsive:
 
 - Long‑press the `Mode` button to clear the WiFi password and restart the AP to an open state.
 
-> The Web UI is built on Forbes Automotive's shared dark theme (the same look used across the Can2Cluster, SpeedPulser, SpeedPulserPro, can2rpm, MQB Steering Wheel Controller and AirLift Controller firmware), so the interface and status conventions stay consistent across the whole product line. Current firmware version: **9.00.6** (shown in the UI footer and at `/ota/info`).
+> The Web UI is built on Forbes Automotive's shared dark theme (the same look used across the Can2Cluster, SpeedPulser, SpeedPulserPro, can2rpm, MQB Steering Wheel Controller and AirLift Controller firmware), so the interface and status conventions stay consistent across the whole product line. Current firmware version: **10.00.0** (shown in the UI footer and at `/ota/info`).
 
 ---
 
@@ -777,6 +825,8 @@ Port: 23
 ```
 500000
 ```
+
+(`250000` when Generation 2 - Volvo P2 (Pre-Facelift) is selected.)
 
 ### Serial Connection
 

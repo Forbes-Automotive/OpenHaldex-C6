@@ -271,6 +271,21 @@ extern uint32_t lastKl15Ms;         // millis() of the last Klemmen_Status_01; 0
 bool ignitionOn();                  // KL15 on and fresh; false when unknown
 extern uint16_t received_vehicle_boost;
 extern uint8_t haldexGeneration;
+
+// ===== Volvo / SAAB Haldex generations (added V10.00.0) =====
+// Our numbering: first digit = Haldex generation, second = which car (as 41 = GM, 42 = Ford).
+#define GEN_VOLVO_P2_GEN2 21 // Volvo P2 pre-facelift (S60/V70/XC70/XC90 to ~2004), Haldex Gen2, CAN at 250 kbit/s
+#define GEN_VOLVO_P2_GEN3 3  // Volvo P2 facelift (S60/S60R/V70/XC70/XC90 2005+), Haldex Gen3, CAN at 500 kbit/s
+#define GEN_VOLVO_GEN4 43    // Volvo Gen4 (P3 XC60/V70/S80, likely also Freelander 2), 11-bit IDs
+#define GEN_SAAB_93_XWD 44   // SAAB 9-3 XWD (GM family), Haldex Gen4
+bool isVolvoOrSaabGeneration(uint8_t generation); // true for any of the four above
+
+// CAN bus speed. Both controllers run at the same speed, picked from the Haldex
+// generation at boot (setupCAN). Changing to/from a generation with a different
+// speed saves the setting and restarts the controller (checkCanSpeedChange).
+extern uint16_t canBusSpeedKbps;                     // speed the CAN controllers were started at (500 or 250)
+uint16_t canSpeedForGeneration(uint8_t generation);  // 250 for Volvo P2 Gen2, otherwise 500
+void checkCanSpeedChange();                          // called from loop(): restart if the generation needs a new speed
 // Steering-wheel angle magnitude (deg, abs) decoded from chassis CAN + last-seen time.
 extern float received_steering_angle;
 extern uint32_t received_steering_ms;
@@ -367,7 +382,7 @@ extern uint16_t dangerZoneNm; // 320 - used only when it exceeds bpkCeilingNm
 #define LAB_OVR_MAX 12
 struct LabOverride
 {
-  uint16_t canId;  // 0 = slot unused
+  uint32_t canId;  // 0 = slot unused (32-bit so Volvo's 29-bit IDs fit)
   uint8_t byteIdx; // 0..7
   uint8_t value;
 };
@@ -769,6 +784,14 @@ extern uint8_t gen42_090_nibble;     // 4-bit (0-15): 0x090 D1 high nibble
 extern uint8_t gen42_20F_d6;         // 0x20F D6 (+0x10 per frame, mod 256)
 extern uint8_t gen42_190_counter;    // 4-bit (0-15): 0x190 D6
 extern uint8_t gen42_275_counter;    // 0x275 D1 (+0x20 per 100 ms, mod 256)
+
+// Volvo / SAAB standalone counters and heartbeats (V10.00.0)
+extern bool volvoHeartbeatFlip;     // Volvo 100 ms network frame: bytes 6-7 swap to their opposite each send
+extern uint8_t saab140Counter;      // SAAB 0x140 byte 0 bits 0-1: 2-bit rolling counter
+extern uint8_t saab160Step;         // SAAB 0x160 bytes 2/3: which of the 4 counter/protection pairs is next
+
+// Volvo / SAAB Haldex feedback (V10.00.0, provisional until logs confirm the scaling)
+extern int16_t received_haldex_temp_c; // SAAB 0x210 byte 2 - 40 (degC); -128 = not received
 
 // Secondary Axle Torque Request to encode into 0x1CE (Nm, 0 = no request).
 // 4 Nm/LSB empirical scaling; set via API or mode handler.

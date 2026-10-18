@@ -117,6 +117,8 @@ void loop()
 
   otaRollbackTick(); // confirm a freshly-installed OTA image once the device has proven itself
 
+  checkCanSpeedChange(); // generation now needs a different CAN speed (Volvo P2 Gen2 = 250k)? save and restart
+
 #if debugMemory
   {
     static uint32_t nextMemReport = 15000; // after WiFi, web server, ESP-NOW and BLE have all started

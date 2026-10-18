@@ -975,3 +975,20 @@ input[type="file"]::file-selector-button:hover { background: rgba(36, 209, 196, 
 .tile-opt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
 .tile-opt { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); cursor: pointer; }
 .tile-opt input { accent-color: var(--accent); }
+
+/* --- no text highlight on long press ------------------------------------ */
+/* Pressing and holding on a phone starts selecting text (and pops up the copy
+   menu on iPhone), which gets in the way of the buttons and sliders. Switch it
+   off for the whole page... */
+body {
+  -webkit-user-select: none;    /* Safari / iPhone */
+  user-select: none;            /* every other browser */
+  -webkit-touch-callout: none;  /* iPhone: no copy / look-up menu on long press */
+}
+/* ...but keep it where you type, or might want to copy something out:
+   text boxes, the monitor / log windows (pre) and repo names / commands (code) */
+input, textarea, select, pre, code, [contenteditable] {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
