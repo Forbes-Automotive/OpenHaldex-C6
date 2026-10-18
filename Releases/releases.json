@@ -1,22 +1,56 @@
 {
   "product": "OpenHaldex-C6",
-  "latest": "9.00.0",
+  "latest": "9.00.6",
   "releases": [
+    {
+      "version": "10.00.0",
+      "channel": "beta",
+      "date": "2026-10-18",
+      "ota": true,
+      "notes": "New market: Volvo (P2 Gen2 / Gen3, P3) and SAAB 9-3 XWD early standalone support, CAN at 250 kbit/s for the pre-facelift P2, and speed / throttle / brake / handbrake read on Insignia, Focus RS, Volvo and SAAB. Includes 9.00.7.",
+      "firmware": {
+        "path": "V10.00.0/firmware.bin",
+        "size": 1772368,
+        "sha256": "2a33052db3703144b3e47016cb6c0d75a3e84c6fffb2acdf46d166e97a67cb32"
+      },
+      "filesystem": {
+        "path": "V10.00.0/littlefs.bin",
+        "size": 458752,
+        "sha256": "be0f722ddcdbbc5b260f11e095ba9c5531adfc560f7d93cb9b1eccb4708a1662"
+      }
+    },
+    {
+      "version": "9.00.7",
+      "channel": "beta",
+      "date": "2026-10-18",
+      "ota": true,
+      "notes": "Relay the car's CAN frames to can2gauge gauges over ESP-NOW (Controller Options, off by default). Not yet tested on hardware.",
+      "firmware": {
+        "path": "V9.00.7/firmware.bin",
+        "size": 1768048,
+        "sha256": "7b15d0c3a2c2ed4ac1560083cc63eadd722f9005efa5d83b1e70c6e8729f8bec"
+      },
+      "filesystem": {
+        "path": "V9.00.7/littlefs.bin",
+        "size": 458752,
+        "sha256": "a58d06f54590a5f65727ec36f9b90113f47b0a40c69c7dd9f023aa67e023386a"
+      }
+    },
     {
       "version": "9.00.6",
       "channel": "stable",
-      "date": "2026-10-10",
-      "ota": false,
-      "notes": "USB flash required (new partition table: larger app slots, LittleFS 0x70000 at 0x390000) - not available over OTA from 9.00.0 or older. Bluetooth LE for the DashCAN app, ESP-NOW, Vehicle Geometry card, Stable/Latest update channel, PWA icons, web UI recovery page, CAN controller restart fix.",
+      "date": "2026-10-09",
+      "ota": true,
+      "notes": "Stock no longer latches high lock, bus-silence zeroing, BLE boot-loop and heap fixes, platform 55.03.312, Long Learn rework, stopped CAN controllers restarted.",
       "firmware": {
         "path": "V9.00.6/firmware.bin",
-        "size": 1763152,
-        "sha256": "b82dbae74d9e220d3cb71c6960d7e2d0be313946f9625f97155bdf296148393f"
+        "size": 1762032,
+        "sha256": "56def3948e1cfd1feec8d566ac32dc17de681aabf93155e9e86e016a50f0b02c"
       },
       "filesystem": {
         "path": "V9.00.6/littlefs.bin",
         "size": 458752,
-        "sha256": "eec25d314f28696174c7ab25a569466b97bee56257a316907815bda4de13cbe5"
+        "sha256": "721280c92a2678445bf99d2a39e036f505974c93484076e6e18526c7a740a5e6"
       }
     },
     {
