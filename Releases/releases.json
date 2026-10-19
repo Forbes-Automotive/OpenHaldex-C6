@@ -3,6 +3,23 @@
   "latest": "9.00.6",
   "releases": [
     {
+      "version": "10.00.1",
+      "channel": "beta",
+      "date": "2026-10-19",
+      "ota": true,
+      "notes": "MQB drive mode select can force a mode (Comfort = Stock, Sport = 60:40, Race = 50:50, Individual = Expert by default; off until turned on), new Drive Mode card on Diagnostics, Haldex State legend fixed, Force Mode Priority now saves. Not yet driven on a car.",
+      "firmware": {
+        "path": "V10.00.1/firmware.bin",
+        "size": 1774256,
+        "sha256": "a3ce5f7b5fd0b82bacba47395570aa67bcea5a4680ddbb57e9f405b4e875a2b0"
+      },
+      "filesystem": {
+        "path": "V10.00.1/littlefs.bin",
+        "size": 458752,
+        "sha256": "41a2bc97e1b675296938829e91458ac8b069f21b463ab81282d76aae6ab7f19e"
+      }
+    },
+    {
       "version": "10.00.0",
       "channel": "beta",
       "date": "2026-10-18",
@@ -119,6 +136,142 @@
         "path": "V8.00.1/littlefs.bin",
         "size": 720896,
         "sha256": "3855ea567436b38a53720b9d81d806f7ac4eb2f5a4f6b5ec6fe51c917929dcdd"
+      }
+    },
+    {
+      "version": "7.00.0",
+      "channel": "stable",
+      "date": "2026-10-07",
+      "ota": true,
+      "notes": "",
+      "firmware": {
+        "path": "V7.00.0/firmware.bin",
+        "size": 1245216,
+        "sha256": "11bda1d4b96af041b160829331eef65667674b0a396dd9aa94f7c479e7b5dc01"
+      },
+      "filesystem": {
+        "path": "V7.00.0/littlefs.bin",
+        "size": 720896,
+        "sha256": "d2ecce72f0b890329317007ba3d01a47c63e1be1de1581d5c75eca0afa7373d7"
+      }
+    },
+    {
+      "version": "6.01.0",
+      "channel": "stable",
+      "date": "2026-10-07",
+      "ota": true,
+      "notes": "",
+      "firmware": {
+        "path": "V6.01.0/firmware.bin",
+        "size": 1243472,
+        "sha256": "cea8c5b401b1e2234d81e0d1e780b1d9bd73966e8635d101ae17837ce244321d"
+      },
+      "filesystem": {
+        "path": "V6.01.0/littlefs.bin",
+        "size": 720896,
+        "sha256": "85b8e7b97aa76d802cf831d6ecbf8bdc469b947fa5a2c69a8437d035446654cf"
+      }
+    },
+    {
+      "version": "6.00.0",
+      "channel": "stable",
+      "date": "2026-10-07",
+      "ota": true,
+      "notes": "",
+      "firmware": {
+        "path": "V6.00.0/firmware.bin",
+        "size": 1237488,
+        "sha256": "95bfb8bd6e2a7144a4c43be00cfd5a4b1056c0dd52d9ac78a0c98500e6023160"
+      },
+      "filesystem": {
+        "path": "V6.00.0/littlefs.bin",
+        "size": 720896,
+        "sha256": "8ce99a557d6ee856676743357291d8455f66cc207f460e799e3a29cdb2de021d"
+      }
+    },
+    {
+      "version": "5.00.0",
+      "channel": "stable",
+      "date": "2026-10-07",
+      "ota": true,
+      "notes": "",
+      "firmware": {
+        "path": "V5.00.0/firmware.bin",
+        "size": 1232464,
+        "sha256": "d368f07ba5d2cd43a4f711f972f9053b6a79ada4a0c1dee149731bf08ed69fd8"
+      },
+      "filesystem": {
+        "path": "V5.00.0/littlefs.bin",
+        "size": 720896,
+        "sha256": "42c70474cdefc0015169ab281ad820508626ba46bc3321f398ed2a4e26e1c50b"
+      }
+    },
+    {
+      "version": "4.00.2",
+      "channel": "stable",
+      "date": "2026-10-07",
+      "ota": true,
+      "notes": "",
+      "firmware": {
+        "path": "V4.00.2/firmware.bin",
+        "size": 1232336,
+        "sha256": "7a681ec451b1ac5691f25dcde2ab161587ca90887f1840765c60e5c540b6904c"
+      },
+      "filesystem": {
+        "path": "V4.00.2/littlefs.bin",
+        "size": 720896,
+        "sha256": "e2ef59384f76979b030ad520c93cfcd58c4e4daa3f8db6c384acd9abe3b17436"
+      }
+    },
+    {
+      "version": "3.00.1",
+      "channel": "stable",
+      "date": "2026-10-07",
+      "ota": true,
+      "notes": "",
+      "firmware": {
+        "path": "V3.00.1/firmware.bin",
+        "size": 1221808,
+        "sha256": "bdd8ae2063a40e20acc8e3d23fb5b92d54e6d68dbc8362be4acc2a30f78e9693"
+      },
+      "filesystem": {
+        "path": "V3.00.1/littlefs.bin",
+        "size": 720896,
+        "sha256": "280f37aa05fa6e065f7f38ca2e6795b8eeac7e3297fd444199c06db481d9334a"
+      }
+    },
+    {
+      "version": "3.00.0",
+      "channel": "stable",
+      "date": "2026-10-07",
+      "ota": true,
+      "notes": "",
+      "firmware": {
+        "path": "V3.00.0/firmware.bin",
+        "size": 1215472,
+        "sha256": "f7b93a6fd6ad23f3833c3524e0d5eb4ca956478b1c1e57c727abb40f5f58991e"
+      },
+      "filesystem": {
+        "path": "V3.00.0/littlefs.bin",
+        "size": 720896,
+        "sha256": "8ed9c44ddc76703e5918361997b53cdadefa76c9c5cb61ecf0de118e7ee57c27"
+      }
+    },
+    {
+      "version": "2.10.1",
+      "channel": "stable",
+      "date": "2026-10-07",
+      "ota": true,
+      "notes": "",
+      "firmware": {
+        "path": "V2.10.1/firmware.bin",
+        "size": 1209344,
+        "sha256": "b1d36eaf55407b4fe6c4865e57c66e8b47a1e2f5010878a05f6950ac722814fd"
+      },
+      "filesystem": {
+        "path": "V2.10.1/littlefs.bin",
+        "size": 720896,
+        "sha256": "905129b62a9e04ebd8b9b7aca03513aad5bdab8f246cce2d101247a5d1f20be5"
       }
     }
   ]
