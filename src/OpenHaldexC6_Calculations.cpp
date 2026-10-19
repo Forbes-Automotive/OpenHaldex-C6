@@ -244,17 +244,48 @@ uint8_t steering_scale_result_pct()
   return (uint8_t)constrain((int)(s_steer_applied + 0.5f), 0, 100);
 }
 
+// The mode the car's drive mode select (MQB Charisma) is forcing, or -1 for none.
+// The drive profile is read from Charisma_07 / Charisma_01 in parseCAN_chs.
+int get_drive_mode_forced_value()
+{
+  if (!driveModeForce)
+  {
+    return -1; // feature off
+  }
+  // Copy the time first, then read the clock: the CAN task can update lastDriveProfileMs at
+  // any moment, and reading it after millis() could make "now - then" wrap round to a huge number.
+  uint32_t lastReadMs = lastDriveProfileMs; // when the drive profile was last read
+  uint32_t nowMs = millis();                // time now
+  if (lastReadMs == 0 || (nowMs - lastReadMs) > DRIVE_MODE_TIMEOUT_MS)
+  {
+    return -1; // no drive profile read recently (not an MQB car, or the gateway has stopped sending)
+  }
+  if (receivedDriveProfile >= DRIVE_PROFILE_COUNT)
+  {
+    return -1; // a profile number we don't have a table entry for
+  }
+
+  uint8_t forcedMode = driveModeForceValue[receivedDriveProfile]; // the mode set for this profile in the table
+  if (forcedMode >= (uint8_t)openhaldex_mode_t_MAX)
+  {
+    return -1; // N/A (or a bad saved value): leave the mode alone
+  }
+  return forcedMode;
+}
+
 // Which force-mode value applies right now: 0..5 (Stock/FWD/5050/6040/7525/Expert)
 // when an enabled trigger's flag is active, or -1 when no force mode applies.
 // Priority between simultaneous triggers is user-configurable via
 // forceModesPriority (0-5 covering all 6 orderings of TC/Hazards/External).
+// The drive mode select comes after all three: it's a standing choice, while
+// the others are something the driver does on purpose right now.
 // Exposed so the inline gateway (parseCAN_chs) can detect "effective mode is
 // Stock" and pass frames through untouched instead of editing them.
 int get_forced_mode_value()
 {
   if (!(extBtnForceMode || tcForceMode || hazardForceMode))
   {
-    return -1;
+    return get_drive_mode_forced_value(); // no button triggers turned on: only the drive mode can force
   }
 
   struct TriggerCheck
@@ -289,7 +320,7 @@ int get_forced_mode_value()
       return triggers[idx].value;
     }
   }
-  return -1;
+  return get_drive_mode_forced_value(); // no button trigger active: the drive mode select comes last
 }
 
 float get_lock_target_adjustment()

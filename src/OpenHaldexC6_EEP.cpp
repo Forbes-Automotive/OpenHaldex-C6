@@ -106,6 +106,8 @@ void readEEP() // function to read stored preferences into runtime variables
     pref.putString("wifiStaPwd", wifiStaPassword);                                   // save home-network password
     pref.putBool("udsMQBEn", liveDiagEnabled);                                       // save live-diagnostics enable (legacy key)
     pref.putUChar("forceModesPrio", forceModesPriority);                             // save force-modes priority order
+    pref.putBool("driveModeFM", driveModeForce);                                     // save drive mode select force mode (off)
+    pref.putBytes("driveModeFMV", driveModeForceValue, sizeof(driveModeForceValue)); // save drive mode table (defaults)
     pref.putFloat("lockReleaseRate", lockReleaseRatePerSec);                         // save lock release rate (%/s)
     pref.putBool("lockReleaseEn", lockReleaseEnabled);                               // save lock release enable
     pref.putBool("steerScaleEn", steeringScaleEnabled);                              // save steering-scale enable
@@ -179,7 +181,10 @@ void readEEP() // function to read stored preferences into runtime variables
     pref.getString("wifiStaSsid", wifiStaSsid, sizeof(wifiStaSsid));        // load home-network SSID (missing key = "" = bridge mode off)
     pref.getString("wifiStaPwd", wifiStaPassword, sizeof(wifiStaPassword)); // load home-network password
     liveDiagEnabled = pref.getBool("udsMQBEn", false);             // load live-diagnostics enable (legacy key)
-    forceModesPriority = pref.getUChar("forceModesPrio", 0);       // load force-modes priority (0=TC>Haz>Ext)
+    forceModesPriority = pref.getUChar("forceModesPrio", 0);       // load force-modes priority (0=Haz>TC>Ext)
+    driveModeForce = pref.getBool("driveModeFM", false);           // load drive mode select force mode (default off)
+    if (pref.getBytesLength("driveModeFMV") == sizeof(driveModeForceValue))
+      pref.getBytes("driveModeFMV", driveModeForceValue, sizeof(driveModeForceValue)); // load drive mode table (keep defaults if absent)
     lockReleaseRatePerSec = pref.getFloat("lockReleaseRate", 120.0f); // load lock release rate (%/s)
     lockReleaseEnabled = pref.getBool("lockReleaseEn", true);        // load lock release enable
     steeringScaleEnabled = pref.getBool("steerScaleEn", true);       // load steering-scale enable
@@ -329,6 +334,8 @@ void writeEEP(void *arg) // task function to periodically write preferences
     pref.putString("wifiStaPwd", wifiStaPassword); // write home-network password
     pref.putBool("udsMQBEn", liveDiagEnabled); // write live-diagnostics enable (legacy key)
     pref.putUChar("forceModesPrio", forceModesPriority);      // write force-modes priority order
+    pref.putBool("driveModeFM", driveModeForce);              // write drive mode select force mode
+    pref.putBytes("driveModeFMV", driveModeForceValue, sizeof(driveModeForceValue)); // write drive mode table
     pref.putFloat("lockReleaseRate", lockReleaseRatePerSec);  // write lock release rate (%/s)
     pref.putBool("lockReleaseEn", lockReleaseEnabled);        // write lock release enable
     pref.putBool("steerScaleEn", steeringScaleEnabled);       // write steering-scale enable

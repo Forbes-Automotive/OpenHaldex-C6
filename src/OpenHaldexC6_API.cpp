@@ -115,6 +115,33 @@ static void statusOutgoing(AsyncWebServerRequest *request)
     // Ext-button force flag is driven by the external button
     data["extButtonActive"] = extButtonForceModeFlag;
 
+    // Drive mode select (MQB Charisma): the profile the car is in, the mode its gateway
+    // asks the Haldex / VAQ for, and the OpenHaldex mode that profile is forcing (-1 = none).
+    {
+        JsonObject driveMode = data["driveMode"].to<JsonObject>(); // nested object: "driveMode": { ... }
+        uint32_t lastReadMs = lastDriveProfileMs;                  // copy first, then read the clock (see get_drive_mode_forced_value)
+        uint32_t nowMs = millis();
+        bool isDriveProfileFresh = false;
+        if (lastReadMs != 0 && (nowMs - lastReadMs) <= DRIVE_MODE_TIMEOUT_MS)
+        {
+            isDriveProfileFresh = true;
+        }
+        driveMode["seen"] = isDriveProfileFresh;    // false = no Charisma frame in the last 3 s
+        driveMode["profile"] = receivedDriveProfile; // 1 Comfort, 2 Normal, 3 Sport ... (0 = none)
+        driveMode["source"] = driveProfileSource;    // 7 = Charisma_07, 1 = Charisma_01 engine request, 0 = none
+        if (hasHaldexModeRequest)
+        {
+            driveMode["haldexRequest"] = receivedHaldexModeRequest; // Charisma_01 byte 3 bits 0-3
+            driveMode["vaqRequest"] = receivedVaqModeRequest;       // Charisma_01 byte 4 bits 4-7
+        }
+        else
+        {
+            driveMode["haldexRequest"] = nullptr; // shown as "--"
+            driveMode["vaqRequest"] = nullptr;
+        }
+        driveMode["forcing"] = get_drive_mode_forced_value(); // 0-5, or -1 when not forcing
+    }
+
     if (chassisOk) // if chassis CAN ok, set related values
     {
         data["speed"] = received_vehicle_speed;
@@ -366,6 +393,15 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
     data["tcForceMode"] = tcForceMode;
     data["extButtonForceMode"] = extBtnForceMode;
     data["hazardForceMode"] = hazardForceMode;
+    data["forceModesPriority"] = forceModesPriority; // which button trigger wins (0-5)
+
+    // drive mode select: on/off, and the mode for each drive profile (255 = N/A)
+    data["driveModeForce"] = driveModeForce;
+    JsonArray driveModeValuesJSON = data["driveModeForceValues"].to<JsonArray>();
+    for (uint8_t i = 0; i < DRIVE_PROFILE_COUNT; i++)
+    {
+        driveModeValuesJSON.add(driveModeForceValue[i]);
+    }
 
     data["disableOnboardButton"] = disableOnboardButton;
     data["disableExternalButton"] = disableExternalButton;
@@ -527,6 +563,46 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
         for (const auto &n : drivingNumbers)
             if (data[n.key].is<float>())
                 applyDrivingSetting(n.id, (uint16_t)constrain(lroundf(data[n.key].as<float>()), 0L, (long)n.maxValue));
+    }
+
+    // Force Mode Priority (which of TC / hazards / external button wins). The web page
+    // has always sent this, but it was never read here, so it didn't save.
+    if (data["forceModesPriority"].is<int>())
+    {
+        int priority = data["forceModesPriority"];
+        if (priority >= 0 && priority <= 5)
+        {
+            forceModesPriority = (uint8_t)priority;
+        }
+    }
+
+    // Drive mode select: on/off
+    if (data["driveModeForce"].is<bool>())
+    {
+        driveModeForce = data["driveModeForce"];
+    }
+
+    // Drive mode select: the whole table, one OpenHaldex mode per drive profile.
+    // Anything that isn't a real mode (0-5) is stored as N/A.
+    if (data["driveModeForceValues"].is<JsonArray>())
+    {
+        JsonArray values = data["driveModeForceValues"];
+        for (uint8_t i = 0; i < DRIVE_PROFILE_COUNT && i < values.size(); i++)
+        {
+            int value = -1;
+            if (values[i].is<int>())
+            {
+                value = values[i];
+            }
+            if (value >= 0 && value < (int)openhaldex_mode_t_MAX)
+            {
+                driveModeForceValue[i] = (uint8_t)value;
+            }
+            else
+            {
+                driveModeForceValue[i] = DRIVE_MODE_NOT_SET;
+            }
+        }
     }
 
     if (data["disableController"].is<bool>())

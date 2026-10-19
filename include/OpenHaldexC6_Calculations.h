@@ -19,6 +19,11 @@ float get_lock_target_adjustment();
 // mode is Stock", which must mean untouched passthrough - never frame edits
 // built from mirrored engagement (the stuck-at-100% feedback loop).
 int get_forced_mode_value();
+
+// The mode the car's drive mode select is forcing right now (0..5), or -1 when the
+// feature is off, the drive profile hasn't been read in the last 3 s, or that
+// profile is set to N/A. Lowest priority: TC / hazards / external button win.
+int get_drive_mode_forced_value();
 static float get_expert_lock_target();
 uint8_t get_lock_target_adjusted_value(uint8_t value, bool invert);
 void getLockData(twai_message_t& rx_message_chs);

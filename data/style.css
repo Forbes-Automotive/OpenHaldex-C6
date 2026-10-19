@@ -992,3 +992,14 @@ input, textarea, select, pre, code, [contenteditable] {
   user-select: text;
   -webkit-touch-callout: default;
 }
+
+/* Drive mode select table (Settings > Mode Options): profile name in a fixed
+   column on the left, its mode drop-down filling the rest, a gap between rows */
+.drive-mode-table {
+  display: grid;
+  grid-template-columns: 8.5em 1fr;
+  gap: 8px 12px;
+  align-items: center;
+  margin: 8px 0 4px;
+}
+.drive-mode-table .input-select { width: 100%; margin: 0; }

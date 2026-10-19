@@ -77,6 +77,7 @@ It can operate using OEM CAN signals or it is able to run in Standalone mode - w
 - SavvyCAN support via Wi‑Fi or Serial
 - Wi‑Fi access point password protection, with long-press reset
 - Force mode via CAN using hazard lights or TC button
+- Force mode from the car's drive mode select on MQB (Comfort, Sport, Race, Individual ...), each profile set to any mode, with a **Drive Mode** card on Diagnostics (see [Drive Mode Select](#can--force-mode-drive-mode-select-mqb))
 - Adjustable LED brightness
 - Live diagnostics: UDS (Gen5) and KWP2000‑over‑TP2.0 (Gen2/Gen4) with measurement scaling confirmed against VCDS
 - Selectable CAN frames — enable/disable CAN messages per Generation from the Web UI
@@ -297,10 +298,40 @@ Two optional force mode triggers are available via. CAN signals already present 
 Both are optional and can be enabled in the Settings page. They allow mode changes from OEM controls without any additional wiring.
 
 <p align="center">
-  <img src="/Images/ui-mode-options.png" alt="Settings — Mode Options (TC / hazard / external button force modes and their priority) and Output Options (brake and handbrake follow)" width="300">
+  <img src="/Images/ui-mode-options.png" alt="Settings — Mode Options (TC / hazard / external button / drive mode force modes and their priority) and Output Options (brake and handbrake follow)" width="300">
 </p>
 
-*Settings → **Mode Options**: each force-mode trigger has its own target mode, the external button can either advance or hold-to-force, and a priority order settles what happens when several triggers are active at once. **Output Options** underneath sets whether the brake and handbrake outputs follow (or invert) the inputs.*
+*Settings → **Mode Options**: each force-mode trigger has its own target mode, the external button can either advance or hold-to-force, the drive mode select has a mode per profile, and a priority order settles what happens when several triggers are active at once. **Output Options** underneath sets whether the brake and handbrake outputs follow (or invert) the inputs.*
+
+### CAN — Force Mode (Drive Mode Select, MQB)
+
+On MQB cars (Gen5 `0CQ`, Gen5 `0AY` on MQB and the VAQ), the car's own drive mode select can force a mode. Turn on **Use Drive Mode to Force Mode** under Settings → **Mode Options** and pick a mode for each drive profile. **N/A** leaves the mode alone. The defaults are:
+
+| Drive profile | OpenHaldex mode |
+|---|---|
+| Comfort | Stock |
+| Sport | 60:40 |
+| Race | 50:50 |
+| Individual | Expert |
+| Normal, Offroad, Eco, Snow and the rest | N/A |
+
+How it works:
+
+- The gateway sends the selected profile once a second in **Charisma_07** (`0x3E8`, byte 1 bits 0–3). If a car doesn't send that frame on the Haldex's bus, the engine's requested mode in **Charisma_01** (`0x385`, byte 2) is used instead. That one can't tell Individual apart: it shows the engine setting chosen inside Individual.
+- The TC button, hazards and external button still win over it. If no Charisma frame arrives for 3 seconds, the drive mode stops forcing anything.
+- The header banner shows a drive mode force the same way as the others, e.g. `Expert (Sport>60:40)`.
+- **Diagnostics → Drive Mode** shows the profile the car is in, which frame it was read from, the mode the car's gateway asks the Haldex and VAQ for, what the Haldex reports back (mode and status), and what is being forced.
+
+Profile and mode numbers come from the MQB K-matrix and the [jilleb/MQB-FPA](https://github.com/jilleb/MQB-FPA) research into the gateway's drive profile data. Our own MQB logs read Individual (7) from Charisma_07.
+
+> [!NOTE]
+> Reading the drive profile has been checked against our own MQB logs. Forcing modes from it has not been driven on a car yet.
+
+<p align="center">
+  <img src="/Images/ui-drive-mode.png" alt="Diagnostics — Drive Mode card: drive profile Sport read from Charisma_07, the car asking the Haldex for Normal, the Haldex reporting Normal / Available, forcing 60:40" width="300">
+</p>
+
+*Diagnostics → **Drive Mode**: the car is in Sport (read from Charisma_07), its gateway asks the Haldex for Normal, the Haldex reports Normal / Available, and Sport is forcing 60:40.*
 
 ---
 
@@ -397,7 +428,7 @@ If the Wi‑Fi interface becomes unresponsive:
 
 - Long‑press the `Mode` button to clear the WiFi password and restart the AP to an open state.
 
-> The Web UI is built on Forbes Automotive's shared dark theme (the same look used across the Can2Cluster, SpeedPulser, SpeedPulserPro, can2rpm, MQB Steering Wheel Controller and AirLift Controller firmware), so the interface and status conventions stay consistent across the whole product line. Current firmware version: **10.00.0** (shown in the UI footer and at `/ota/info`).
+> The Web UI is built on Forbes Automotive's shared dark theme (the same look used across the Can2Cluster, SpeedPulser, SpeedPulserPro, can2rpm, MQB Steering Wheel Controller and AirLift Controller firmware), so the interface and status conventions stay consistent across the whole product line. Current firmware version: **10.00.1** (shown in the UI footer and at `/ota/info`).
 
 ---
 
@@ -777,7 +808,9 @@ Throughout the Web UI — Diagnostics, CAN health, force‑mode sources, and sim
 | 🔴 Red | Unhealthy / Off / Inactive — the signal is present but reporting a bad or inactive state |
 | 🟠 Orange | Unavailable — no value has been received for this field (e.g. not applicable to the selected Haldex generation, or data hasn't arrived yet) |
 
-This applies to items such as Chassis/Haldex CAN health, steering health, ASR/TC status, hazard and brake/handbrake inputs, and the OTA safety banner (`SAFE` in green / `NOT SAFE` in red).
+This applies to items such as Chassis/Haldex CAN health, steering health, ASR/TC status, hazard and brake/handbrake inputs, and the OTA safety banner (`SAFE` in green / `NOT SAFE` in red). On MQB, the **Drive Mode** card underneath CAN Information shows the car's drive mode select (see [Drive Mode Select](#can--force-mode-drive-mode-select-mqb)).
+
+On the dashboard, the **Haldex State** legend decodes the state byte for the selected generation: PQ fault flags on Gen1 / 2 / 4, and on Gen5 / VAQ the drive mode the unit is running plus its status (Starting Up / Available / Not Available / Out of Step).
 
 <p align="center">
   <img src="/Images/ui-diagnostics.png" alt="Diagnostics tab — CAN status pills, CAN information (mode, force-mode sources, steering, ASR/TC, hazards), brake / handbrake signals and system info" width="300">
@@ -924,6 +957,7 @@ Pinout and functionality remain consistent across supported enclosure versions.
 - **A Banging Donk** — [Original OpenHaldex project](https://github.com/ABangingDonk/OpenHaldexT4) for Gen1 vehicles
 - **Chris (meatro) — OpenHaldex‑S3** — [OpenHaldex‑S3](https://github.com/meatro/OpenHaldex-S3) (MIT). Portions of the map editor / Expert Mode, CAN View, web UI, PlatformIO structure and API control derive from this project
 - **RktBox (Kile Thomson) — OpenHaldex‑Edge** — [OpenHaldex‑Edge](https://github.com/Kile-Thomson/OpenHaldex-Edge). The geometry‑compensated per‑corner slip calculation (Ackermann wheel‑radius model) and the ESP_14 **Launch PWM Floor** (`BR_Vorg_*_Min` raise) were adopted from this project
+- **jilleb — MQB-FPA** — [MQB-FPA](https://github.com/jilleb/MQB-FPA). The MQB drive profile and drive mode numbers behind [Drive Mode Select](#can--force-mode-drive-mode-select-mqb) (Comfort / Normal / Sport / Offroad / Eco / Race / Individual / Snow) come from this project's reverse engineering of the gateway's drive profile (FPA) data
 - **Arwid Vasilev** — PCB redesign (V1.02)
 - **LVT Technologies** — OTA update integration (now deprecated, but still appreciated)
 

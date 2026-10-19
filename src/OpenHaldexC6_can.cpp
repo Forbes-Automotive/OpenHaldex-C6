@@ -611,6 +611,64 @@ void parseCAN_chs(void *arg)
           }
           break;
 
+        case CHARISMA_07:
+          // MQB Charisma_07 (0x3E8) - drive mode select, sent by the gateway once a second.
+          // MQB FCAN K-matrix:
+          //   SG_ CHA_Current_Mode : 8|4@1+  -> byte 1 bits 0-3, the drive profile the driver picked
+          // Profile numbers (jilleb/MQB-FPA): 1 Comfort, 2 Normal, 3 Sport, 4 Offroad, 5 Eco,
+          // 6 Race, 7 Individual, 8 Range/PHEV 1, 9 Lift/PHEV 2, 10 Snow/PHEV 3,
+          // 11 Offroad Individual/PHEV 4. 0 = not filled in by this car.
+          // Our own MQB logs read 00 B7 00 .. = 7 (Individual) while Charisma_01 asked
+          // for a mix of Comfort / Normal / Sport across the systems, which is what an
+          // Individual profile looks like.
+          if ((haldexGeneration == 50 || haldexGeneration == 51 || haldexGeneration == 52) &&
+              rx_message_chs.data_length_code >= 2)
+          {
+            uint8_t currentMode = rx_message_chs.data[1] & 0x0F; // byte 1 bits 0-3: drive profile
+            if (currentMode != 0)                                // 0 = not used on this car, so fall back to Charisma_01
+            {
+              receivedDriveProfile = currentMode;
+              driveProfileSource = DRIVE_SOURCE_CHARISMA_07;
+              lastDriveProfileMs = millis();
+              lastCharisma07Ms = millis();
+            }
+          }
+          break;
+
+        case CHARISMA_01:
+          // MQB Charisma_01 (0x385) - drive mode select, sent by the gateway once a second.
+          // MQB FCAN K-matrix: a 4-bit "requested mode" for each system the gateway controls:
+          //   SG_ CHA_Ziel_FahrPr_MO  : 16|4@1+ -> byte 2 bits 0-3, engine
+          //   SG_ CHA_Ziel_FahrPr_ALR : 24|4@1+ -> byte 3 bits 0-3, Haldex (all-wheel drive)
+          //   SG_ CHA_Ziel_FahrPr_VAQ : 36|4@1+ -> byte 4 bits 4-7, front diff lock (VAQ)
+          // Mode numbers (jilleb/MQB-FPA): 1 Comfort, 2 Normal, 3 Sport, 4 Offroad, 5 Eco,
+          // 6 Race, 7 Individual/Eco+, 8 On, 9 Off, 10 Snow. 0 = no function.
+          if ((haldexGeneration == 50 || haldexGeneration == 51 || haldexGeneration == 52) &&
+              rx_message_chs.data_length_code >= 5)
+          {
+            receivedHaldexModeRequest = rx_message_chs.data[3] & 0x0F;     // byte 3 bits 0-3: mode asked of the Haldex
+            receivedVaqModeRequest = (rx_message_chs.data[4] >> 4) & 0x0F; // byte 4 bits 4-7: mode asked of the VAQ
+            hasHaldexModeRequest = true;
+
+            // The engine's requested mode follows the drive profile on most cars, so use it
+            // when Charisma_07 (the profile itself) isn't on this bus. It can't tell Individual
+            // apart (it shows the engine setting chosen inside Individual). 8 (On) and 9 (Off)
+            // aren't profiles, so they're skipped.
+            uint8_t engineModeRequest = rx_message_chs.data[2] & 0x0F; // byte 2 bits 0-3: mode asked of the engine
+            bool hasRecentCharisma07 = false;
+            if (lastCharisma07Ms != 0 && (millis() - lastCharisma07Ms) < DRIVE_MODE_TIMEOUT_MS)
+            {
+              hasRecentCharisma07 = true;
+            }
+            if (!hasRecentCharisma07 && engineModeRequest != 8 && engineModeRequest != 9)
+            {
+              receivedDriveProfile = engineModeRequest;
+              driveProfileSource = DRIVE_SOURCE_CHARISMA_01;
+              lastDriveProfileMs = millis();
+            }
+          }
+          break;
+
         case mKombi_1:
           // PQ Kombi_1 (0x320) - instrument cluster broadcast.
           // PQ35/46 K-matrix (V5.20.6F), message mKombi_1 0x320:
