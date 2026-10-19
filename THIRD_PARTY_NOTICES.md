@@ -64,6 +64,19 @@ SOFTWARE.
 
 ---
 
+## 2a. MQB-FPA (jilleb) - reference only
+
+- **Upstream:** jilleb / MQB-FPA — https://github.com/jilleb/MQB-FPA (GPL-3.0)
+- **Relationship:** reference only. The meaning of the MQB drive profile numbers
+  (1 Comfort, 2 Normal, 3 Sport, 4 Offroad, 5 Eco, 6 Race, 7 Individual ...) and the
+  per-system drive mode numbers used by the Drive Mode Select feature (V10.00.1)
+  were taken from this project's published research into the gateway's drive
+  profile (FPA) data. No MQB-FPA code or templates are included in OpenHaldex-C6;
+  the decoding in `OpenHaldexC6_can.cpp` and `data/app.js` was written from scratch
+  against the MQB K-matrix. Credited in the README Acknowledgements.
+
+---
+
 ## 3. Forbes Automotive Original Work
 
 - Portions original to Forbes Automotive (including Gen2 / Gen4 / Gen5 reverse

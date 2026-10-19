@@ -333,6 +333,26 @@ extern bool paddleTipBoth;
 extern bool extBtnForceMode;
 extern bool extButtonForceModeFlag;
 
+// ===== Drive mode select (MQB "Charisma") =====
+// The car's drive mode select (Comfort / Normal / Sport / Race / Individual ...) can force an
+// OpenHaldex mode. Profile numbers are the gateway's own (from the MQB K-matrix + jilleb/MQB-FPA).
+#define DRIVE_PROFILE_COUNT 12     // drive profiles 0-11 (0 = none, 1 Comfort ... 11 Offroad Individual)
+#define DRIVE_MODE_NOT_SET 255     // "N/A" in the drive mode table: this profile doesn't force a mode
+#define DRIVE_MODE_TIMEOUT_MS 3000 // Charisma frames come once a second; after 3 s without one the drive mode is unknown
+#define DRIVE_SOURCE_NONE 0        // no drive mode seen yet
+#define DRIVE_SOURCE_CHARISMA_07 7 // read from Charisma_07 (0x3E8) CHA_Current_Mode: the profile itself
+#define DRIVE_SOURCE_CHARISMA_01 1 // read from Charisma_01 (0x385) engine request: used when 0x3E8 isn't on this bus
+
+extern bool driveModeForce;                                // setting: use the car's drive mode select to force a mode
+extern uint8_t driveModeForceValue[DRIVE_PROFILE_COUNT];   // setting: OpenHaldex mode for each drive profile, or DRIVE_MODE_NOT_SET
+extern uint8_t receivedDriveProfile;                       // runtime: drive profile the car is in (0 = none)
+extern uint8_t driveProfileSource;                         // runtime: which frame it came from (DRIVE_SOURCE_...)
+extern uint32_t lastDriveProfileMs;                        // runtime: when the drive profile was last read
+extern uint32_t lastCharisma07Ms;                          // runtime: when Charisma_07 was last seen (0 = never)
+extern uint8_t receivedHaldexModeRequest;                  // runtime: mode the car's gateway asks the Haldex for (Charisma_01 byte 3 bits 0-3)
+extern uint8_t receivedVaqModeRequest;                     // runtime: mode the car's gateway asks the VAQ for (Charisma_01 byte 4 bits 4-7)
+extern bool hasHaldexModeRequest;                          // runtime: true once a Charisma_01 frame has been read
+
 extern bool disableOnboardButton;
 extern bool disableExternalButton;
 

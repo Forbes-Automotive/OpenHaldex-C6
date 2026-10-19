@@ -9,7 +9,7 @@
     <meta http-equiv="Expires" content="0">
 
     <title>OpenHaldex-C6</title>
-    <link rel="stylesheet" href="style.css?v=20260920">
+    <link rel="stylesheet" href="style.css?v=20261019">
 
     <!-- Favicons -->
     <link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png">
@@ -536,6 +536,14 @@
                     </div>
                     <p class="hint">Press: next mode. Hold: force the selected mode until released.</p>
 
+                    <label class="toggle" style="margin-top:10px;">
+                        <input type="checkbox" id="driveModeForce">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Use Drive Mode to Force Mode</span>
+                    </label>
+                    <div id="driveModeForceTable"></div>
+                    <p class="hint">MQB only. Forces a mode from the car's drive mode select. N/A leaves the mode alone.</p>
+
                     <div class="brightness-row" style="margin-top:10px;">
                         <span class="toggle-label">Force Mode Priority</span>
                         <select id="forceModesPriority" class="input-select">
@@ -547,7 +555,7 @@
                             <option value="5">Ext &gt; Hazard &gt; TC</option>
                         </select>
                     </div>
-                    <p class="hint">If several triggers are active, the highest priority wins.</p>
+                    <p class="hint">If several triggers are active, the highest priority wins. Drive mode always comes last.</p>
                 </div>
             </section>
 
@@ -876,6 +884,37 @@
             </section>
 
             <section class="card">
+                <h2>Drive Mode</h2>
+                <p class="hint">The car's drive mode select (MQB). Read from the gateway's Charisma frames once a second.</p>
+                <div class="diag-grid">
+                    <div class="diag-item">
+                        <span class="diag-label">Drive Profile:</span>
+                        <span class="diag-value" id="diagDriveProfile">--</span>
+                    </div>
+                    <div class="diag-item">
+                        <span class="diag-label">Read From:</span>
+                        <span class="diag-value" id="diagDriveSource">--</span>
+                    </div>
+                    <div class="diag-item">
+                        <span class="diag-label">Car Asks Haldex For:</span>
+                        <span class="diag-value" id="diagDriveHaldexRequest">--</span>
+                    </div>
+                    <div class="diag-item">
+                        <span class="diag-label">Car Asks VAQ For:</span>
+                        <span class="diag-value" id="diagDriveVaqRequest">--</span>
+                    </div>
+                    <div class="diag-item">
+                        <span class="diag-label">Haldex Reports:</span>
+                        <span class="diag-value" id="diagDriveHaldexReport">--</span>
+                    </div>
+                    <div class="diag-item">
+                        <span class="diag-label">Forcing:</span>
+                        <span class="diag-value" id="diagDriveForcing">--</span>
+                    </div>
+                </div>
+            </section>
+
+            <section class="card">
                 <h2>Brake / Handbrake Signals</h2>
                 <div class="diag-grid">
                     <div class="diag-item">
@@ -1135,7 +1174,7 @@
             </section>
         </div>
 
-        <script src="./app.js?v=20260920" type="text/javascript"></script>
+        <script src="./app.js?v=20261019" type="text/javascript"></script>
         <!-- The device now serves app.js/style.css with Cache-Control: no-cache
              (ETag revalidation), so this ?v= no longer needs bumping. It was
              changed once to escape the year-long cache older builds handed out. -->

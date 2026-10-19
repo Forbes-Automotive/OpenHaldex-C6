@@ -2,7 +2,7 @@
 #include <OpenHaldexC6_defs.h>
 
 // Current firmware version
-#define FW_VERSION "10.00.0" // also bump data/version.json ("fs")
+#define FW_VERSION "10.00.1" // also bump data/version.json ("fs")
 
 /*
 Version Control:
@@ -256,7 +256,7 @@ V9.00.7 - relay the car's CAN frames to gauges over ESP-NOW:
           can2gauge / adc2can). Relay stats in the status JSON (canRelay).
           Not yet tested on hardware.
 
-V10.00.0 - (unreleased) new market: Volvo and SAAB. Every new market gets a
+V10.00.0 - (beta, 2026-10-18) new market: Volvo and SAAB. Every new market gets a
           new major number (V11 = MQB Evo).
         - Four new Haldex generations, standalone only for now:
             21  Generation 2 - Volvo P2 (Pre-Facelift)  250 kbit/s, 29-bit IDs
@@ -307,6 +307,31 @@ V10.00.0 - (unreleased) new market: Volvo and SAAB. Every new market gets a
         - Web UI: "Generation 3 - Volvo" option (was there but rejected by the
           firmware) now works; GM option renamed "Generation 4 - GM (Vauxhall /
           Opel)" so it isn't confused with the 9-3.
+
+V10.00.1 - (beta, 2026-10-19) the car's drive mode select can force a mode (MQB):
+        - New "Use Drive Mode to Force Mode" setting (driveModeForce, default
+          Off) under Mode Options, with one drop-down per drive profile.
+          Defaults: Comfort = Stock, Sport = 60:40, Race = 50:50,
+          Individual = Expert, everything else N/A (left alone).
+        - The profile is read from Charisma_07 (0x3E8) byte 1 bits 0-3
+          (CHA_Current_Mode); if a car doesn't send that, the engine request
+          in Charisma_01 (0x385) byte 2 is used instead (can't see Individual).
+          Our own MQB logs read 7 = Individual. Gen5 0CQ / 0AY MQB / VAQ only.
+        - Lowest priority: TC / hazards / external button still win. No
+          Charisma frame for 3 s = no drive mode force.
+        - Profile and mode numbers from the MQB K-matrix and jilleb/MQB-FPA
+          (credited in the README).
+        - The header banner shows a drive mode force, e.g. "Expert (Sport>60:40)".
+        - New Drive Mode card on Diagnostics: the car's profile, where it was
+          read from, what the gateway asks the Haldex / VAQ for, what the
+          Haldex reports back, and what's being forced.
+        - Haldex state legend fixed: the web page read the state byte as hex
+          text, so 0x12 showed as 0x18 on every generation. Gen5 now decodes
+          Allrad_03 byte 3 as mode (bits 0-3) + status (bits 4-5) with names,
+          and the VAQ (Gen52) gets its own (Quersperre_03 byte 3, bits 1-4 / 5-6).
+        - Force Mode Priority now saves: the web page sent it, but the firmware
+          never read it, so it was always Hazard > TC > Ext after a reload.
+          Also in the backup file now.
 
 */
 

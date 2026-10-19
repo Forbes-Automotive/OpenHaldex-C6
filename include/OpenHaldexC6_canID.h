@@ -96,7 +96,8 @@
 #define ESP_29 0x18c
 #define KOMBI_01 0x30b
 
-#define CHARISMA_01 0x385
+#define CHARISMA_01 0x385 // MQB drive mode select: the gateway's requested mode for each system (engine, gearbox, Haldex ...), 1 s
+#define CHARISMA_07 0x3E8 // MQB drive mode select: byte 1 bits 0-3 = the drive profile the driver picked (CHA_Current_Mode), 1 s
 #define ESP_07 0x392
 
 #define MOTOR_14 0x3be

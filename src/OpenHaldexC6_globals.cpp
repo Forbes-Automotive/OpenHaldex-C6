@@ -150,6 +150,31 @@ bool paddleTipBoth   = false;
 bool extBtnForceMode = false;
 bool extButtonForceModeFlag = false;
 
+// Drive mode select (MQB "Charisma"): which OpenHaldex mode each drive profile forces.
+// 0 Stock, 1 FWD, 2 50:50, 3 60:40, 4 75:25, 5 Expert, DRIVE_MODE_NOT_SET = leave the mode alone.
+bool driveModeForce = false; // setting: off until the user turns it on
+uint8_t driveModeForceValue[DRIVE_PROFILE_COUNT] = {
+    DRIVE_MODE_NOT_SET, // 0  none
+    MODE_STOCK,         // 1  Comfort    -> Stock
+    DRIVE_MODE_NOT_SET, // 2  Normal
+    MODE_6040,          // 3  Sport      -> 60:40
+    DRIVE_MODE_NOT_SET, // 4  Offroad
+    DRIVE_MODE_NOT_SET, // 5  Eco
+    MODE_5050,          // 6  Race       -> 50:50
+    MODE_EXPERT,        // 7  Individual -> Expert
+    DRIVE_MODE_NOT_SET, // 8  Range / PHEV 1
+    DRIVE_MODE_NOT_SET, // 9  Lift / PHEV 2
+    DRIVE_MODE_NOT_SET, // 10 Snow / PHEV 3
+    DRIVE_MODE_NOT_SET, // 11 Offroad Individual / PHEV 4
+};
+uint8_t receivedDriveProfile = 0;               // drive profile the car is in (0 = none)
+uint8_t driveProfileSource = DRIVE_SOURCE_NONE; // which frame the profile came from
+uint32_t lastDriveProfileMs = 0;                // when the profile was last read
+uint32_t lastCharisma07Ms = 0;                  // when Charisma_07 was last seen (0 = never)
+uint8_t receivedHaldexModeRequest = 0;          // mode the car's gateway asks the Haldex for
+uint8_t receivedVaqModeRequest = 0;             // mode the car's gateway asks the VAQ for
+bool hasHaldexModeRequest = false;              // true once a Charisma_01 frame has been read
+
 bool disableOnboardButton = false;
 bool disableExternalButton = false;
 

@@ -2,6 +2,33 @@ let currentEditCell = null; // global flag for current editted cell
 
 const MODE_NAMES = ["Stock", "FWD", "50:50", "60:40", "75:25", "Expert"]; // mode names as Strings
 
+// MQB drive mode select ("Charisma"). Numbers from the MQB K-matrix and jilleb/MQB-FPA
+// (https://github.com/jilleb/MQB-FPA). Drive profiles: what the driver picked (Charisma_07).
+const DRIVE_PROFILE_NAMES = [
+  "None",                       // 0
+  "Comfort",                    // 1
+  "Normal",                     // 2
+  "Sport",                      // 3
+  "Offroad",                    // 4
+  "Eco",                        // 5
+  "Race",                       // 6
+  "Individual",                 // 7
+  "Range / PHEV 1",             // 8
+  "Lift / PHEV 2",              // 9
+  "Snow / PHEV 3",              // 10
+  "Offroad Individual / PHEV 4", // 11
+];
+// Requested / actual mode for one system (Charisma_01 requests, Allrad_03 / Quersperre_03 replies)
+const CHARISMA_MODE_NAMES = [
+  "No Function", "Comfort", "Normal", "Sport", "Offroad", "Eco", "Race", "Individual / Eco+",
+  "On", "Off", "Snow", "Car-Specific 11", "Car-Specific 12", "Car-Specific 13", "Reserved 14", "Reserved 15",
+];
+// Status the Haldex / VAQ reports with its mode (K-matrix ALR_Charisma_Status)
+const CHARISMA_STATUS_NAMES = ["Starting Up", "Available", "Not Available", "Out of Step (Driver)"];
+const DRIVE_MODE_NOT_SET = 255; // "N/A" in the drive mode table
+// Default table: Comfort = Stock, Sport = 60:40, Race = 50:50, Individual = Expert, the rest N/A
+const DRIVE_MODE_DEFAULTS = [255, 0, 255, 3, 255, 255, 2, 5, 255, 255, 255, 255];
+
 // Cached settings for banner force-mode display and state legend (loaded once from /api/settings)
 let _tcForceModeValue     = 2;
 let _hazardForceModeValue = 2;
@@ -10,6 +37,8 @@ let _tcForceMode = false;
 let _hazardForceMode = false;
 let _extBtnForceMode = false;
 let _forceModesPriority = 0;
+let _driveModeForce = false;                        // "Use Drive Mode to Force Mode" setting
+let _driveModeForceValues = DRIVE_MODE_DEFAULTS.slice(); // copy of the default table until /api/settings loads
 let _haldexGeneration = 1;
 let _isStandalone = false;
 let _useCANifAvailable = false;
@@ -142,6 +171,15 @@ async function initStoredSettings() {
     document.getElementById("tcForceModeValue").value     = data.tcForceModeValue     ?? 2;
     document.getElementById("hazardForceModeValue").value  = data.hazardForceModeValue  ?? 2;
     document.getElementById("extBtnForceModeValue").value  = data.extBtnForceModeValue  ?? 2;
+
+    // Drive mode select: on/off and the table (older firmware has neither, so keep the defaults)
+    _driveModeForce = data.driveModeForce === true;
+    if (Array.isArray(data.driveModeForceValues)) {
+      _driveModeForceValues = data.driveModeForceValues.slice();
+    }
+    const driveModeForceElem = document.getElementById("driveModeForce");
+    if (driveModeForceElem) driveModeForceElem.checked = _driveModeForce;
+    renderDriveModeTable();
 
     document.getElementById("disengageUnderSpeedRange").value =
       data.disengageUnderSpeed || 0;
@@ -492,10 +530,12 @@ async function refreshStatus() {
     document.getElementById("haldexState").textContent =
       data.haldexState === undefined || data.haldexState === null
         ? "--"
-        : hex2bin(data.haldexState);
+        : byteToBinary(data.haldexState);
 
     updateBannerSubtitle(data);
+    updateDriveModeDiag(data); // Diagnostics > Drive Mode card
     // Gen50 (0CQ/MQB): state byte is Allrad_03 byte 3 (Charisma) — use gen=50 legend.
+    // Gen52 (VAQ): Quersperre_03 byte 3 (Charisma, shifted up one bit) — its own layout.
     // Gen51 (0AY) and all PQ gens (1/2/4): state byte is Allrad_1 byte 0 (PQ fault flags) — use gen-specific PQ legend.
     const legendGen = _haldexGeneration;
     renderHaldexStateLegend(data.haldexState, legendGen);
@@ -584,8 +624,10 @@ async function refreshStatus() {
   }
 }
 
-function hex2bin(hex) {
-  return ("00000000" + parseInt(hex, 16).toString(2)).substr(-8);
+// "00010010" for the state byte. The firmware sends it as a plain number (18), not hex
+// text: reading it as hex ("18" -> 0x18) showed the wrong bits before V10.00.1.
+function byteToBinary(value) {
+  return ("00000000" + Number(value).toString(2)).substr(-8);
 }
 
 // Set a diagnostics value as a coloured status pill.
@@ -619,6 +661,16 @@ function updateBannerSubtitle(data) {
   el.textContent = text;
 }
 
+// The drive mode select's force, as a banner trigger ("Sport" forcing 60:40), or null.
+// The firmware works out which mode the profile forces; this only labels it.
+function getDriveModeForce(data) {
+  if (!_driveModeForce) return null;
+  const drive = data.driveMode;
+  if (!drive || !drive.seen) return null;
+  if (drive.forcing === undefined || drive.forcing < 0) return null;
+  return { source: driveProfileName(drive.profile), mode: drive.forcing };
+}
+
 function getActiveForceMode(data) {
   const triggers = [
     { source: "TC",  enabled: _tcForceMode,     active: data.tcOn === false,           mode: _tcForceModeValue },
@@ -638,15 +690,16 @@ function getActiveForceMode(data) {
     const trigger = triggers[index];
     if (trigger.enabled && trigger.active) return trigger;
   }
-  return null;
+  return getDriveModeForce(data); // the drive mode select comes after the three buttons
 }
 
 // Render a bit-by-bit legend for the Haldex state byte, generation-aware.
-function renderHaldexStateLegend(rawHex, gen) {
+// stateByte is a plain number from /api/status (not hex text).
+function renderHaldexStateLegend(stateByte, gen) {
   const el = document.getElementById("haldexStateLegend");
   if (!el) return;
-  if (rawHex === undefined || rawHex === null) { el.innerHTML = ""; return; }
-  const val = parseInt(rawHex, 16);
+  if (stateByte === undefined || stateByte === null) { el.innerHTML = ""; return; }
+  const val = Number(stateByte);
 
   if (gen === 1 || gen === 2 || gen === 4 || gen === 51) {
     // PQ (Gen 1/2/4): Allrad_1 byte 0 — fault/status flags
@@ -667,15 +720,22 @@ function renderHaldexStateLegend(rawHex, gen) {
     });
     html += `</table>`;
     el.innerHTML = html;
-  } else if (gen === 50) {
-    // MQB (Gen 5): Allrad_03 byte 3 = ALR_Charisma_FahrPr / ALR_Charisma_Status
-    const prog = val & 0x0F;
-    const flags = (val >> 4) & 0x0F;
+  } else if (gen === 50 || gen === 52) {
+    // MQB drive mode reply (K-matrix):
+    //   Gen5 Allrad_03 byte 3:     bits 0-3 ALR_Charisma_FahrPr, bits 4-5 ALR_Charisma_Status
+    //   VAQ Quersperre_03 byte 3:  bit 0 Sendestatus, bits 1-4 VAQ_Charisma_FahrPr, bits 5-6 Status
+    const reply = decodeCharismaReply(val, gen);
+    let modeBits = "bits 0–3";
+    let statusBits = "bits 4–5";
+    if (gen === 52) {
+      modeBits = "bits 1–4";
+      statusBits = "bits 5–6";
+    }
     el.innerHTML =
       `<table><tr><th>Field</th><th>Value</th></tr>` +
-      `<tr><td>Driving Programme (bits 0–3)</td><td>${prog}</td></tr>` +
-      `<tr><td>Status Flags (bits 4–7)</td><td>0x${flags.toString(16).toUpperCase()}</td></tr>` +
-      `</table><p style="margin:4px 0 0;">Note: bit 4–5 of byte 1 = longitudinal lock state (0=open, 1=partial, 2=closed) — separate from this byte.</p>`;
+      `<tr><td>Drive Mode (${modeBits})</td><td>${charismaModeText(reply.mode)}</td></tr>` +
+      `<tr><td>Status (${statusBits})</td><td>${CHARISMA_STATUS_NAMES[reply.status]} (${reply.status})</td></tr>` +
+      `</table><p style="margin:4px 0 0;">The mode the unit is running for the car's drive mode select. See Diagnostics &gt; Drive Mode.</p>`;
   } else if (gen === 41) {
     el.innerHTML = `<em>Gen 4.1: dedicated status variables used — see Gen41 card above.</em>`;
   } else if (VOLVO_SAAB_GENERATIONS.includes(gen)) {
@@ -790,6 +850,144 @@ function updateCachedSetting(key, value) {
   if (key === "tcForceMode") _tcForceMode = value;
   if (key === "hazardForceMode") _hazardForceMode = value;
   if (key === "extButtonForceMode") _extBtnForceMode = value;
+  if (key === "driveModeForce") _driveModeForce = value;
+}
+
+// ---- Drive mode select (Settings > Mode Options) ---------------------------
+// One row per drive profile (Comfort ... Offroad Individual), each with a drop-down
+// of OpenHaldex modes plus N/A. Profile 0 ("None") isn't shown.
+function renderDriveModeTable() {
+  const table = document.getElementById("driveModeForceTable");
+  if (!table) return;
+  table.innerHTML = "";
+  table.className = "drive-mode-table"; // two-column grid: profile name | drop-down
+  for (let profile = 1; profile < DRIVE_PROFILE_NAMES.length; profile++) {
+    const label = document.createElement("span");
+    label.className = "toggle-label";
+    label.textContent = DRIVE_PROFILE_NAMES[profile];
+    table.appendChild(label);
+
+    const select = document.createElement("select");
+    select.className = "input-select";
+    select.id = "driveModeForceValue" + profile;
+    select.dataset.profile = profile; // which table entry this drop-down sets
+
+    const notSetOption = document.createElement("option");
+    notSetOption.value = DRIVE_MODE_NOT_SET;
+    notSetOption.textContent = "N/A";
+    select.appendChild(notSetOption);
+    for (let mode = 0; mode < MODE_NAMES.length; mode++) {
+      const option = document.createElement("option");
+      option.value = mode;
+      option.textContent = MODE_NAMES[mode];
+      select.appendChild(option);
+    }
+
+    let value = _driveModeForceValues[profile];
+    if (value === undefined || value >= MODE_NAMES.length) value = DRIVE_MODE_NOT_SET;
+    select.value = value;
+    select.addEventListener("change", saveDriveModeTable);
+    table.appendChild(select);
+  }
+}
+
+// A drive mode drop-down changed: send the whole table (it's only 12 numbers)
+async function saveDriveModeTable(event) {
+  const select = event.target;
+  const profile = parseInt(select.dataset.profile);
+  const newValues = _driveModeForceValues.slice();
+  while (newValues.length < DRIVE_PROFILE_NAMES.length) newValues.push(DRIVE_MODE_NOT_SET);
+  newValues[profile] = parseInt(select.value);
+  if (await saveSetting("driveModeForceValues", newValues)) {
+    _driveModeForceValues = newValues;
+  }
+}
+
+// Fill in the Diagnostics > Drive Mode card from /api/status
+function updateDriveModeDiag(data) {
+  const profileElem = document.getElementById("diagDriveProfile");
+  if (!profileElem) return;
+  const sourceElem = document.getElementById("diagDriveSource");
+  const haldexRequestElem = document.getElementById("diagDriveHaldexRequest");
+  const vaqRequestElem = document.getElementById("diagDriveVaqRequest");
+  const haldexReportElem = document.getElementById("diagDriveHaldexReport");
+  const forcingElem = document.getElementById("diagDriveForcing");
+
+  const drive = data.driveMode;
+  if (!drive) {
+    // older firmware: no drive mode data at all
+    profileElem.textContent = "--";
+    sourceElem.textContent = "--";
+    haldexRequestElem.textContent = "--";
+    vaqRequestElem.textContent = "--";
+    haldexReportElem.textContent = "--";
+    forcingElem.textContent = "--";
+    return;
+  }
+
+  if (drive.seen) {
+    profileElem.textContent = driveProfileName(drive.profile) + " (" + drive.profile + ")";
+  } else {
+    profileElem.textContent = "Not Seen";
+  }
+
+  if (!drive.seen) {
+    sourceElem.textContent = "--";
+  } else if (drive.source === 7) {
+    sourceElem.textContent = "Charisma_07 (0x3E8)";
+  } else if (drive.source === 1) {
+    sourceElem.textContent = "Charisma_01 (0x385) Engine Request";
+  } else {
+    sourceElem.textContent = "--";
+  }
+
+  haldexRequestElem.textContent = charismaModeText(drive.haldexRequest);
+  vaqRequestElem.textContent = charismaModeText(drive.vaqRequest);
+
+  // What the Haldex / VAQ says back, from the Haldex state byte
+  const report = decodeCharismaReply(data.haldexState, _haldexGeneration);
+  if (report) {
+    haldexReportElem.textContent = charismaModeText(report.mode) + ", " + CHARISMA_STATUS_NAMES[report.status];
+  } else {
+    haldexReportElem.textContent = "--";
+  }
+
+  if (!_driveModeForce) {
+    forcingElem.textContent = "Off";
+  } else if (drive.forcing >= 0) {
+    forcingElem.textContent = MODE_NAMES[drive.forcing] ?? "Unknown";
+  } else {
+    forcingElem.textContent = "No (N/A)";
+  }
+}
+
+// "Sport" for a drive profile number
+function driveProfileName(profile) {
+  const name = DRIVE_PROFILE_NAMES[profile];
+  if (name === undefined) return "Profile " + profile;
+  return name;
+}
+
+// "Normal (2)" for a requested / actual Charisma mode number, "--" when there isn't one
+function charismaModeText(mode) {
+  if (mode === undefined || mode === null) return "--";
+  return CHARISMA_MODE_NAMES[mode] + " (" + mode + ")";
+}
+
+// The mode + status the Haldex (Gen5, Allrad_03 byte 3) or VAQ (Gen52, Quersperre_03 byte 3)
+// reports back to the gateway, or null for other generations / no data.
+function decodeCharismaReply(stateByte, gen) {
+  if (stateByte === undefined || stateByte === null) return null;
+  const value = Number(stateByte);
+  if (gen === 50) {
+    // Allrad_03 byte 3: bits 0-3 ALR_Charisma_FahrPr, bits 4-5 ALR_Charisma_Status
+    return { mode: value & 0x0F, status: (value >> 4) & 0x03 };
+  }
+  if (gen === 52) {
+    // Quersperre_03 byte 3: bit 0 Sendestatus, bits 1-4 VAQ_Charisma_FahrPr, bits 5-6 VAQ_Charisma_Status
+    return { mode: (value >> 1) & 0x0F, status: (value >> 5) & 0x03 };
+  }
+  return null;
 }
 
 // ---- Sleep auto-setup (offered once, Gen5) ---------------------------------
@@ -1109,6 +1307,7 @@ function initSettings() {
     "useCANifAvailable",
     "tcForceMode",
     "hazardForceMode",
+    "driveModeForce",
     "followBrake",
     "invertBrake",
     "followHandbrake",
@@ -2884,7 +3083,8 @@ const BACKUP_GENERAL_KEYS = [
   "espNowEnabled", "espNowControl", "canRelay",
   "disengageUnderSpeed", "disengageAboveSpeed", "disableThrottle",
   "tcForceMode", "tcForceModeValue", "hazardForceMode", "hazardForceModeValue",
-  "extButtonForceMode", "extBtnForceModeValue", "disableOnboardButton", "disableExternalButton",
+  "extButtonForceMode", "extBtnForceModeValue", "forceModesPriority", "driveModeForce", "driveModeForceValues",
+  "disableOnboardButton", "disableExternalButton",
   "followBrake", "invertBrake", "followHandbrake", "invertHandbrake",
   "fixHunting", "dangerZoneEnabled", "esp14MinFloorPct", "bpkCeilingNm",
   "steeringScaleEnabled", "lockReleaseEnabled", "lockReleaseRatePerSec", "liveDiagEnabled", "ledBrightness",
