@@ -1,0 +1,81 @@
+name: CI
+
+# Guards the two things that have historically shipped broken in this project:
+#   1. the release index drifting away from the binaries it describes, and
+#   2. data/app.js failing to parse, which silently kills every button in the UI.
+# Both are cheap to check and neither needs hardware.
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Release index matches the binaries
+        run: python3 tools/make_release.py verify
+
+      - name: Web UI assets parse
+        run: |
+          node --check data/app.js
+          python3 -c "import json; json.load(open('data/version.json'))"
+
+      - name: Firmware version and filesystem version agree
+        run: |
+          python3 - <<'PY'
+          import json, re, sys
+          ver = re.search(r'#define\s+FW_VERSION\s+"([^"]+)"',
+                          open('include/OpenHaldexC6_ver.h').read()).group(1)
+          fs = json.load(open('data/version.json'))['fs']
+          print(f"FW_VERSION={ver}  data/version.json fs={fs}")
+          if ver != fs:
+              sys.exit("FW_VERSION and data/version.json disagree - bump both.")
+          PY
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Build firmware and filesystem
+        run: |
+          pio run -e esp32c6
+          pio run -e esp32c6 -t buildfs
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32c6-build
+          path: |
+            .pio/build/esp32c6/firmware.bin
+            .pio/build/esp32c6/littlefs.bin
+            .pio/build/esp32c6/bootloader.bin
+            .pio/build/esp32c6/partitions.bin
+          if-no-files-found: error
