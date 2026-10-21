@@ -696,6 +696,16 @@ extern uint8_t disableThrottle;
 extern uint16_t disengageUnderSpeed;
 extern uint16_t disengageAboveSpeed;
 
+// Reasons lock can be withheld by the speed/throttle window. Reported on
+// /api/dashboard so a "Target 0%" reading is diagnosable rather than
+// mysterious: since 9.00.0 these gates apply to EVERY lock path including the
+// force-mode triggers and Expert, which previously bypassed them, so a saved
+// non-zero setting can silently zero lock in every mode.
+#define LOCK_GATE_THROTTLE 0x01    // throttle below "Minimum Throttle Before Lock"
+#define LOCK_GATE_UNDER_SPEED 0x02 // speed below "Disengage Under Speed"
+#define LOCK_GATE_ABOVE_SPEED 0x04 // speed above "Disengage Above Speed"
+uint8_t lock_gate_blocking();      // LOCK_GATE_* bits currently blocking; 0 = none
+
 extern uint32_t rxtxcount; // frame counter
 extern uint32_t stackCHS;
 extern uint32_t stackHDX;

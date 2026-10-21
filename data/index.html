@@ -73,6 +73,7 @@
                         <span>Target: <span id="lockTarget">--</span>%</span>
                         <span>Actual: <span id="lockActual">--</span>%</span>
                     </div>
+                    <p class="hint" id="lockGateHint" hidden></p>
                     <div class="engagement-gauge-wrap" id="engagementGaugeWrap" style="display:none;">
                         <svg class="engagement-gauge-svg" viewBox="0 0 200 118" aria-label="Haldex engagement gauge">
                             <path class="eg-track" d="M 20 100 A 80 80 0 0 1 180 100" fill="none" />
@@ -1088,7 +1089,12 @@
                     <div><span>Status</span><strong id="updState">Not checked</strong></div>
                 </div>
                 <p class="hint">This phone needs internet while reaching the controller: join the controller to your router under <a href="#otaWifiStaCard" id="updGoBridge">Home WiFi</a>, put this phone on the same network and open the address shown. Keep this page open until it reboots.</p>
-                <div class="input-group">
+                <div class="input-group" id="updSourceGroup" hidden>
+                    <label for="updSource">Release source</label>
+                    <select id="updSource" class="input-select"></select>
+                </div>
+                <p class="hint" id="updSourceHint" hidden></p>
+                <div class="input-group" id="updChannelGroup">
                     <label for="updChannel">Update channel</label>
                     <select id="updChannel" class="input-select">
                         <option value="stable">Stable - published releases</option>

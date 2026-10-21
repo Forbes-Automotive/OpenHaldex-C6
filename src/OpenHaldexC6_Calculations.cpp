@@ -99,13 +99,26 @@ bool compute_corner_slip(const uint16_t wheel_raw[4], int16_t steer_wheel_tenths
 // under-speed cut-off. A bound of 0 means that side of the window is disabled.
 // Expert mode used to bypass this entirely (its map has its own speed axis);
 // it is now gated too, matching the UI hint "disable ANY lock below...".
+// Which gates are currently withholding lock, as LOCK_GATE_* bits; 0 means
+// none are. lock_enabled() is defined in terms of this so the reported
+// reason can never drift from the decision actually taken. Reporting only -
+// behaviour is identical to the previous three-bool form.
+uint8_t lock_gate_blocking()
+{
+  uint8_t blocking = 0;
+  if (!((state.pedal_threshold == 0) || (int(received_pedal_value) >= state.pedal_threshold)))
+    blocking |= LOCK_GATE_THROTTLE;
+  // Allow lock only within the window [disengageUnderSpeed, disengageAboveSpeed].
+  if (!((disengageUnderSpeed == 0) || (received_vehicle_speed >= disengageUnderSpeed)))
+    blocking |= LOCK_GATE_UNDER_SPEED;
+  if (!((disengageAboveSpeed == 0) || (received_vehicle_speed <= disengageAboveSpeed)))
+    blocking |= LOCK_GATE_ABOVE_SPEED;
+  return blocking;
+}
+
 static inline bool lock_enabled()
 {
-  const bool throttle_ok = (state.pedal_threshold == 0) || (int(received_pedal_value) >= state.pedal_threshold);
-  // Allow lock only within the window [disengageUnderSpeed, disengageAboveSpeed].
-  const bool under_ok = (disengageUnderSpeed == 0) || (received_vehicle_speed >= disengageUnderSpeed);
-  const bool above_ok = (disengageAboveSpeed == 0) || (received_vehicle_speed <= disengageAboveSpeed);
-  return throttle_ok && under_ok && above_ok;
+  return lock_gate_blocking() == 0;
 }
 
 static float get_expert_lock_target()
