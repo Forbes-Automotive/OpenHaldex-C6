@@ -13,7 +13,7 @@
 #define BRAKES1_ID 0x1A0   // DLC 8 x
 #define BRAKES2_ID 0x5A0   // DLC 8 x
 #define BRAKES3_ID 0x4A0   // DLC 8 x
-#define BRAKES4_ID 0x2A0   // DLC 3 x
+#define BRAKES4_ID 0x2A0   // DLC 3 in vw_pq.dbc, but the Gen4 0BR needs at least 7 (OEM code: spec_gen4_0br §1) - we always send 8
 #define BRAKES5_ID 0x4A8   // DLC 8 x
 #define BRAKES6_ID 0x1A8   // DLC 3 x
 #define BRAKES8_ID 0x1AC   // DLC 8 x
@@ -35,7 +35,7 @@
 #define mGetriebe_8 0x450
 #define mGetriebe_9 0x454
 
-#define mLW_1 0x0C2         // DLC 7
+#define mLW_1 0x0C2         // DLC 7 here; the Gen4 0BR needs at least 6 (OEM code: spec_gen4_0br §1) - we always send 8
 #define mLenkhilfe_1 0x3D0  // DLC 6
 #define mLenkhilfe_2 0x3D2  // DLC 6
 #define mLenkhilfe_3 0x0D0  // DLC 6
@@ -118,6 +118,8 @@
 #define KOMBI_02 0x6b7
 
 #define HALDEX_ID_GEN5 0x118
+#define HALDEX_GEN5_STATUS_ID 0x17F0000F // 29-bit ID, sent by the 0CQ (DLC 8): byte 0 bit 0 = fault reaction active, byte 1 = 0x0F (OEM code: spec_gen5_0cq §6)
+#define HALDEX_GEN5_STATUS_TIMEOUT_MS 3000 // forget the 0x17F0000F fault bit if the frame stops (seen about twice a second in our logs)
 
 // Gen5 VAQ (MQB front-axle transverse lock, K-matrix node "VAQ" / "Quersperre").
 // Source: MQB_FCAN_KMatrix (Documents gitignore/can-databases/vw-mqb). The VAQ
@@ -207,14 +209,28 @@
 #define VOLVO_P2G2_HALDEX_ID  0x0120000A // from the Haldex: byte 6 = status (scaling unknown)
 
 // Volvo P2 Gen3 (facelift) - 500 kbit/s, 29-bit. Haldex replies on 0x1020000A.
-#define VOLVO_P2G3_ACTIVE_ID  0x10004002 // 10 ms, bytes 4-7 = C0 00 C0 00 idle / C1 42 C1 42 active
-#define VOLVO_P2G3_42406C_ID  0x0042406C // 10 ms, static
+// V11.00.0: all of these IDs are confirmed in the S60R DEM's own message table
+// (OEM code: spec_volvo_p2_s60r.md section 1). "500k S60 log" below = the public
+// log volvo-CAN-exploration/0000286.TXT (500 kbit/s, model year not stated, it
+// has these facelift IDs). The 2002/2003 P2 logs are pre-facelift and use other IDs.
+#define VOLVO_P2G3_ACTIVE_ID  0x10004002 // 10 ms, bytes 4-7 = C0 00 C0 00 idle / C1 42 C1 42 active (500k S60 log: four 10-bit wheel speeds, 14 ms)
+#define VOLVO_P2G3_42406C_ID  0x0042406C // 10 ms, byte 0 bits 6-7 = 2-bit rolling counter (500k S60 log)
 #define VOLVO_P2G3_LOCK_ID    0x0062401E // 10 ms, byte 1 = lock request, bytes 0/4-7 = active flags
-#define VOLVO_P2G3_MODE_ID    0x0080401E // 10 ms, bytes 2-3 = 80 00 idle / 87 D0 active
-#define VOLVO_P2G3_224024_ID  0x00224024 // 10 ms, static
-#define VOLVO_P2G3_E24026_ID  0x00E24026 // 10 ms, static
+#define VOLVO_P2G3_MODE_ID    0x0080401E // 10 ms, bytes 2-3 = 80 00 idle / 87 D0 active (500k S60 log: looks like engine rpm, 0x7D0 = 2000), byte 0 toggles 1E/06
+#define VOLVO_P2G3_224024_ID  0x00224024 // 10 ms, byte 0 bit 2 toggles every send (500k S60 log, 14 ms there)
+#define VOLVO_P2G3_E24026_ID  0x00E24026 // 10 ms, static (14 ms in the 500k S60 log)
 #define VOLVO_P2G3_NETWORK_ID 0x10A2407C // 100 ms, network heartbeat (bytes 6-7 FE F5 <-> 01 0A)
-#define VOLVO_P2G3_HALDEX_ID  0x1020000A // from the Haldex: byte 6 = status (scaling unknown)
+#define VOLVO_P2G3_HALDEX_ID  0x1020000A // from the Haldex: byte 6 = measured clutch value, byte 7 = status bits (OEM code, leaf_trace/volvo_bitrate.md)
+#define VOLVO_P2G3_ENGAGEMENT_FULL_SCALE 150 // byte 6 value read as 100 % engagement - OEM code says ~150 at sensor full scale ** CAN CHANGE THIS ** after a bench check
+// V11.00.0: four more frames the DEM listens for (OEM code: MO table) that we
+// never sent. Content = steady values from the 500k S60 log, meanings unknown.
+#define VOLVO_P2G3_C0402A_ID  0x00C0402A // 10 ms in the log, steady 1E E4 00 00 27 FF D3 FF
+#define VOLVO_P2G3_10E24000_ID 0x10E24000 // 56 ms in the log (we send every 50 ms), all zero
+#define VOLVO_P2G3_11220028_ID 0x11220028 // 60 ms in the log (we send every 50 ms), 23 60 0F 3C 01 00 35 2E
+#define VOLVO_P2G3_11420006_ID 0x11420006 // 120 ms in the log (we send every 100 ms), 00 00 00 0F 00 00 C0 00
+// 0x01A2402A is also in the DEM's table but is NOT on the bus in the 500k S60
+// log, so its content is unknown and it is not sent (V11 TODO (bench)).
+#define VOLVO_P2G3_1A2402A_ID 0x01A2402A // not sent - content unknown
 
 // Volvo Gen4 (P3 / Freelander 2 family) - 500 kbit/s, 11-bit. Haldex replies on 0x243.
 #define VOLVO_G4_MODE_ID      0x12A // 10 ms, EngineData: byte 4 bit 6 = brake, bytes 6-7 = engine RPM (13-bit)
@@ -222,6 +238,94 @@
 #define VOLVO_G4_220_ID       0x220 // 20 ms, rear wheel speeds (0x8000 = 0 km/h), static
 #define VOLVO_G4_NETWORK_ID   0x405 // 100 ms, network heartbeat (bytes 6-7 F4 45 <-> 0B BA)
 #define VOLVO_G4_HALDEX_ID    0x243 // from the Haldex: byte 7 = status (scaling unknown)
+
+// Volvo Gen5 "SPC" Haldex 31380867 (generation 53, V11.00.0) - 11-bit IDs, 500 kbit/s
+// assumed (OEM code: spec_ppc_volvo_spc_bmw.md, Volvo part). A different unit and
+// ID set from our P3 generation 43 - none of 43's IDs (0x12A/0x20A/0x220/0x405,
+// reply 0x243) are in this unit's receive table.
+// Lock lever: 0x041 bytes 6-7, signed 16-bit, high byte first. 0 = clutch open,
+// bigger = more lock, saturates at full lock. No checksum or counter is checked.
+#define VOLVO_SPC_LEVER_ID    0x041 // clutch demand: bytes 6-7 (OEM code COM signal 12)
+// The other frames the unit receives (CanIf table). Meanings not decoded yet:
+// sent as all-zero starting values (switch with VOLVO_SPC_SEND_PLACEHOLDERS).
+#define VOLVO_SPC_04A_ID      0x04A // receive frame, content unknown
+#define VOLVO_SPC_050_ID      0x050 // receive frame, content unknown
+#define VOLVO_SPC_056_ID      0x056 // receive frame, content unknown
+#define VOLVO_SPC_066_ID      0x066 // receive frame, content unknown
+#define VOLVO_SPC_071_ID      0x071 // receive frame, content unknown
+#define VOLVO_SPC_076_ID      0x076 // receive frame, content unknown
+#define VOLVO_SPC_081_ID      0x081 // receive frame, content unknown
+#define VOLVO_SPC_086_ID      0x086 // receive frame, content unknown
+#define VOLVO_SPC_131_ID      0x131 // receive frame, content unknown
+#define VOLVO_SPC_155_ID      0x155 // receive frame, content unknown
+#define VOLVO_SPC_158_ID      0x158 // receive frame, content unknown
+#define VOLVO_SPC_161_ID      0x161 // receive frame, content unknown
+#define VOLVO_SPC_165_ID      0x165 // receive frame, content unknown
+#define VOLVO_SPC_171_ID      0x171 // receive frame, content unknown
+#define VOLVO_SPC_200_ID      0x200 // receive frame, content unknown
+#define VOLVO_SPC_211_ID      0x211 // receive frame, content unknown
+#define VOLVO_SPC_231_ID      0x231 // receive frame, content unknown
+#define VOLVO_SPC_235_ID      0x235 // receive frame, content unknown
+#define VOLVO_SPC_281_ID      0x281 // receive frame, content unknown
+#define VOLVO_SPC_285_ID      0x285 // receive frame, content unknown
+#define VOLVO_SPC_57E_ID      0x57E // receive frame, content unknown
+#define VOLVO_SPC_57F_ID      0x57F // receive frame, content unknown
+#define VOLVO_SPC_587_ID      0x587 // receive frame, content unknown
+#define VOLVO_SPC_NM_ID       0x501 // network management keep-awake (the unit listens to 0x500-0x53F; its own is 0x51E)
+#define VOLVO_SPC_HALDEX_ID   0x126 // from the Haldex: bytes 0-1 = delivered clutch torque, byte 3 bits 3-4 = status
+// Scaling. The unit turns 0x041 into clutch torque through calibration tables we
+// have not read (OEM code: CAL_dc54 / CAL_c5fc), so the real full-lock count is unknown.
+#define VOLVO_SPC_LEVER_FULL_SCALE 0x7FFF   // ** CAN CHANGE THIS ** 0x041 bytes 6-7 sent for 100 % (largest positive value, certain to saturate). V11 TODO (bench): lower to the count where lock stops rising
+#define VOLVO_SPC_FEEDBACK_FULL_SCALE 6710  // 0x126 bytes 0-1 count shown as 100 % (= the biggest value the OEM code can put there: 0xFFF x 1024 / 625). V11 TODO (bench): set to the count at real full lock
+#define VOLVO_SPC_SEND_PLACEHOLDERS 1       // ** CAN CHANGE THIS ** 1 = also send the 23 unknown receive frames as all-zero starting values, 0 = send only 0x041 + 0x501
+// Not used by us: diagnostics 0x7FF / 0x738 in, 0x638 out; XCP 0x5A8 / 0x597.
+
+// Volvo P2 Haldex 31431022 (XC166) - NOT a generation yet. Its OEM code only gave
+// up the diagnostic channel (spec_volvo_p2_xc166.md): 11-bit, 500 kbit/s,
+// requests in on 0x795 (physical) / 0x7DF (OBD broadcast), replies out on 0x79D.
+// Its lock / feedback frames need a bench capture first. Listed for reference only.
+
+// Volvo P1 (S40 / V50 AWD, generation 31, V11.00.1) - 500 kbit/s, 29-bit IDs, all
+// frames 8 bytes, high byte first. From Adam's 2005 V50 T5 AWD logs
+// (documents/vehicle-logs/gen3/P1_V50_T5_AWD_DECODE.md). None of the P2 IDs are
+// used on P1. The AWD module sends ONE frame (0x1960000A); everything else below
+// is the car's high-speed bus, which standalone sends in full. Send times are from
+// the full C30 PCAN trace in the same folder.
+#define VOLVO_P1_ENGINE_TORQUE_ID 0x0300410E // 10 ms: two engine torques (12-bit, 2048 = 0), brake switch b4 bit 4 (+ bit 6), pedal b7
+#define VOLVO_P1_ENGINE_RPM_ID    0x0090411E // 20 ms: RPM = byte 2 bits 0-4 + byte 3, 1 rpm per count
+#define VOLVO_P1_WHEELS_ID        0x01C04026 // 14 ms: four wheel speeds RL, RR, FL, FR - 16-bit, 0x8000 = stopped
+#define VOLVO_P1_SPEED_ID         0x02104136 // 14 ms: vehicle speed bytes 6-7 (same scale as the wheels)
+#define VOLVO_P1_BRAKE_ID         0x02000026 // 14 ms: brake pressure b5 + b4 bits 6-7, DSTC off b6 bit 4
+#define VOLVO_P1_HANDBRAKE_ID     0x0110483C // 10 ms: handbrake b2 bit 6, b2 bit 7 set every 5th send
+#define VOLVO_P1_STEERING_ID      0x02804026 // 14 ms: steering angle b0 bits 0-3 + b1 (2048 = straight), yaw / lateral b2 bits 0-3 + b3
+#define VOLVO_P1_0100082C_ID      0x0100082C // 10 ms: b4 bit 4 set every 10th send, rest steady
+#define VOLVO_P1_STEER_SENSOR_ID  0x0340412E // 10 ms: steering angle sensor - b0 counter + direction, b1-2 fine rate, b3 check byte, b4-5 coarse rate, b6-7 angle
+#define VOLVO_P1_02C00020_ID      0x02C00020 // 14 ms: steady
+#define VOLVO_P1_00800006_ID      0x00800006 // 20 ms: b0 bits 6-7 = 2-bit counter
+#define VOLVO_P1_03800006_ID      0x03800006 // 20 ms: b0 bit 6 set every 5th send
+#define VOLVO_P1_19000026_ID      0x19000026 // 15 ms: b6 bit 3 flips every send
+#define VOLVO_P1_PULSES_ID        0x19A00002 // 28 ms: b0 page 02/12/6E/12, b1-b4 = four wheel pulse counters, b5 = distance
+#define VOLVO_P1_19E00006_ID      0x19E00006 // 50 ms: steady
+#define VOLVO_P1_1B200002_ID      0x1B200002 // 85 ms: steady
+#define VOLVO_P1_1B600002_ID      0x1B600002 // 170 ms: b0 bit 5 every 6th send, b1 6-step pattern
+#define VOLVO_P1_1B700030_ID      0x1B700030 // 210 ms: b0 bit 4 set every 3rd send
+#define VOLVO_P1_1A200020_ID      0x1A200020 // 315 ms: b0 bits 6-7 = 2-bit counter
+#define VOLVO_P1_1AE0092C_ID      0x1AE0092C // 420 ms: b0 bits 6-7 = 2-bit counter
+#define VOLVO_P1_1BA0493C_ID      0x1BA0493C // 250 ms: 20 pages (b0 = 1-20), each with its own steady data
+#define VOLVO_P1_NETWORK_ID       0x1BE0493C // 250 ms: pages by b0 - 01 = heartbeat + clock, 02 = status, 05, 10-12 = VIN (not sent)
+#define VOLVO_P1_HALDEX_ID        0x1960000A // 20 ms, from the AWD module: b6 bits 0-1 + b7 = engagement (10-bit), b5 = status
+#define VOLVO_P1_ENGAGEMENT_FULL_SCALE 540   // ** CAN CHANGE THIS ** engagement count shown as 100 % (the ceiling in the full pull and the wheelspin logs)
+// Standalone: how the lock % is shown to the module is chosen on the Settings page
+// (Volvo P1 Standalone card: Lock Source, Road Speed, Torque at 100 %, Front Wheel
+// Slip at 100 % - saved settings, see volvoP1* in defs.h). In the logs the module
+// follows engine torque almost 1:1 (about 1 count of engagement per count of
+// torque, 100-400 ms behind) and goes to full on big front wheelspin. It never
+// locked while stopped, so the road speed is never 0.
+#define VOLVO_P1_PEDAL_FULL 231       // ** CAN CHANGE THIS ** pedal byte at 100 % lock (full throttle in the pull log; 0 at 0 %)
+#define VOLVO_P1_RPM_AT_ZERO 2000     // ** CAN CHANGE THIS ** rpm at 0 % lock (the drive log at 30 km/h)
+#define VOLVO_P1_RPM_FULL 4500        // ** CAN CHANGE THIS ** rpm at 100 % lock
+#define VOLVO_P1_STEER_CHECK_BASE 0x02 // 0x0340412E byte 3 = this - (byte 0 nibbles swapped + byte 1 bit 7 + bytes 4-7), with byte 0 bit 6 clear (0x04 when set). Fits all 26,820 logged frames
+#define VOLVO_P1_LEARN_SETTLE_MS 600  // ** CAN CHANGE THIS ** Learn: wait this long at each step (engagement trails torque by 100-400 ms in the logs; other generations use 400)
 
 // SAAB 9-3 XWD (GM family) - 500 kbit/s, 11-bit. Haldex replies on 0x210.
 // GM-style "alive rolling count" counters, as our Gen41 uses.

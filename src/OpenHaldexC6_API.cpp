@@ -216,14 +216,17 @@ static void statusOutgoing(AsyncWebServerRequest *request)
     //   Brake:     PQ Motor_2 MO2_BLS (Gen2/4/51), MQB ESP_05 ESP_Fahrer_bremst (Gen5).
     //   Handbrake: PQ Kombi_1 KO1_Handbremse (Gen2/4/51), MQB Kombi_01 KBI_Handbremse (Gen5).
     //   Insignia (41) / Focus RS (42): own decode in OpenHaldexC6_ChassisOther.cpp.
-    // Gen1 (1J0), Volvo and SAAB have no CAN handbrake decode -> null ("--").
+    // Gen1 reads PQ Kombi_1 too since V11.00.0. Volvo P1 (V11.00.1) reads 0x0110483C;
+    // the other Volvo generations have no CAN handbrake decode -> null ("--").
     if (chassisOk)
     {
         data["brakeFromCAN"] = brakeFromCAN;
-        const bool hbFromCANSupported = (haldexGeneration == 2 || haldexGeneration == 4 ||
+        data["absBraking"] = absBrakingFromCAN; // PQ Bremse_1 b0.2 / MQB ESP_21 b7.0 (V11.00.0)
+        const bool hbFromCANSupported = (haldexGeneration == 1 || haldexGeneration == 2 || haldexGeneration == 4 ||
                                          haldexGeneration == 50 || haldexGeneration == 51 ||
                                          haldexGeneration == 52 || haldexGeneration == 41 ||
-                                         haldexGeneration == 42 || haldexGeneration == GEN_SAAB_93_XWD);
+                                         haldexGeneration == 42 || haldexGeneration == GEN_SAAB_93_XWD ||
+                                         haldexGeneration == GEN_VOLVO_P1);
         if (hbFromCANSupported)
         {
             data["handbrakeFromCAN"] = handbrakeFromCAN;
@@ -237,9 +240,51 @@ static void statusOutgoing(AsyncWebServerRequest *request)
     {
         data["brakeFromCAN"] = nullptr;     // if chassis CAN not ok, set to null (displayed as "--" in the UI)
         data["handbrakeFromCAN"] = nullptr; // if chassis CAN not ok, set to null (displayed as "--" in the UI)
+        data["absBraking"] = nullptr;       // if chassis CAN not ok, set to null (displayed as "--" in the UI)
     }
 
     data["lockTarget"] = int(lock_target);
+
+    // Why lock is being held at 0%, when it is (V10.00.2, from PR #54). Looks at
+    // the mode actually in use: a force trigger (TC / hazards / button / drive
+    // mode) wins over the selected mode. Stock and FWD ask for no lock on
+    // purpose, so they never report a reason.
+    {
+        int modeInUse = get_forced_mode_value(); // -1 = nothing forcing
+        if (modeInUse < 0)
+        {
+            modeInUse = state.mode; // no force trigger: the selected mode
+        }
+
+        uint8_t blocking = 0; // LOCK_GATE_* bits, 0 = nothing blocking
+        if (modeInUse != MODE_STOCK && modeInUse != MODE_FWD)
+        {
+            blocking = lock_gate_blocking();
+        }
+
+        data["lockGated"] = (blocking != 0);
+        JsonArray gateReasons = data["lockGateReasons"].to<JsonArray>(); // list of reasons for the web page
+        if (blocking & LOCK_GATE_THROTTLE) // bit 0
+        {
+            gateReasons.add("throttle");
+        }
+        if (blocking & LOCK_GATE_UNDER_SPEED) // bit 1
+        {
+            gateReasons.add("underSpeed");
+        }
+        if (blocking & LOCK_GATE_ABOVE_SPEED) // bit 2
+        {
+            gateReasons.add("aboveSpeed");
+        }
+        if (blocking & LOCK_GATE_HANDBRAKE) // bit 3 (V11.00.0)
+        {
+            gateReasons.add("handbrake");
+        }
+        if (blocking & LOCK_GATE_ABS) // bit 4 (V11.00.0)
+        {
+            gateReasons.add("abs");
+        }
+    }
 
     if (haldexOk) // if haldex CAN ok set related values
     {
@@ -274,10 +319,62 @@ static void statusOutgoing(AsyncWebServerRequest *request)
             hb["drivetrainAgeMs"] = received_drivetrain_state_ms ? (millis() - received_drivetrain_state_ms) : 0;
         }
 
-        // SAAB 9-3 XWD reports a temperature in its 0x210 frame (provisional scaling)
-        if (haldexGeneration == GEN_SAAB_93_XWD && received_haldex_temp_c != -128)
+        // Haldex temperature: SAAB 0x210, VAG Gen4 / 0AY 0x2C0 byte 4 (V11.00.0), any
+        // generation that decodes one. -128 = never received.
+        if (received_haldex_temp_c != -128)
         {
             data["haldexTempC"] = received_haldex_temp_c;
+        }
+        else
+        {
+            data["haldexTempC"] = nullptr;
+        }
+
+        // Haldex health (V11.00.0): what the unit itself reports about its own
+        // protections. Only generations whose feedback bits are known from the
+        // OEM code report them (healthSupported); the rest show "--".
+        data["healthSupported"] = haldexHealthSupported;
+        if (haldexGeneration == 50)
+        {
+            data["leverAccepted"] = received_lever_request_valid; // 0CQ Allrad_03 b1.6: the unit accepts our ESP_14 request
+        }
+        data["limpMode"] = received_limp_mode;
+        data["awdWarning"] = received_awd_warning;
+        data["tempSensorFault"] = received_temp_sensor_fault;
+        data["faultStored"] = received_fault_stored;
+
+        // The genuine warnings, as a list the web page turns into a banner
+        JsonArray warnings = data["haldexWarnings"].to<JsonArray>();
+        if (haldexHealthSupported)
+        {
+            if (received_report_clutch1)
+            {
+                warnings.add("fault"); // fault present (clutch / pump / valve)
+            }
+            if (received_report_clutch2)
+            {
+                warnings.add("plausibility"); // signal plausibility fault
+            }
+            if (received_temp_protection)
+            {
+                warnings.add("overTemp"); // over-temperature protection pulling the clutch back
+            }
+            if (received_limp_mode)
+            {
+                warnings.add("limp"); // limp / fault reaction active
+            }
+            if (received_awd_warning)
+            {
+                warnings.add("lamp"); // AWD warning lamp requested
+            }
+            if (received_temp_sensor_fault)
+            {
+                warnings.add("tempSensor"); // temperature sensor fault
+            }
+            if (received_fault_stored)
+            {
+                warnings.add("faultStored"); // fault stored in the unit's memory
+            }
         }
     }
     else // if haldex CAN not ok, set related values to null (displayed as "--" in the UI)
@@ -291,10 +388,38 @@ static void statusOutgoing(AsyncWebServerRequest *request)
         data["tempProtection"] = nullptr;
         data["couplingOpen"] = nullptr;
         data["speedLimit"] = nullptr;
+        data["haldexTempC"] = nullptr;
+        data["healthSupported"] = nullptr;
+        data["limpMode"] = nullptr;
+        data["awdWarning"] = nullptr;
+        data["tempSensorFault"] = nullptr;
+        data["faultStored"] = nullptr;
     }
 
     data["chassisCAN"] = chassisOk;
     data["haldexCAN"] = haldexOk;
+
+    // Volvo P1 (V11.00.1): what standalone is sending and what the AWD module
+    // answers, for the live line on the Volvo P1 Standalone card
+    if (haldexGeneration == GEN_VOLVO_P1)
+    {
+        JsonObject p1 = data["volvoP1"].to<JsonObject>(); // nested object: "volvoP1": { ... }
+        p1["standalone"] = isStandalone;
+        p1["lockPercent"] = lever_lock_percent();     // the lock % being shown to the module (0-100)
+        p1["torque"] = volvoP1SentTorque;             // torque counts above zero
+        p1["pedal"] = volvoP1SentPedal;               // pedal byte, 0-255
+        p1["rpm"] = volvoP1SentRpm;
+        p1["frontKmh"] = volvoP1SentFrontRaw / 100.0f; // km/h
+        p1["rearKmh"] = volvoP1SentRearRaw / 100.0f;   // km/h
+        if (haldexOk)
+        {
+            p1["engagementCount"] = volvoP1EngagementCount; // 0-1023, 540 = full
+        }
+        else
+        {
+            p1["engagementCount"] = nullptr; // no reply from the module
+        }
+    }
     data["busFailure"] = isBusFailure;
     data["lastChassisMs"] = lastCANChassisTick > 0 ? (millis() - lastCANChassisTick) : 0;
     data["lastHaldexMs"] = lastCANHaldexTick > 0 ? (millis() - lastCANHaldexTick) : 0;
@@ -428,6 +553,13 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
     data["invertBrake"] = invertBrake;
     data["followHandbrake"] = followHandbrake;
     data["invertHandbrake"] = invertHandbrake;
+    data["followABS"] = followABS; // V11.00.0
+
+    // Volvo P1 standalone lock (V11.00.1) - the Volvo P1 Standalone card
+    data["volvoP1LockSource"] = volvoP1LockSource;     // 0 engine torque, 1 wheel slip, 2 both
+    data["volvoP1RoadSpeedKmh"] = volvoP1RoadSpeedKmh; // km/h
+    data["volvoP1TorqueFull"] = volvoP1TorqueFull;     // torque counts at 100 %
+    data["volvoP1SlipFullKmh"] = volvoP1SlipFullKmh;   // km/h at 100 %
 
     data["broadcastOpenHaldexOverCAN"] = broadcastOpenHaldexOverCAN;
     data["espNowEnabled"] = espNowEnabled; // gauges over ESP-NOW (can2gauge)
@@ -710,6 +842,29 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
         invertHandbrake = data["invertHandbrake"];
     }
 
+    if (data["followABS"].is<bool>())
+    {
+        followABS = data["followABS"]; // V11.00.0: off = our lock overrules the ABS
+    }
+
+    // Volvo P1 standalone lock (V11.00.1). Each one is kept inside a safe range.
+    if (data["volvoP1LockSource"].is<int>())
+    {
+        volvoP1LockSource = (uint8_t)constrain((int)data["volvoP1LockSource"], VOLVO_P1_SOURCE_TORQUE, VOLVO_P1_SOURCE_BOTH);
+    }
+    if (data["volvoP1RoadSpeedKmh"].is<int>())
+    {
+        volvoP1RoadSpeedKmh = (uint8_t)constrain((int)data["volvoP1RoadSpeedKmh"], 5, 120); // never 0: the module won't lock while stopped
+    }
+    if (data["volvoP1TorqueFull"].is<int>())
+    {
+        volvoP1TorqueFull = (uint16_t)constrain((int)data["volvoP1TorqueFull"], 0, 1000); // 12-bit field, 2048 = 0, so up to +1000 is safe
+    }
+    if (data["volvoP1SlipFullKmh"].is<int>())
+    {
+        volvoP1SlipFullKmh = (uint8_t)constrain((int)data["volvoP1SlipFullKmh"], 0, 40);
+    }
+
     if (data["espNowEnabled"].is<bool>())
         espNowEnabled = data["espNowEnabled"];
     if (data["espNowControl"].is<bool>())
@@ -794,6 +949,11 @@ static void longLearnStartIncoming(AsyncWebServerRequest *request, const String 
     {
         resp["ok"] = false;
         resp["error"] = "Frame editing is not available for this generation";
+    }
+    else if (haldexGeneration == GEN_VOLVO_P1 && !isStandalone)
+    {
+        resp["ok"] = false;
+        resp["error"] = "Volvo P1: Long Learn needs Standalone for now (OEM mode doesn't edit frames yet)";
     }
     else if (!startLongLearn(testAll))
     {
@@ -1134,6 +1294,16 @@ void setupAPI()
                          JsonDocument resp;
                          resp["ok"]    = false;
                          resp["error"] = "No Haldex CAN data available";
+                         sendJSON(request, 200, resp);
+                         return;
+                     }
+                     if (haldexGeneration == GEN_VOLVO_P1 && !isStandalone)
+                     {
+                         // V11.00.1: OEM mode doesn't edit any P1 frames yet, so a learn would
+                         // only measure the car - it needs Standalone for now
+                         JsonDocument resp;
+                         resp["ok"]    = false;
+                         resp["error"] = "Volvo P1: Learn needs Standalone for now (OEM mode doesn't edit frames yet)";
                          sendJSON(request, 200, resp);
                          return;
                      }

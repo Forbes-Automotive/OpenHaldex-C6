@@ -140,7 +140,7 @@ async function fetchJson(url, options) {
 }
 
 // Volvo / SAAB generations (V10.00.0) and the CAN bus speed each one needs
-const VOLVO_SAAB_GENERATIONS = [21, 3, 43, 44];
+const VOLVO_SAAB_GENERATIONS = [21, 3, 31, 43, 44, 53]; // 53 = Volvo Gen5 SPC (V11.00.0), 31 = Volvo P1 (V11.00.1)
 let _canSpeedKbps = 500; // speed the controller is running at (from /api/settings)
 
 // 250 kbit/s for Volvo P2 (Pre-Facelift), 500 kbit/s for everything else - matches the firmware
@@ -156,6 +156,61 @@ function updateVolvoSaabHint(gen) {
   hint.style.display = VOLVO_SAAB_GENERATIONS.includes(gen) ? "" : "none";
   const speed = document.getElementById("canSpeedKbps");
   if (speed) speed.textContent = canSpeedForGeneration(gen);
+
+  // Volvo P1 Standalone card (V11.00.1): only for generation 31
+  const p1Card = document.getElementById("volvoP1Card");
+  if (p1Card) {
+    if (gen === 31) {
+      p1Card.style.display = "";
+    } else {
+      p1Card.style.display = "none";
+    }
+  }
+}
+
+// Volvo P1 Standalone card (V11.00.1): the defaults the Reset to Defaults button puts back
+const VOLVO_P1_DEFAULTS = { source: 0, roadSpeedKmh: 30, torqueFull: 600, slipFullKmh: 10 };
+
+// Put the saved Volvo P1 values into the card's controls
+function showVolvoP1Settings(source, roadSpeedKmh, torqueFull, slipFullKmh) {
+  const sourceSelect = document.getElementById("volvoP1LockSource");
+  if (sourceSelect) sourceSelect.value = String(source);
+  const speedRange = document.getElementById("volvoP1RoadSpeedRange");
+  const speedValue = document.getElementById("volvoP1RoadSpeedValue");
+  if (speedRange) speedRange.value = roadSpeedKmh;
+  if (speedValue) speedValue.textContent = roadSpeedKmh;
+  const torqueRange = document.getElementById("volvoP1TorqueFullRange");
+  const torqueValue = document.getElementById("volvoP1TorqueFullValue");
+  if (torqueRange) torqueRange.value = torqueFull;
+  if (torqueValue) torqueValue.textContent = torqueFull;
+  const slipRange = document.getElementById("volvoP1SlipFullRange");
+  const slipValue = document.getElementById("volvoP1SlipFullValue");
+  if (slipRange) slipRange.value = slipFullKmh;
+  if (slipValue) slipValue.textContent = slipFullKmh;
+}
+
+// The live line on the Volvo P1 card: what standalone is sending and what the module answers
+function updateVolvoP1Live(data) {
+  const line = document.getElementById("volvoP1Live");
+  if (!line) return;
+  const p1 = data.volvoP1;
+  if (!p1) {
+    line.textContent = "Live: --";
+    return;
+  }
+  let answer = "no reply from the module";
+  if (p1.engagementCount !== null && p1.engagementCount !== undefined) {
+    answer = "module engagement " + p1.engagementCount + " of 540";
+  }
+  if (!p1.standalone) {
+    line.textContent = "Live: OEM mode (the car's own frames pass through) - " + answer + ".";
+    return;
+  }
+  line.textContent =
+    "Live: asking " + p1.lockPercent + " %" +
+    " - torque " + p1.torque + ", pedal " + p1.pedal + ", " + p1.rpm + " rpm" +
+    ", front " + p1.frontKmh.toFixed(1) + " / rear " + p1.rearKmh.toFixed(1) + " km/h" +
+    " - " + answer + ".";
 }
 
 // initialise stored settings (async function)
@@ -230,6 +285,10 @@ async function initStoredSettings() {
       if (esp14Val) esp14Val.textContent = data.esp14MinFloorPct;
     }
 
+    if (data.volvoP1LockSource !== undefined) {
+      showVolvoP1Settings(data.volvoP1LockSource, data.volvoP1RoadSpeedKmh, data.volvoP1TorqueFull, data.volvoP1SlipFullKmh);
+    }
+
     const llNotes = document.getElementById("longLearnNotes");
     if (llNotes && typeof data.longLearnNotes === "string") llNotes.value = data.longLearnNotes;
 
@@ -276,6 +335,8 @@ async function initStoredSettings() {
       data.followHandbrake || false;
     document.getElementById("invertHandbrake").checked =
       data.invertHandbrake || false;
+    // Follow ABS defaults ON (V11.00.0): only an explicit false turns it off
+    document.getElementById("followABS").checked = data.followABS !== false;
 
     document.getElementById("broadcastOpenHaldexOverCAN").checked =
       data.broadcastOpenHaldexOverCAN || false;
@@ -421,6 +482,9 @@ async function refreshStatus() {
     document.getElementById("engagementFill").style.width =
       `${data.lockActual ?? 0}%`;
 
+    // Say why lock is being held at 0% (speed / throttle cut-off), if it is.
+    updateLockGateHint(data);
+
     // Steering-angle reduction band on the engagement bar: shows the portion of
     // the requested lock that the steering angle is holding back (cap -> request).
     {
@@ -453,6 +517,16 @@ async function refreshStatus() {
     document.getElementById("tempProtection").textContent  = displayOnOff(data.tempProtection);
     document.getElementById("couplingOpen").textContent    = displayOnOff(data.couplingOpen);
     document.getElementById("speedLimit").textContent      = displayOnOff(data.speedLimit);
+
+    // V11.00.0 health bits. Generations whose feedback bits aren't known from
+    // the OEM code (healthSupported false) show "--" rather than a false "Off".
+    document.getElementById("limpMode").textContent        = healthOnOff(data.limpMode, data.healthSupported);
+    document.getElementById("awdWarning").textContent      = healthOnOff(data.awdWarning, data.healthSupported);
+    document.getElementById("tempSensorFault").textContent = healthOnOff(data.tempSensorFault, data.healthSupported);
+    document.getElementById("faultStored").textContent     = healthOnOff(data.faultStored, data.healthSupported);
+    document.getElementById("haldexTempC").textContent     = displayValue(data.haldexTempC);
+    updateHaldexWarnings(data); // red card at the top of the dashboard when the Haldex reports a problem
+    updateVolvoP1Live(data);    // live line on the Volvo P1 Standalone card (V11.00.1)
 
     // Per-corner slip [FL, FR, RL, RR]; null (no data / stale) shows as "--".
     {
@@ -520,6 +594,7 @@ async function refreshStatus() {
     setStatusPill("diagHandbrakeOut", data.handbrakeOut, "On", "Off");
     setStatusPill("diagBrakeFromCAN", data.brakeFromCAN, "On", "Off");
     setStatusPill("diagHandbrakeFromCAN", data.handbrakeFromCAN, "On", "Off");
+    setStatusPill("diagAbsBraking", data.absBraking, "On", "Off");
     document.getElementById("diagCpuUsage").textContent = displayValue(
       data.cpuUsage,
     );
@@ -738,6 +813,26 @@ function renderHaldexStateLegend(stateByte, gen) {
       `</table><p style="margin:4px 0 0;">The mode the unit is running for the car's drive mode select. See Diagnostics &gt; Drive Mode.</p>`;
   } else if (gen === 41) {
     el.innerHTML = `<em>Gen 4.1: dedicated status variables used — see Gen41 card above.</em>`;
+  } else if (gen === 53) {
+    // Volvo Gen5 SPC (V11.00.0): 0x126 byte 3, bits 3-4 = unit status (OEM code)
+    const status = (val >> 3) & 0x03;
+    let statusText = "Normal";
+    if (status === 1) statusText = "Fault / torque inhibited";
+    if (status === 2) statusText = "Special state (meaning unknown)";
+    if (status === 3) statusText = "Unknown";
+    el.innerHTML =
+      `<table><tr><th>Field</th><th>Value</th></tr>` +
+      `<tr><td>Status (byte 3 bits 3–4)</td><td>${statusText} (${status})</td></tr>` +
+      `</table>`;
+  } else if (gen === 31) {
+    // Volvo P1 (V11.00.1): 0x1960000A byte 5 = status, from the V50 T5 AWD logs
+    let statusText = "Not seen in the logs yet";
+    if (val === 0x2e) statusText = "Ignition on, engine off";
+    if (val === 0x2c || val === 0x3c) statusText = "Engine running (bit 4 meaning not known yet)";
+    el.innerHTML =
+      `<table><tr><th>Field</th><th>Value</th></tr>` +
+      `<tr><td>Status (byte 5)</td><td>${statusText}</td></tr>` +
+      `</table>`;
   } else if (VOLVO_SAAB_GENERATIONS.includes(gen)) {
     el.innerHTML = `<em>Volvo / SAAB: this is byte 0 of the Haldex reply, shown raw. Its bits aren't decoded yet - logs needed.</em>`;
   } else {
@@ -1265,6 +1360,36 @@ function initSettings() {
   // save on release (change) so a live car isn't streamed calibration changes.
   // Reset buttons put the slider back to the firmware default and save it,
   // in case a page scroll nudged the value.
+  // Volvo P1 Standalone card (V11.00.1): the dropdown saves straight away, the
+  // sliders update their number while dragging and save when let go
+  const p1Source = document.getElementById("volvoP1LockSource");
+  if (p1Source) {
+    p1Source.addEventListener("change", () => { saveSetting("volvoP1LockSource", parseInt(p1Source.value)); });
+  }
+  const p1Sliders = [
+    { range: "volvoP1RoadSpeedRange", value: "volvoP1RoadSpeedValue", key: "volvoP1RoadSpeedKmh" },
+    { range: "volvoP1TorqueFullRange", value: "volvoP1TorqueFullValue", key: "volvoP1TorqueFull" },
+    { range: "volvoP1SlipFullRange", value: "volvoP1SlipFullValue", key: "volvoP1SlipFullKmh" },
+  ];
+  p1Sliders.forEach((slider) => {
+    const rangeElem = document.getElementById(slider.range);
+    const valueElem = document.getElementById(slider.value);
+    if (rangeElem) {
+      rangeElem.addEventListener("input", () => { if (valueElem) valueElem.textContent = rangeElem.value; });
+      rangeElem.addEventListener("change", () => { saveSetting(slider.key, parseInt(rangeElem.value)); });
+    }
+  });
+  const p1Reset = document.getElementById("volvoP1ResetBtn");
+  if (p1Reset) {
+    p1Reset.addEventListener("click", () => {
+      showVolvoP1Settings(VOLVO_P1_DEFAULTS.source, VOLVO_P1_DEFAULTS.roadSpeedKmh, VOLVO_P1_DEFAULTS.torqueFull, VOLVO_P1_DEFAULTS.slipFullKmh);
+      saveSetting("volvoP1LockSource", VOLVO_P1_DEFAULTS.source);
+      saveSetting("volvoP1RoadSpeedKmh", VOLVO_P1_DEFAULTS.roadSpeedKmh);
+      saveSetting("volvoP1TorqueFull", VOLVO_P1_DEFAULTS.torqueFull);
+      saveSetting("volvoP1SlipFullKmh", VOLVO_P1_DEFAULTS.slipFullKmh);
+    });
+  }
+
   const bpkRange = document.getElementById("bpkCeilingRange");
   const bpkVal = document.getElementById("bpkCeilingValue");
   const bpkReset = document.getElementById("bpkCeilingResetBtn");
@@ -1312,6 +1437,7 @@ function initSettings() {
     "invertBrake",
     "followHandbrake",
     "invertHandbrake",
+    "followABS",
     "broadcastOpenHaldexOverCAN",
     "espNowEnabled",
     "espNowControl",
@@ -2283,6 +2409,23 @@ const UPD_FOLDER_RE = /^V(\d+(?:\.\d+)*)$/i;
 // Mirror that last answered - the .bin downloads follow the index.
 let UPD_RELEASES_BASE = UPD_MIRRORS[0].base;
 
+// This build's partition sizes (src/partitions_4mb.csv). A partition table
+// can't change over the air, so a release whose images are bigger than these
+// needs a USB flash and is not offered here - e.g. 9.00.0 and older, whose
+// 0xB0000 web UI image won't fit the 0x70000 space since 9.00.5 (V10.00.2,
+// from PR #54). Uses the sizes in releases.json.
+const UPD_APP_SLOT_BYTES = 0x1C0000;
+const UPD_FS_PART_BYTES = 0x70000;
+function updFitsThisLayout(release) {
+  if (release.firmware.size > UPD_APP_SLOT_BYTES) {
+    return false; // firmware too big for the app slot
+  }
+  if (release.filesystem.size > UPD_FS_PART_BYTES) {
+    return false; // web UI image too big for the LittleFS space
+  }
+  return true;
+}
+
 // numeric compare of "x.yy.z" strings: >0 if a newer than b
 function updCompareVersions(a, b) {
   const pa = String(a || "").split(".").map((n) => parseInt(n, 10) || 0);
@@ -2342,7 +2485,7 @@ function initUpdateCheck() {
 
   function otaCandidates() {
     if (!index || !Array.isArray(index.releases)) return [];
-    return index.releases.filter((r) => r && r.ota && r.firmware && r.filesystem);
+    return index.releases.filter((r) => r && r.ota && r.firmware && r.filesystem && updFitsThisLayout(r));
   }
 
   function renderPicker() {
@@ -3085,7 +3228,8 @@ const BACKUP_GENERAL_KEYS = [
   "tcForceMode", "tcForceModeValue", "hazardForceMode", "hazardForceModeValue",
   "extButtonForceMode", "extBtnForceModeValue", "forceModesPriority", "driveModeForce", "driveModeForceValues",
   "disableOnboardButton", "disableExternalButton",
-  "followBrake", "invertBrake", "followHandbrake", "invertHandbrake",
+  "followBrake", "invertBrake", "followHandbrake", "invertHandbrake", "followABS",
+  "volvoP1LockSource", "volvoP1RoadSpeedKmh", "volvoP1TorqueFull", "volvoP1SlipFullKmh",
   "fixHunting", "dangerZoneEnabled", "esp14MinFloorPct", "bpkCeilingNm",
   "steeringScaleEnabled", "lockReleaseEnabled", "lockReleaseRatePerSec", "liveDiagEnabled", "ledBrightness",
   "slipWheelbaseMm", "slipTrackFrontMm", "slipTrackRearMm", "slipSteeringRatio",
@@ -3431,6 +3575,136 @@ function updateTileGauges() {
     const frac = Math.max(0, Math.min(1, (raw - t.min) / (t.max - t.min || 1)));
     fillEl.style.strokeDasharray = `${(TG_ARC * frac).toFixed(2)} ${TG_CIRC.toFixed(2)}`;
   });
+}
+
+// The value a Basic-tab slider is set to, as " (20 km/h)", or "" if the
+// slider isn't on the page.
+function lockGateLimitText(sliderId, unit) {
+  const slider = document.getElementById(sliderId);
+  if (!slider || slider.value === "") {
+    return "";
+  }
+  return " (" + slider.value + unit + ")";
+}
+
+// One reason from the dashboard's lockGateReasons list, in plain words.
+function lockGateReasonText(reason) {
+  if (reason === "throttle") {
+    return 'throttle is below "Minimum Throttle Before Lock"' + lockGateLimitText("disableThrottleRange", "%");
+  } else if (reason === "underSpeed") {
+    return 'speed is below "Disengage Under Speed"' + lockGateLimitText("disengageUnderSpeedRange", " km/h");
+  } else if (reason === "aboveSpeed") {
+    return 'speed is above "Disengage Above Speed"' + lockGateLimitText("disengageAboveSpeedRange", " km/h");
+  } else if (reason === "handbrake") {
+    return 'the handbrake is on ("Follow Handbrake")';
+  } else if (reason === "abs") {
+    return 'the ABS is braking ("Follow ABS")';
+  }
+  return reason; // a reason this page doesn't know yet: show it as sent
+}
+
+// One Haldex health bit as "On" / "Off", or "--" when there's no data or this
+// generation's feedback doesn't carry health bits we know (V11.00.0).
+function healthOnOff(value, supported) {
+  if (supported === false) {
+    return "--";
+  }
+  if (value === undefined || value === null) {
+    return "--";
+  }
+  if (value) {
+    return "On";
+  }
+  return "Off";
+}
+
+// The Haldex's own warnings (V11.00.0), named in plain words. These come from
+// the unit itself - over-temperature, faults, limp - and are never hidden.
+function haldexWarningText(warning) {
+  if (warning === "fault") {
+    return "the Haldex reports a fault (clutch / pump / valve)";
+  } else if (warning === "plausibility") {
+    return "the Haldex reports a signal plausibility fault";
+  } else if (warning === "overTemp") {
+    return "over-temperature protection is active - the Haldex is pulling the clutch back to cool down";
+  } else if (warning === "limp") {
+    return "the Haldex is in limp mode";
+  } else if (warning === "lamp") {
+    return "the Haldex is asking for the AWD warning lamp";
+  } else if (warning === "tempSensor") {
+    return "the Haldex temperature sensor has failed";
+  } else if (warning === "faultStored") {
+    return "a fault is stored in the Haldex (scan it with VCDS / ODIS)";
+  }
+  return warning; // a warning this page doesn't know yet: show it as sent
+}
+
+// Show or hide the red Haldex Warning card on the dashboard.
+function updateHaldexWarnings(data) {
+  const card = document.getElementById("haldexWarningCard");
+  const text = document.getElementById("haldexWarningText");
+  if (!card || !text) {
+    return;
+  }
+
+  let warnings = [];
+  if (Array.isArray(data.haldexWarnings)) {
+    warnings = data.haldexWarnings;
+  }
+
+  if (warnings.length === 0) {
+    card.hidden = true;
+    text.textContent = "";
+    return;
+  }
+
+  const parts = [];
+  for (let i = 0; i < warnings.length; i++) {
+    parts.push(haldexWarningText(warnings[i]));
+  }
+  let message = parts.join("; ") + ".";
+  if (data.haldexTempC !== null && data.haldexTempC !== undefined) {
+    message = message + " Haldex temperature " + data.haldexTempC + " °C.";
+  }
+  text.textContent = message.charAt(0).toUpperCase() + message.slice(1);
+  card.hidden = false;
+}
+
+// Under the Haldex Engagement figures, say which speed / throttle setting is
+// holding lock at 0% (V10.00.2, from PR #54). Since 9.00.0 these settings cut
+// lock in every mode, force triggers included, so an old non-zero setting
+// could look like "FWD in every mode". Hidden when nothing is blocking.
+function updateLockGateHint(data) {
+  const hint = document.getElementById("lockGateHint");
+  if (!hint) {
+    return;
+  }
+
+  let reasons = [];
+  if (Array.isArray(data.lockGateReasons)) {
+    reasons = data.lockGateReasons;
+  }
+
+  if (!data.lockGated || reasons.length === 0) {
+    hint.hidden = true;
+    hint.textContent = "";
+    return;
+  }
+
+  const parts = [];
+  let hasSpeedOrThrottleLimit = false; // only those three can be turned off on the Basic tab
+  for (let i = 0; i < reasons.length; i++) {
+    parts.push(lockGateReasonText(reasons[i]));
+    if (reasons[i] === "throttle" || reasons[i] === "underSpeed" || reasons[i] === "aboveSpeed") {
+      hasSpeedOrThrottleLimit = true;
+    }
+  }
+  let message = "Lock is being held at 0% because " + parts.join(" and ") + ".";
+  if (hasSpeedOrThrottleLimit) {
+    message = message + " Set that limit to 0 on the Basic tab to turn the cut-off off.";
+  }
+  hint.textContent = message;
+  hint.hidden = false;
 }
 
 // Semi-circular engagement gauge: the fill sweeps with ACTUAL engagement, the

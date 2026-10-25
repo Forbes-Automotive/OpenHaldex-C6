@@ -302,6 +302,11 @@ void longLearnTask(void *arg)
   }
 
   // ---- Phase 2: BPK Adjust (Gen5 only) ------------------------------------
+  // V11.00.0: since ESP_14 now sends Min = Max (the 0CQ's exact mode, OEM code
+  // spec_gen5_0cq §2.2) the unit follows ESP_14 and ignores the Motor_11 torque
+  // for its target, so a smooth sweep normally skips this phase. It is kept for
+  // the case where ESP_14 is missing (block off) and the unit falls back to its
+  // own Motor_11 strategy. The Launch PWM floor is no longer used on Gen5.
   // Remediation only, entered when the all-on sweep on the unit's OWN settings
   // hunts (not smooth) or is short of target. `smooth` already encodes reach
   // >= LL_REACH_MIN, engaged by LL_ENGAGE_MAX_CF and no step > LL_STEP_MAX.
