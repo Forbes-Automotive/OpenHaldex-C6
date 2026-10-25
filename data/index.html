@@ -9,7 +9,7 @@
     <meta http-equiv="Expires" content="0">
 
     <title>OpenHaldex-C6</title>
-    <link rel="stylesheet" href="style.css?v=20261019">
+    <link rel="stylesheet" href="style.css?v=20261021">
 
     <!-- Favicons -->
     <link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png">
@@ -66,6 +66,13 @@
             -->
             </section>
 
+            <!-- V11.00.0: the Haldex's own warnings (over-temperature, fault, limp, lamp).
+                 Hidden while the unit reports nothing. Filled by updateHaldexWarnings() in app.js. -->
+            <section class="card danger-card" id="haldexWarningCard" hidden>
+                <h2>Haldex Warning</h2>
+                <p class="hint" id="haldexWarningText"></p>
+            </section>
+
             <section class="card">
                 <h2>Haldex Engagement</h2>
                 <div class="engagement-display">
@@ -73,6 +80,7 @@
                         <span>Target: <span id="lockTarget">--</span>%</span>
                         <span>Actual: <span id="lockActual">--</span>%</span>
                     </div>
+                    <p class="hint" id="lockGateHint" hidden></p>
                     <div class="engagement-gauge-wrap" id="engagementGaugeWrap" style="display:none;">
                         <svg class="engagement-gauge-svg" viewBox="0 0 200 118" aria-label="Haldex engagement gauge">
                             <path class="eg-track" d="M 20 100 A 80 80 0 0 1 180 100" fill="none" />
@@ -131,13 +139,38 @@
                         <div class="gauge-unit"> %</div>
                     </div>
                     <div class="gauge">
-                        <div class="gauge-label">Clutch 1</div>
+                        <div class="gauge-label">Fault</div>
                         <div class="gauge-value" id="clutch1Report">--</div>
                         <div class="gauge-unit"> bit</div>
                     </div>
                     <div class="gauge">
-                        <div class="gauge-label">Clutch 2</div>
+                        <div class="gauge-label">Plausibility</div>
                         <div class="gauge-value" id="clutch2Report">--</div>
+                        <div class="gauge-unit"> bit</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Limp Mode</div>
+                        <div class="gauge-value" id="limpMode">--</div>
+                        <div class="gauge-unit"> bit</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">AWD Lamp</div>
+                        <div class="gauge-value" id="awdWarning">--</div>
+                        <div class="gauge-unit"> bit</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Haldex Temp</div>
+                        <div class="gauge-value" id="haldexTempC">--</div>
+                        <div class="gauge-unit">&deg;C</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Temp Sensor</div>
+                        <div class="gauge-value" id="tempSensorFault">--</div>
+                        <div class="gauge-unit"> fault</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Fault Stored</div>
+                        <div class="gauge-value" id="faultStored">--</div>
                         <div class="gauge-unit"> bit</div>
                     </div>
                     <div class="gauge">
@@ -338,6 +371,7 @@
                     <option value="2">Generation 2</option>
                     <option value="21">Generation 2 - Volvo P2 (Pre-Facelift)</option>
                     <option value="3">Generation 3 - Volvo P2 (Facelift)</option>
+                    <option value="31">Generation 3 - Volvo P1 (S40 / V50)</option>
                     <option value="4">Generation 4</option>
                     <option value="41">Generation 4 - GM (Vauxhall / Opel)</option>
                     <option value="43">Generation 4 - Volvo (P3)</option>
@@ -345,8 +379,64 @@
                     <option value="50">Generation 5 (0CQ)</option>
                     <option value="52">Generation 5 (0CQ VAQ)</option>
                     <option value="51">Generation 5 (0AY)</option>
+                    <option value="53">Generation 5 - Volvo (SPC 31380867)</option>
                 </select>
                 <p class="hint" id="genVolvoSaabHint" style="display:none;">Volvo and SAAB support is new: standalone only, with starting values to be confirmed from logs. CAN bus: <span id="canSpeedKbps">--</span> kbit/s. Changing to or from Volvo P2 (Pre-Facelift) switches the bus speed and restarts the controller.</p>
+            </section>
+
+            <!-- V11.00.1: Volvo P1 standalone - how the lock is shown to the AWD module.
+                 Shown only for generation 31 (updateVolvoSaabHint in app.js). -->
+            <section class="card" id="volvoP1Card" style="display:none;">
+                <h2>Volvo P1 Standalone</h2>
+                <p class="hint">In Standalone the controller plays the whole car to the AWD module. The mode buttons,
+                    Expert and Learn Haldex all ask for a lock %; this card sets how that lock % is shown to the module.</p>
+
+                <div class="cal-row">
+                    <div class="cal-row-head">
+                        <span class="toggle-label">Lock Source</span>
+                    </div>
+                    <select id="volvoP1LockSource" class="input-select">
+                        <option value="0">Engine torque (recommended)</option>
+                        <option value="1">Wheel slip</option>
+                        <option value="2">Both together</option>
+                    </select>
+                </div>
+                <p class="hint">Engine torque: torque, pedal and rpm rise with the lock, like a full-throttle pull - in
+                    the logs the module follows torque almost one-for-one. Wheel slip: the front wheels run faster than
+                    the rears, like wheelspin, which sent it to full lock in the logs.</p>
+
+                <div class="cal-row">
+                    <div class="cal-row-head">
+                        <span class="toggle-label">Road Speed</span>
+                        <span class="cal-row-value"><span id="volvoP1RoadSpeedValue">30</span> km/h</span>
+                    </div>
+                    <input type="range" id="volvoP1RoadSpeedRange" min="5" max="120" step="5" value="30" class="slider cal-slider">
+                </div>
+                <p class="hint">The speed sent on the rear wheels and the road speed. The module doesn't lock while stopped.</p>
+
+                <div class="cal-row">
+                    <div class="cal-row-head">
+                        <span class="toggle-label">Torque at 100 %</span>
+                        <span class="cal-row-value"><span id="volvoP1TorqueFullValue">600</span></span>
+                    </div>
+                    <input type="range" id="volvoP1TorqueFullRange" min="0" max="1000" step="25" value="600" class="slider cal-slider">
+                </div>
+                <p class="hint">Engine torque counts sent at full lock (0 at 0 %). About 600 reached full lock in the logs.</p>
+
+                <div class="cal-row">
+                    <div class="cal-row-head">
+                        <span class="toggle-label">Front Wheel Slip at 100 %</span>
+                        <span class="cal-row-value"><span id="volvoP1SlipFullValue">10</span> km/h</span>
+                    </div>
+                    <input type="range" id="volvoP1SlipFullRange" min="0" max="40" step="1" value="10" class="slider cal-slider">
+                </div>
+                <p class="hint">How much faster the front wheels run at full lock, when Lock Source uses wheel slip.</p>
+
+                <div class="button-row">
+                    <button class="btn" id="volvoP1ResetBtn" type="button">Reset to Defaults</button>
+                </div>
+
+                <p class="hint" id="volvoP1Live">Live: --</p>
             </section>
 
             <section class="card" id="learnSection">
@@ -478,7 +568,9 @@
                     </div>
                     <input type="range" id="esp14MinFloorRange" min="0" max="100" step="5" value="0" class="slider cal-slider">
                 </div>
-                <p class="hint">Experimental. Raises the minimum clutch PWM while lock is commanded, for firmer launches. 0% = off.</p>
+                <p class="hint">Experimental. Raises the minimum clutch PWM while lock is commanded, for firmer launches. 0% = off.
+                    Since V11.00.0 the 0CQ is driven with ESP_14 Min = Max (an exact request it follows directly), so this
+                    floor is no longer used there; it is kept for comparison on the bench.</p>
                 <div class="button-row">
                     <button class="btn" id="esp14MinFloorResetBtn" type="button">Reset to default (0 %)</button>
                 </div>
@@ -565,7 +657,7 @@
                     <label class="toggle">
                         <input type="checkbox" id="followBrake">
                         <span class="toggle-slider"></span>
-                        <span class="toggle-label">Follow Brake Input</span>
+                        <span class="toggle-label">Follow Brake</span>
                     </label>
                     <label class="toggle">
                         <input type="checkbox" id="invertBrake">
@@ -575,14 +667,25 @@
                     <label class="toggle">
                         <input type="checkbox" id="followHandbrake">
                         <span class="toggle-slider"></span>
-                        <span class="toggle-label">Follow Handbrake Input</span>
+                        <span class="toggle-label">Follow Handbrake</span>
                     </label>
                     <label class="toggle">
                         <input type="checkbox" id="invertHandbrake">
                         <span class="toggle-slider"></span>
                         <span class="toggle-label">Invert Handbrake Input</span>
                     </label>
+                    <label class="toggle">
+                        <input type="checkbox" id="followABS">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Follow ABS</span>
+                    </label>
                 </div>
+                <p class="hint">Follow Brake / Follow Handbrake let the Haldex see the brake pedal and the
+                    handbrake: from the car's CAN or a switch wired to the input pin. A wired switch is also
+                    pushed onto the car's frames in OEM mode (Gen1/2/4/5), and both go into the frames we send
+                    in Standalone. With Follow Handbrake on, pulling the handbrake also opens the clutch. The
+                    Invert options only flip the input wire. Follow ABS (on by default) opens the clutch while
+                    the ABS is braking - the Haldex's own safety; turning it off lets our lock overrule the ABS.</p>
             </section>
 
             <section class="card">
@@ -940,7 +1043,12 @@
                     <div class="diag-item">
                         <span class="diag-label">Handbrake (CAN):</span>
                         <span class="diag-value" id="diagHandbrakeFromCAN">--</span>
-                        <span class="diag-label" id="diagHandbrakeFromCANNote" style="font-size:0.75em;color:#888;">(Gen2/4 PQ, Gen5 MQB)</span>
+                        <span class="diag-label" id="diagHandbrakeFromCANNote" style="font-size:0.75em;color:#888;">(Gen1/2/4 PQ, Gen5 MQB)</span>
+                    </div>
+                    <div class="diag-item">
+                        <span class="diag-label">ABS Braking (CAN):</span>
+                        <span class="diag-value" id="diagAbsBraking">--</span>
+                        <span class="diag-label" style="font-size:0.75em;color:#888;">(PQ Bremse_1, MQB ESP_21 - opens the clutch)</span>
                     </div>
                 </div>
             </section>
@@ -1174,7 +1282,7 @@
             </section>
         </div>
 
-        <script src="./app.js?v=20261019" type="text/javascript"></script>
+        <script src="./app.js?v=20261021" type="text/javascript"></script>
         <!-- The device now serves app.js/style.css with Cache-Control: no-cache
              (ETag revalidation), so this ?v= no longer needs bumping. It was
              changed once to escape the year-long cache older builds handed out. -->

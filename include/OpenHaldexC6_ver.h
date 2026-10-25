@@ -2,7 +2,7 @@
 #include <OpenHaldexC6_defs.h>
 
 // Current firmware version
-#define FW_VERSION "10.00.1" // also bump data/version.json ("fs")
+#define FW_VERSION "11.00.1" // also bump data/version.json ("fs")
 
 /*
 Version Control:
@@ -332,6 +332,203 @@ V10.00.1 - (beta, 2026-10-19) the car's drive mode select can force a mode (MQB)
         - Force Mode Priority now saves: the web page sent it, but the firmware
           never read it, so it was always Hazard > TC > Ext after a reload.
           Also in the backup file now.
+
+V10.00.2 - (beta, 2026-10-21) parts of PR #54 (Luca C):
+        - Dashboard says why lock is held at 0%: when Disengage Under / Above
+          Speed or Minimum Throttle Before Lock is cutting lock, a line under
+          Haldex Engagement names the setting and its value. Lock behaviour
+          unchanged; lock_enabled() is now built on lock_gate_blocking(), and
+          the dashboard sends lockGated + lockGateReasons. Uses the mode in
+          use (force triggers / drive mode win), so Stock / FWD never show it.
+        - OTA tab no longer offers releases that can't fit this partition
+          layout (9.00.0 and older need a USB flash since 9.00.5).
+        - tools/can_capture.py: record and compare CAN traffic from a laptop
+          through analyzer mode (GVRET, port 23).
+
+(2026-10-22: renumbered again. V11 = this OEM-spec rework; the MQB Evo / CAN FD
+ line that was 11.00.x becomes V12.)
+
+V11.00.0 - (beta, 2026-10-22) every generation brought in line with what the OEM
+          Haldex code actually reads and reports (documents/haldex-binaries/
+          CONTROL_AND_DTC_SPEC.md + leaf_trace/spec_<unit>.md), OEM and Standalone.
+          Built on 10.00.2.
+        - Shared:
+          > OEM mode, every non-Stock mode: the job is to achieve the lock %. The
+            OEM-code work confirmed which bytes do that, so the OEM defaults are
+            the lock-driving blocks only: the unit's lever byte + the bench-proven
+            lock-scaled wheel speeds (+ Motor_1 demand where used). Stock is
+            untouched passthrough. Frames that only carry flags the unit doesn't
+            need for lock (Bremse_1 ABS bits, steering, gear) pass through.
+          > Direct-lever helpers lever_lock_percent() / vag_lever_byte(): Bremse_4
+            byte 0 = 0x7F at 0 % (valid "open"), 0x80 + p x 1.25, the unit's own
+            full value at 100 %. Before, 100 % sent 0x7F (clutch OPEN) on Gen4 and
+            partial lock sent < 0x7F, which the units ignore.
+          > ABS braking decoded (PQ Bremse_1 b0.2, MQB ESP_21 b7.0). New "Follow ABS"
+            setting (default ON, Output Options, in backups): opens the clutch while
+            the ABS is braking (new lock gate "abs") - our lock request outranks the
+            unit's own ABS release, so we do it for it. Off = our lock overrules the
+            ABS, and standalone sends "not braking".
+          > OEM mode, Gen1/2/4/5: a brake / handbrake switch wired to our input pin
+            is ORed into the car's own bit (Motor_2 / Kombi_1, ESP_05 + CRC /
+            Kombi_01) when Follow Brake / Follow Handbrake is on - for cars with
+            a physical switch fitted.
+          > Follow Brake / Follow Handbrake (renamed from "... Input"): the bits are
+            passed through in OEM mode and now put into the Standalone frames;
+            Follow Handbrake also opens the clutch while the handbrake is on (new
+            lock gate "handbrake"). Brake / handbrake / ABS from CAN cleared when
+            the chassis bus goes quiet.
+          > Haldex health decoded per generation (fault, plausibility, over-temp,
+            limp, AWD lamp, temperature, temp-sensor fault, fault stored) in each
+            generation's own case of parseCAN_hdx - the old shared PQ bit decode
+            gave Gen1 a false "limp". Dashboard: red "Haldex Warning" card + new
+            Haldex Data tiles; /api/dashboard: limpMode, awdWarning,
+            tempSensorFault, faultStored, haldexTempC (all gens), healthSupported,
+            haldexWarnings, absBraking. Diagnostics: "ABS Braking (CAN)".
+          > "Invert Brake / Handbrake Input" now only flips the input WIRE. In OEM
+            mode it used to flip the car's own CAN bit too, so the Haldex saw the
+            handbrake on while it was off.
+          > One-off settings upgrade (EEP.cpp migrateSettingsToV11, key "v11Mig"):
+            OEM masks still on the old default move to the new one, and every
+            lock-driving block is switched on in customised masks (a VAQ keeps
+            its saved mask); standalone masks get the newly-needed frames switched on
+            and unread frames off; saved learn table cleared on Gen1/2/4/0CQ/0AY
+            because the lever changed - RUN LEARN AGAIN after updating.
+        - Gen1 (02D):
+          > Bremse_4 0x2A0 byte 0 torque ceiling is the lever on its own scale
+            (gen1_lever_byte: 0x7F open, 0x81-0xC9, 0xFD full - 0xCA+ is already
+            full on the 02D) with Motor_1 held at max demand.
+          > Standalone now sends Motor_2 0x288 (fixes the permanent false "limp").
+          > rpm no longer scaled with lock (pump cut off below 400 rpm): OEM passes
+            the real rpm, standalone fixed 0x4E21. 50:50 loss torque 0x00.
+          > 0x2C0 decoded only on ID 0x2C0, no more 255 % at raw 0x7F; bit 2 / 4
+            are status (ceiling active / inputs incomplete), not faults.
+          > OEM Bremse_1 edit keeps the ABS clutch-release and brake bits.
+          > New blocks 4 Bremse_4, 5 Motor_2, 6 Kombi_1. Defaults OEM 0x19 (Motor_1,
+            Bremse_3, Bremse_4), SA 0x3D.
+            Kombi_1 handbrake now decoded from CAN on Gen1.
+        - Gen2 (7H0 / 1K0):
+          > Engagement read from 0x2C0 byte 1 (byte 4 is never written - it always
+            showed 0 %, so Learn could never work on Gen2). Health per OEM code:
+            over-temp, fault + lamp, coupling open.
+          > Bremse_4 byte 0 is now the linear lever (0x7F open .. 0xFD full) - it
+            was written as all zeros. Motor_1 held at full demand with loss torque
+            0 (they used to cancel); OEM rpm passed through.
+          > OEM edits keep the car's ABS/ESP, brake and handbrake bits and never
+            lift the ABS module's own 0x2A0 limit.
+          > Standalone Kombi_1 sent "handbrake pulled" all the time - now released
+            (or the real handbrake with Follow Handbrake). 0x4A8 alive counter
+            changes every frame; Motor_5 no longer bumps Bremse_1's counter.
+          > Defaults OEM 0x31 (Motor_1 + Bremse_3 + Bremse_4), SA 0x1E7D.
+        - Gen4 (0BR / 0BS / 2K):
+          > Bremse_4 lever 0x7F / 0x81-0xFC / 0xFE in OEM and standalone - Expert
+            100 % and forced 50:50 sent 0x7F = clutch OPEN. Learn sweeps the lever.
+          > Standalone adds Motor_2, Motor_5, Bremse_5, Bremse_8, Getriebe_1 (blocks
+            12-16) - a missing Motor_5 made the unit report limp by itself.
+            Motor_1 clutch-pedal bit fixed; steady Motor_1 and four equal steady
+            wheel speeds (real speed when chassis CAN is there).
+          > Feedback: engagement 0x80-0xFD = 0-100 %, temperature (b4 - 60),
+            temp-sensor fault, fault stored, real health bits.
+          > Defaults OEM 0x32 (Motor_1 + Bremse_3 + Bremse_4), SA 0x1F9FF
+            (Bremse_11 / Kombi_2 off).
+        - Gen5 0CQ (+ VAQ where the spec allows):
+          > ESP_14 Min = Max = 0-250 (exact request). Full lock used to send
+            0xFB-0xFE = "no request", so the unit fell back to Motor_11.
+          > OEM edits keep the car's real gear, brake pressure, ABS and handbrake
+            bits; Motor_12 is a steady 2000 rpm and Motor_11 V3 b6/b7 fixed.
+          > Standalone: steady 2000 rpm Motor_12, wheel speeds no longer follow
+            lock, Motor_11 V3 b6/b7 fixed, ESP_02 0 g, LWI angle 0, Motor_Code_01
+            factor + CRC fixed, ESP_07 counter wrap fixed; brake (ESP_05), handbrake
+            (Kombi_01) and ABS (ESP_21) bits from the Follow settings / car ABS.
+          > Allrad_03 status 2 and 0x17F0000F report a Haldex fault (clutch
+            released) - was shown as "closed". ESP_14-accepted bit decoded
+            (/api/dashboard leverAccepted). 0xFE no longer shows 101 %.
+          > Defaults OEM 0x1D (ESP_19 lock-scaled wheel speeds, Motor_12, Motor_11,
+            ESP_14; a VAQ keeps its saved OEM mask on upgrade). SA stays all-on: the
+            0CQ only needs 0x0FE0FB5F but the VAQ shares the mask. Launch PWM Floor
+            no longer used.
+        - Gen5 0AY (a PQ unit, not MQB):
+          > Bremse_4 lever 0x7F / 0x81-0xFC / 0xFD (0xFE = HOLD on the 0AY);
+            100 % used to send 0x00, which the unit ignores.
+          > Engagement on the unit's own scale (99 -> 100 snap removed);
+            temperature, temp-sensor fault, fault stored decoded.
+          > Standalone: steady Motor_1, equal wheel speeds, new Getriebe_1 0x440
+            (block 18); Bremse_8 / Bremse_11 / Kombi_2 off (not received);
+            Bremse_2 / Bremse_5 values corrected; Motor_5 counter fixed.
+          > Defaults OEM 0x06 (Bremse_3 lock-scaled + Bremse_4), SA 0x6BF7F. Kombi_01 0x30B rewrite
+            removed (the 0AY doesn't receive it).
+        - Volvo:
+          > P2 Gen3: lock via lever_lock_percent() (0..0xBC, all gates applied);
+            real-car rolling counters on 0x0042406C / 0x00224024 / 0x0080401E;
+            standalone adds 0x00C0402A, 0x10E24000, 0x11220028, 0x11420006 from a
+            500 kbit/s S60 log (vehicle-logs-public/volvo-CAN-exploration).
+            Feedback 0x1020000A decoded from the OEM signal table: byte 6 =
+            measured clutch value (100 % = VOLVO_P2G3_ENGAGEMENT_FULL_SCALE, 150 -
+            bench-check), byte 7 bits 6-7 fault / limp, bits 2-3 input monitors.
+            Bus confirmed 500 kbit/s from the code (C1BTR 0x1641 at 20 MHz); the
+            Volvo SPC (gen 53) is also 500k (FlexCAN_0, 8 MHz crystal).
+            0x01A2402A content still needs a bench log.
+          > NEW generation 53 - Volvo Gen5 SPC 31380867 (standalone only): lever
+            0x041 bytes 6-7, feedback 0x126 torque + fault status decoded; the
+            other 23 monitored frames sent as zero placeholders for OVR tuning.
+          > Volvo P2 XC166 31431022: diagnostic IDs noted only - needs a capture.
+
+V11.00.1 - (beta, 2026-10-24) Volvo P1 (S40 / V50 AWD), generation 31 - "Generation 3 -
+          Volvo P1 (S40 / V50)". From Adam's 2005 V50 T5 AWD logs
+          (documents/vehicle-logs/gen3/P1_V50_T5_AWD_DECODE.md). 500 kbit/s, 29-bit IDs.
+        - Why the P2 choices showed no Haldex: the P1 uses none of the P2 IDs. Its AWD
+          module sends one frame, 0x1960000A; the P2 decode only looked for 0x1020000A.
+        - Haldex feedback: 0x1960000A byte 6 bits 0-1 + byte 7 = 10-bit engagement,
+          540 = 100 % (VOLVO_P1_ENGAGEMENT_FULL_SCALE); byte 5 = status, shown on the
+          dashboard legend. No fault bits found yet (health tiles show "--").
+        - Standalone: all 22 frames the car puts on its high-speed bus, each a
+          frame-edit block (all on), at the car's own rates. Steady bytes from a real
+          30 km/h cruise frame; counters, toggles, the network heartbeat / clock
+          (0x1BE0493C) and the four wheel pulse counters (0x19A00002) run like the
+          car (patterns from the full C30 trace). Brake / handbrake from Follow
+          Brake / Follow Handbrake. The car's VIN pages aren't sent.
+        - 0x0340412E is the steering angle sensor (not the steering pump): byte 0 =
+          counter + direction bit, bytes 1-2 fine rate, bytes 4-5 coarse rate, bytes
+          6-7 angle, byte 3 a check byte = 0x02 - (byte 0 nibbles swapped + byte 1
+          bit 7 + bytes 4-7), 0x04 with the direction bit set. Fits all 26,820
+          logged frames from both cars. Standalone now works it out (wheel straight,
+          not turning) instead of replaying the idle sequence. No other P1 frame has
+          a check byte.
+        - What drives the module (from the logs): engine torque, almost 1:1 (about
+          one engagement count per torque count, 100-400 ms behind, saturating near
+          540); big front wheelspin sends it to full; it never locks while stopped.
+        - New "Volvo P1 Standalone" card (Settings, generation 31 only, saved and in
+          backups): Lock Source (engine torque - default / wheel slip / both), Road
+          Speed (5-120 km/h, default 30), Torque at 100 % (0-1000, default 600),
+          Front Wheel Slip at 100 % (0-40 km/h, default 10), Reset to Defaults, and a
+          live line showing the lock asked for, torque / pedal / rpm / wheel speeds
+          sent and the module's engagement count. The mode buttons, Expert and Learn
+          all drive it through lever_lock_percent(), as on the other units.
+        - Learn / Long Learn on the P1: 600 ms per step (VOLVO_P1_LEARN_SETTLE_MS,
+          other generations 400). In OEM mode they say it needs Standalone for now.
+        - Wheel pulse counters (0x19A00002) follow the front / rear speeds; counters
+          3-4 confirmed as the fronts from the wheelspin log.
+        - Flash space: DEBUG() messages were always built in and printed - the switch
+          used "#ifdef enableDebug", which is true even when enableDebug is 0. Now
+          "#if enableDebug": saves flash (firmware was at 97.5 % of its slot) and
+          stops the constant serial output. No partition change, OTA unaffected.
+        - Flash space: Espressif's libraries rebuilt smaller with custom_sdkconfig in
+          platformio.ini - no library log text, silent asserts, no error-name table,
+          no crash dump (there was never a partition for one), no WiFi FTM / WPA3 /
+          OWE (the home WiFi bridge can't join a WPA3-ONLY router). OpenHaldex now
+          has its own PlatformIO core folder (C:/.platformio-openhaldex) because
+          that rebuild happens inside the packages folder, which the other ESP32
+          projects share. Same partitions, so OTA keeps working.
+        - Chassis decode (OEM mode, or standalone with the car connected): speed
+          0x02104136, rpm 0x0090411E, pedal + brake switch 0x0300410E, handbrake
+          0x0110483C - so Expert mode and the speed / throttle limits work. DSTC off
+          (0x02000026 byte 6 bit 4) drives "Use TC to Force Mode", like the VW ESP
+          button, and shows on the Diagnostics ASR / TC pills.
+        - OEM mode is untouched passthrough for now: Stock and the lock feedback
+          work; editing frames for 50:50 / 60:40 etc. comes next.
+        - Frame-edit masks: slot 5 kept spare (V12's Gen6 goes there) and P1 in slot
+          6, so saved settings line up with V12. Older saves keep their choices -
+          the loader now reads saves with fewer generations. Block CAN IDs are
+          32-bit now (Volvo's 29-bit IDs didn't fit).
 
 */
 

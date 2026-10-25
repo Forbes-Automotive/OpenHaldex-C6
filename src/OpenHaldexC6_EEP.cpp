@@ -2,6 +2,114 @@
 #include <OpenHaldexC6_Calculations.h> // for haldexLearnTable and learn globals
 #include <OpenHaldexC6_ESPNow.h>       // espNowEnabled / espNowControl
 
+// V11.00.0 one-off settings upgrade, called by readEEP() the first time a V11
+// firmware boots (after the saved frame-edit masks are loaded).
+//
+// OEM (normal) masks: the job in every non-Stock mode is to achieve the lock %.
+// A mask still on the OLD default moves to the new V11 default (lever byte +
+// lock-scaled wheel speeds + Motor_1 demand where used). A mask the user changed
+// (by hand or with Long Learn) keeps its extra blocks, but every lock-driving
+// block (frameEditLockDriven - incl. the new levers) is switched on in it.
+//
+// Standalone masks: still on the old default -> new default. Otherwise the
+// frames the unit needs are switched on (the lever, and on Gen4 the five
+// monitored frames - a missing Motor_5 made it set its own limp bit). Only Gen4
+// also switches off the two frames it never reads; the others leave a
+// customised mask's extra frames alone (harmless - the unit ignores them).
+//
+// Learn table: on the VAG units the lever itself changed in V11 (Bremse_4 /
+// ESP_14), so a table learned against the old 0x7F x CF scaling no longer fits.
+// It is cleared - run Learn once after the update.
+static void migrateSettingsToV11()
+{
+  DEBUG("EEPROM - upgrading saved settings to V11.00.0...");
+
+  // ----- Gen1 02D (FE_GEN_1): old OEM 0x0F, old standalone 0x0F -----
+  if (frameEditMask[FE_GEN_1] == 0x0FULL)
+  {
+    frameEditMask[FE_GEN_1] = frameEditMaskDefaults[FE_GEN_1]; // -> Motor_1 + Bremse_3 + Bremse_4 (Motor_3 / Bremse_1 off)
+  }
+  frameEditMask[FE_GEN_1] = frameEditMask[FE_GEN_1] | frameEditLockDriven[FE_GEN_1]; // lock-driving blocks on
+  if (frameEditMaskSA[FE_GEN_1] == 0x0FULL)
+  {
+    frameEditMaskSA[FE_GEN_1] = frameEditMaskDefaultsSA[FE_GEN_1]; // -> + Bremse_4 + Motor_2, Motor_3 off
+  }
+  else
+  {
+    frameEditMaskSA[FE_GEN_1] = frameEditMaskSA[FE_GEN_1] | (1ULL << 4); // bit 4 Bremse_4 on (the lever)
+    frameEditMaskSA[FE_GEN_1] = frameEditMaskSA[FE_GEN_1] | (1ULL << 5); // bit 5 Motor_2 on (missing = false limp)
+  }
+
+  // ----- Gen2 7H0 / 1K0 (FE_GEN_2): old OEM 0x1F, old standalone 0x1FFF -----
+  if (frameEditMask[FE_GEN_2] == 0x1FULL)
+  {
+    frameEditMask[FE_GEN_2] = frameEditMaskDefaults[FE_GEN_2]; // -> Motor_1 + Bremse_3 + Bremse_4
+  }
+  frameEditMask[FE_GEN_2] = frameEditMask[FE_GEN_2] | frameEditLockDriven[FE_GEN_2]; // lock-driving blocks on
+  if (frameEditMaskSA[FE_GEN_2] == 0x1FFFULL)
+  {
+    frameEditMaskSA[FE_GEN_2] = frameEditMaskDefaultsSA[FE_GEN_2]; // -> Motor_3 / Bremse_9 / Bremse_10 off (not received)
+  }
+  else
+  {
+    frameEditMaskSA[FE_GEN_2] = frameEditMaskSA[FE_GEN_2] | (1ULL << 5); // bit 5 Bremse_4 on (the lever)
+  }
+
+  // ----- Gen4 0BR (FE_GEN_4): old OEM 0x3F, old standalone 0xFFF -----
+  if (frameEditMask[FE_GEN_4] == 0x3FULL)
+  {
+    frameEditMask[FE_GEN_4] = frameEditMaskDefaults[FE_GEN_4]; // -> Motor_1 + Bremse_3 + Bremse_4
+  }
+  frameEditMask[FE_GEN_4] = frameEditMask[FE_GEN_4] | frameEditLockDriven[FE_GEN_4]; // lock-driving blocks on
+  frameEditMaskSA[FE_GEN_4] = frameEditMaskSA[FE_GEN_4] | 0x1F000ULL;  // bits 12-16 on: Motor_2, Motor_5, Bremse_5, Bremse_8, Getriebe_1
+  frameEditMaskSA[FE_GEN_4] = frameEditMaskSA[FE_GEN_4] | (1ULL << 5); // bit 5 Bremse_4 on (the lever)
+  frameEditMaskSA[FE_GEN_4] = frameEditMaskSA[FE_GEN_4] & ~(1ULL << 9);  // bit 9 Bremse_11 off (Gen4 doesn't read it)
+  frameEditMaskSA[FE_GEN_4] = frameEditMaskSA[FE_GEN_4] & ~(1ULL << 10); // bit 10 Kombi_2 off (Gen4 doesn't read it)
+
+  // ----- Gen5 0CQ / VAQ (FE_GEN_50): old OEM 0xFF -----
+  // The VAQ (gen 52) shares this mask, so a VAQ unit keeps its saved (bench-proven)
+  // OEM mask - only the lock-driving blocks are made sure of.
+  if (haldexGeneration != 52)
+  {
+    if (frameEditMask[FE_GEN_50] == 0xFFULL || frameEditMask[FE_GEN_50] == 0x3FFULL)
+    {
+      frameEditMask[FE_GEN_50] = frameEditMaskDefaults[FE_GEN_50]; // -> ESP_19 + Motor_12 + Motor_11 + ESP_14
+    }
+  }
+  frameEditMask[FE_GEN_50] = frameEditMask[FE_GEN_50] | frameEditLockDriven[FE_GEN_50]; // lock-driving blocks on
+  // Standalone default stays all-on (shared with the VAQ); just make sure the lever is on
+  frameEditMaskSA[FE_GEN_50] = frameEditMaskSA[FE_GEN_50] | (1ULL << 4); // bit 4 ESP_14 on (the lever)
+
+  // ----- Gen5 0AY (FE_GEN_51): old OEM 0x0F, old standalone 0x3FFFF -----
+  if (frameEditMask[FE_GEN_51] == 0x0FULL)
+  {
+    frameEditMask[FE_GEN_51] = frameEditMaskDefaults[FE_GEN_51]; // -> Bremse_3 + Bremse_4
+  }
+  frameEditMask[FE_GEN_51] = frameEditMask[FE_GEN_51] | frameEditLockDriven[FE_GEN_51]; // lock-driving blocks on
+  if (frameEditMaskSA[FE_GEN_51] == 0x3FFFFULL)
+  {
+    frameEditMaskSA[FE_GEN_51] = frameEditMaskDefaultsSA[FE_GEN_51]; // -> + Getriebe_1, unread frames off
+  }
+  else
+  {
+    frameEditMaskSA[FE_GEN_51] = frameEditMaskSA[FE_GEN_51] | (1ULL << 18); // bit 18 Getriebe_1 on (new)
+    frameEditMaskSA[FE_GEN_51] = frameEditMaskSA[FE_GEN_51] | (1ULL << 2);  // bit 2 Bremse_4 on (the lever)
+  }
+
+  // ----- Learn table: the VAG levers changed, so the old table no longer fits -----
+  if (haldexGeneration == 1 || haldexGeneration == 2 || haldexGeneration == 4 ||
+      haldexGeneration == 50 || haldexGeneration == 51)
+  {
+    if (haldexLearnTableValid)
+    {
+      haldexLearnTableValid = false; // run Learn again after the update
+      DEBUG("EEPROM - V11 lever change: old learn table cleared, run Learn again");
+    }
+  }
+
+  DEBUG("EEPROM - upgraded saved settings to V11.00.0!");
+}
+
 void readEEP() // function to read stored preferences into runtime variables
 {              // start readEEP
 #if detailedDebugEEP
@@ -63,6 +171,11 @@ void readEEP() // function to read stored preferences into runtime variables
     pref.putBool("followHandbrake", followHandbrake);          // save follow handbrake
     pref.putBool("invertBrake", invertBrake);                  // save invert brake
     pref.putBool("invertHandbrake", invertHandbrake);          // save invert handbrake
+    pref.putBool("followABS", followABS);                      // save follow ABS
+    pref.putUChar("p1Source", volvoP1LockSource);              // save Volvo P1 lock source
+    pref.putUChar("p1SpeedKmh", volvoP1RoadSpeedKmh);          // save Volvo P1 road speed
+    pref.putUShort("p1TorqueFull", volvoP1TorqueFull);         // save Volvo P1 torque at 100 %
+    pref.putUChar("p1SlipKmh", volvoP1SlipFullKmh);            // save Volvo P1 slip at 100 %
     pref.putBool("tcForceMode", tcForceMode);                  // save tc force mode
     pref.putBool("extBtnForceMode", extBtnForceMode);          // save ext button force mode
     pref.putBool("hazardForceMode", hazardForceMode);          // save hazard force mode
@@ -113,6 +226,7 @@ void readEEP() // function to read stored preferences into runtime variables
     pref.putBool("steerScaleEn", steeringScaleEnabled);                              // save steering-scale enable
     pref.putBytes("feMask", frameEditMask, sizeof(frameEditMask));                    // save frame-edit masks (defaults)
     pref.putBytes("feMaskSA", frameEditMaskSA, sizeof(frameEditMaskSA));              // save standalone frame-edit masks (defaults)
+    pref.putBool("v11Mig", true);                                                     // fresh install already has the V11 defaults - skip the V11 upgrade (it would clear a learn table made before the next boot)
   } // end if first run
   else // normal run: load stored values
   {
@@ -127,6 +241,27 @@ void readEEP() // function to read stored preferences into runtime variables
     followHandbrake = pref.getBool("followHandbrake", false);               // load follow handbrake
     invertBrake = pref.getBool("invertBrake", false);                       // load invert brake
     invertHandbrake = pref.getBool("invertHandbrake", false);               // load invert handbrake
+    followABS = pref.getBool("followABS", true);                            // load follow ABS (default on - the Haldex's own safety)
+    volvoP1LockSource = pref.getUChar("p1Source", VOLVO_P1_SOURCE_TORQUE);  // load Volvo P1 lock source (default engine torque)
+    volvoP1RoadSpeedKmh = pref.getUChar("p1SpeedKmh", 30);                  // load Volvo P1 road speed (default 30 km/h)
+    volvoP1TorqueFull = pref.getUShort("p1TorqueFull", 600);                // load Volvo P1 torque at 100 % (default 600)
+    volvoP1SlipFullKmh = pref.getUChar("p1SlipKmh", 10);                    // load Volvo P1 slip at 100 % (default 10 km/h)
+    if (volvoP1LockSource > VOLVO_P1_SOURCE_BOTH)
+    {
+      volvoP1LockSource = VOLVO_P1_SOURCE_TORQUE; // out of range: back to the default
+    }
+    if (volvoP1RoadSpeedKmh < 5 || volvoP1RoadSpeedKmh > 120)
+    {
+      volvoP1RoadSpeedKmh = 30; // out of range: back to the default
+    }
+    if (volvoP1TorqueFull > 1000)
+    {
+      volvoP1TorqueFull = 600; // out of range: back to the default
+    }
+    if (volvoP1SlipFullKmh > 40)
+    {
+      volvoP1SlipFullKmh = 10; // out of range: back to the default
+    }
     tcForceMode = pref.getBool("tcForceMode", false);                       // load tc force mode
     extBtnForceMode = pref.getBool("extBtnForceMode", false);               // load ext button force mode
     hazardForceMode = pref.getBool("hazardForceMode", false);               // load hazard force mode
@@ -192,10 +327,21 @@ void readEEP() // function to read stored preferences into runtime variables
     esp14MinFloorPct = pref.getUChar("esp14Floor", 0);              // load ESP_14 launch PWM floor (%)
     pref.getString("llNotes", longLearnNotes, sizeof(longLearnNotes)); // load Long Learn notes (empty if absent)
     bool frameEditMasksChanged = false;
-    if (pref.getBytesLength("feMask") == sizeof(frameEditMask))
+    // V11.00.1: the masks are one 8-byte number per generation, and the list got
+    // longer (spare V12 slot + Volvo P1). A save from an older version has fewer
+    // numbers: load the ones it has and give the new generations their defaults,
+    // so nobody loses their frame-edit choices.
+    uint8_t savedSlots = pref.getBytesLength("feMask") / sizeof(uint64_t); // generations in the saved normal-mode masks
+    if (savedSlots > 0 && savedSlots <= FE_GEN_COUNT &&
+        pref.getBytesLength("feMask") == savedSlots * sizeof(uint64_t))
     {
-      pref.getBytes("feMask", frameEditMask, sizeof(frameEditMask)); // load frame-edit masks
-      if (frameEditMask[FE_GEN_50] == 0x000003FFULL)
+      pref.getBytes("feMask", frameEditMask, savedSlots * sizeof(uint64_t)); // load the saved frame-edit masks
+      for (uint8_t i = savedSlots; i < FE_GEN_COUNT; i++)
+      {
+        frameEditMask[i] = frameEditMaskDefaults[i]; // generation added since that save: use its default
+        frameEditMasksChanged = true;
+      }
+      if (savedSlots > FE_GEN_50 && frameEditMask[FE_GEN_50] == 0x000003FFULL)
       {
         frameEditMask[FE_GEN_50] = frameEditMaskDefaults[FE_GEN_50]; // migrate old 0CQ normal default: Motor_14/ESP_07 passthrough
         frameEditMasksChanged = true;
@@ -207,14 +353,33 @@ void readEEP() // function to read stored preferences into runtime variables
         frameEditMask[i] = frameEditMaskDefaults[i];                 // legacy install: use normal defaults
       frameEditMasksChanged = true;
     }
-    if (pref.getBytesLength("feMaskSA") == sizeof(frameEditMaskSA))
-      pref.getBytes("feMaskSA", frameEditMaskSA, sizeof(frameEditMaskSA)); // load standalone frame-edit masks
+    savedSlots = pref.getBytesLength("feMaskSA") / sizeof(uint64_t); // generations in the saved standalone masks
+    if (savedSlots > 0 && savedSlots <= FE_GEN_COUNT &&
+        pref.getBytesLength("feMaskSA") == savedSlots * sizeof(uint64_t))
+    {
+      pref.getBytes("feMaskSA", frameEditMaskSA, savedSlots * sizeof(uint64_t)); // load the saved standalone masks
+      for (uint8_t i = savedSlots; i < FE_GEN_COUNT; i++)
+      {
+        frameEditMaskSA[i] = frameEditMaskDefaultsSA[i]; // generation added since that save: all its frames on
+        frameEditMasksChanged = true;
+      }
+    }
     else
     {
       for (uint8_t i = 0; i < FE_GEN_COUNT; i++)
         frameEditMaskSA[i] = frameEditMaskDefaultsSA[i];             // legacy install: use standalone all-on defaults
       frameEditMasksChanged = true;
     }
+    // V11.00.0 one-off upgrade (OEM code spec, documents/haldex-binaries/). Runs once,
+    // then "v11Mig" is saved so it never runs again.
+    if (!pref.getBool("v11Mig", false))
+    {
+      migrateSettingsToV11();
+      frameEditMasksChanged = true;
+      pref.putBool("v11Mig", true);                         // done - don't run again
+      pref.putBool("learnOK", haldexLearnTableValid);       // save the learn table state after the upgrade
+    }
+
     if (frameEditMasksChanged)
     {
       pref.putBytes("feMask", frameEditMask, sizeof(frameEditMask));       // persist missing normal defaults
@@ -289,6 +454,11 @@ void writeEEP(void *arg) // task function to periodically write preferences
     pref.putBool("followHandbrake", followHandbrake);          // write follow handbrake
     pref.putBool("invertBrake", invertBrake);                  // write invert brake
     pref.putBool("invertHandbrake", invertHandbrake);          // write invert handbrake
+    pref.putBool("followABS", followABS);                      // write follow ABS
+    pref.putUChar("p1Source", volvoP1LockSource);              // write Volvo P1 lock source
+    pref.putUChar("p1SpeedKmh", volvoP1RoadSpeedKmh);          // write Volvo P1 road speed
+    pref.putUShort("p1TorqueFull", volvoP1TorqueFull);         // write Volvo P1 torque at 100 %
+    pref.putUChar("p1SlipKmh", volvoP1SlipFullKmh);            // write Volvo P1 slip at 100 %
     pref.putBool("tcForceMode", tcForceMode);                  // write tc force mode
     pref.putBool("extBtnForceMode", extBtnForceMode);          // write ext button force mode
     pref.putBool("hazardForceMode", hazardForceMode);          // write hazard force mode

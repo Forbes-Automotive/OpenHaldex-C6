@@ -127,6 +127,12 @@ static void frames10()
   case GEN_SAAB_93_XWD:
     Saab93_frames10();
     break;
+  case GEN_VOLVO_SPC_GEN5:
+    VolvoSpc_frames10();
+    break;
+  case GEN_VOLVO_P1:
+    VolvoP1_frames10();
+    break;
   case 50:
     Gen5_0CQ_frames10();
     break;
@@ -167,6 +173,12 @@ static void frames20()
   case GEN_SAAB_93_XWD:
     Saab93_frames20();
     break;
+  case GEN_VOLVO_SPC_GEN5:
+    VolvoSpc_frames20();
+    break;
+  case GEN_VOLVO_P1:
+    VolvoP1_frames20();
+    break;
   case 50:
     Gen5_0CQ_frames20();
     break;
@@ -204,6 +216,9 @@ static void frames25()
   case 52:
     Gen5_0CQ_VAQ_frames25();
     break;
+  case GEN_VOLVO_P1:
+    VolvoP1_frames25();
+    break;
   }
 }
 
@@ -238,6 +253,9 @@ static void frames100()
     break;
   case GEN_SAAB_93_XWD:
     Saab93_frames100();
+    break;
+  case GEN_VOLVO_SPC_GEN5:
+    VolvoSpc_frames100();
     break;
   case 50:
     Gen5_0CQ_frames100();
@@ -328,41 +346,56 @@ void Gen1_frames20()
 {
   twai_message_t frame = {};
   // PQ Motor_1 (0x280, DLC 8) - main engine ECU broadcast (vw_pq.dbc: Motor_1).
+  // Byte layout and what the 02D reads: OEM code, spec_gen1_02d §3 / §5.
   frame.identifier = MOTOR1_ID;
   frame.extd = 0;
   frame.rtr = 0;
   frame.data_length_code = 8;
-  frame.data[0] = 0x00;                                        // status / Momentenangaben_ungenau (torque-inaccurate) flag bits
-  frame.data[1] = get_lock_target_adjusted_value(0xFE, false); // Fahrerwunschmoment (driver-requested torque)
-  frame.data[2] = 0x21;                                        // Motordrehzahl low byte (engine RPM * 0.25)
-  frame.data[3] = get_lock_target_adjusted_value(0x4E, false); // Motordrehzahl high byte
-  frame.data[4] = get_lock_target_adjusted_value(0xFE, false); // Fahrpedalwert (accelerator pedal %)
-  frame.data[5] = get_lock_target_adjusted_value(0xFE, false); // inneres_Motor_Moment_ohne_extern (inner torque w/o external)
+  frame.data[0] = 0x00;                     // status bits (bit 3 Kupplungsschalter = clutch switch) - all clear
+  frame.data[1] = gen1_demand_value(0xFE);  // inneres_Motor_Moment (engine torque, % of max) - the demand
+  frame.data[2] = 0x21;                     // Motordrehzahl low byte (engine rpm x 0.25)
+  frame.data[3] = 0x4E;                     // Motordrehzahl high byte: FIXED 0x4E21 = 4872 rpm (V11). It used to be scaled with
+                                            // the lock, which went below 400 rpm at low targets and the 02D turns its pump off
+                                            // below 400 rpm = no lock (spec_gen1_02d D5). 0x4E21 is the bench-proven full-lock value.
+  frame.data[4] = 0x00;                     // inneres_Motor_Moment_ohne_extern - not read by the 02D (spec D10, was mislabelled "pedal")
+  frame.data[5] = gen1_demand_value(0xFE);  // Fahrpedalwert (accelerator pedal x 0.4 %) - the demand
+  appliedTorque = gen1_loss_torque_byte(0x00); // mechanisches_Motor_Verlustmoment: the 02D subtracts it from byte 1 (0x00 = max demand)
+  frame.data[6] = appliedTorque;            // loss torque, see the line above
+  frame.data[7] = 0x00;                     // Fahrerwunschmoment (driver-wish torque) - not read by the 02D
+  standaloneTx(frame);
 
-  switch (state.mode)
+  // PQ Motor_2 (0x288, DLC 8) - NEW in V11 (spec_gen1_02d D4). The 02D watches for
+  // this frame: without it its "all inputs valid" check never passes and 0x2C0
+  // byte 0 bit 4 stays set for ever (our UI used to show that as "limp mode").
+  frame.identifier = MOTOR2_ID;
+  frame.data_length_code = 8;
+  frame.data[0] = 0xDA; // MO2_Mp_Code 3 (bits 6-7) + MO2_max_Mo 26 x 10 Nm = 260 Nm (bits 0-5) - same as the 02D's own default (OEM code §2.1)
+  frame.data[1] = 0x00; // MO2_Kuehlm_T (coolant temperature) - not read by the 02D
+  frame.data[2] = 0x00; // status bits, set below
+  if (brakeForHaldex())
   {
-  case MODE_FWD:
-    appliedTorque = get_lock_target_adjusted_value(0xFE, true);
-    break;
-  case MODE_5050:
-    appliedTorque = get_lock_target_adjusted_value(0x16, false);
-    break;
-  case MODE_6040:
-    appliedTorque = get_lock_target_adjusted_value(0x22, false);
-    break;
-  case MODE_7525:
-    appliedTorque = get_lock_target_adjusted_value(0x50, false);
-    break;
-  default:
-    appliedTorque = 0;
-    break;
+    frame.data[2] = frame.data[2] | (1 << 0); // bit 0 MO2_BLS: brake light switch (Follow Brake on + brake pressed)
   }
+  frame.data[3] = 0x00; // not read by the 02D
+  frame.data[4] = 0x00; // not read by the 02D
+  frame.data[5] = 0x00; // not read by the 02D
+  frame.data[6] = 0x00; // not read by the 02D
+  frame.data[7] = 0x00; // not read by the 02D
+  standaloneTx(frame);
 
-  frame.data[6] = appliedTorque; // mechanisches_Motor_Verlustmoment - openHaldex applied-torque demand
-  frame.data[7] = 0x00;          // inneres_Motor_Moment (actual inner torque) - left zero in standalone
+  // PQ Bremse_4 (0x2A0, DLC 3 per K-matrix vw_pq.dbc) - NEW in V11. Byte 0 is a
+  // torque CEILING on the 02D's own request = our lock lever (spec_gen1_02d §2.3).
+  // Motor_1 above is held at maximum demand while this block is on.
+  frame.identifier = BRAKES4_ID;
+  frame.data_length_code = 3;
+  frame.data[0] = gen1_lever_byte(); // 0x7F = open, 0x81..0xC9 = partial (0xA5 ~ 50 %), 0xFD = full
+  frame.data[1] = 0x00;              // not read by the 02D
+  frame.data[2] = 0x00;              // not read by the 02D
   standaloneTx(frame);
 
   // PQ Motor_3 (0x380, DLC 8) - secondary engine ECU broadcast (vw_pq.dbc: Motor_3).
+  // The 02D has NO receive slot for 0x380 (OEM code, spec_gen1_02d §1), so this
+  // frame does nothing; its block is off by default since V11 (D8).
   frame.identifier = MOTOR3_ID;
   frame.data_length_code = 8;
   frame.data[0] = 0x00; // status flags (MO3_Sta_Pedal etc.)
@@ -372,35 +405,40 @@ void Gen1_frames20()
   frame.data[4] = 0x00; // MO3_Offsentemp (intake-air offset)
   frame.data[5] = 0x00; // reserved / Winterprg / Freigabe_Segeln
   frame.data[6] = 0x00; // reserved
-  frame.data[7] = 0xFE; // reserved (kept non-zero for haldex sanity)
+  frame.data[7] = 0xFE; // reserved
   standaloneTx(frame);
 
   // PQ Bremse_1 (0x1A0, DLC 8) - ABS/ESP main broadcast.
-  // Bremse = brake. vw_pq.dbc signals include BR1_ASR_passiv, BR1_ESPASR_passiv,
-  // BR1_Rad_kmh (wheel speed) and warning lamps.
-  // data[7] is the frame counter (BR1_BZ).
+  // Bremse = brake. The 02D reads bytes 0-2 only (OEM code, spec_gen1_02d §3);
+  // it does not check the counter.
   frame.identifier = BRAKES1_ID;
   frame.data_length_code = 8;
-  frame.data[0] = 0x80;
-  frame.data[1] = get_lock_target_adjusted_value(0x00, false);
-  frame.data[2] = 0x00;
-  frame.data[3] = 0x0A;
-  frame.data[4] = 0xFE;
-  frame.data[5] = 0xFE;
-  frame.data[6] = 0x00;
-  frame.data[7] = BRAKES1_counter;
+  frame.data[0] = 0x80; // bit 7 BR1_EBV_Ongr as before; bit 2 BR1_ABS_Brems set below
+  if (absBrakingForHaldex())
+  {
+    frame.data[0] = frame.data[0] | (1 << 2); // bit 2 BR1_ABS_Brems: the car's ABS is braking (only with a chassis bus)
+  }
+  frame.data[1] = 0x00; // bit 3 brake light, bit 4 pressure switch, bit 7 clutch release + pump off: all clear (brake goes in Motor_2)
+  frame.data[2] = 0x00; // bit 0 brake-source select clear; rest = speed, not read by the 02D
+  frame.data[3] = 0x0A; // not read by the 02D
+  frame.data[4] = 0xFE; // not read by the 02D
+  frame.data[5] = 0xFE; // not read by the 02D
+  frame.data[6] = 0x00; // not read by the 02D
+  frame.data[7] = BRAKES1_counter; // BR1_Zaehler counter (not checked by the 02D)
   if (++BRAKES1_counter > 0xF)
     BRAKES1_counter = 0;
   standaloneTx(frame);
 
-  // PQ Bremse_3 (0x4A0, DLC 8) - per-wheel speeds (vw_pq.dbc: Bremse_3, * 0.01 km/h).
-  // Lock-adjusted low bytes "fake" wheel slip to nudge haldex engagement.
+  // PQ Bremse_3 (0x4A0, DLC 8) - per-wheel speeds (vw_pq.dbc: Bremse_3, word >> 1 = 0.01 km/h).
+  // Without this frame the 02D's request is 0 (OEM code §2.1). 0x0A00 = 12.8 km/h on
+  // every wheel; the fronts get up to 1.27 km/h of fake slip to add demand
+  // (fine: the 02D's slip hold only starts at ~3.7 km/h front-over-rear, spec §5).
   frame.identifier = BRAKES3_ID;
   frame.data_length_code = 8;
-  frame.data[0] = get_lock_target_adjusted_value(0xFE, false); // Radgeschw_VL low (front-left wheel)
-  frame.data[1] = 0x0A;                                        // Radgeschw_VL high
-  frame.data[2] = get_lock_target_adjusted_value(0xFE, false); // Radgeschw_VR low (front-right)
-  frame.data[3] = 0x0A;                                        // Radgeschw_VR high
+  frame.data[0] = gen1_demand_value(0xFE); // Radgeschw_VL low (front-left wheel)
+  frame.data[1] = 0x0A;                    // Radgeschw_VL high
+  frame.data[2] = gen1_demand_value(0xFE); // Radgeschw_VR low (front-right)
+  frame.data[3] = 0x0A;                    // Radgeschw_VR high
   frame.data[4] = 0x00;                                        // Radgeschw_HL low (rear-left)
   frame.data[5] = 0x0A;                                        // Radgeschw_HL high
   frame.data[6] = 0x00;                                        // Radgeschw_HR low (rear-right)
@@ -414,7 +452,28 @@ void Gen1_frames25()
 }
 void Gen1_frames100()
 {
-  // not used in Gen1
+  // PQ Kombi_1 (0x320, DLC 8) - NEW in V11, block OFF by default. The 02D reads
+  // byte 1 bit 1 (KO1_Handbremse): pulling the handbrake between 5 and 100 km/h
+  // opens the clutch (OEM code, spec_gen1_02d §2.2). While this frame is NOT sent
+  // the 02D uses its own handbrake wire instead, which is why it is off by default.
+  twai_message_t frame = {};
+  frame.identifier = mKombi_1;
+  frame.extd = 0;
+  frame.rtr = 0;
+  frame.data_length_code = 8;
+  frame.data[0] = 0x00; // lamp bits - not read by the 02D
+  frame.data[1] = 0x00; // bit 1 KO1_Handbremse set below; bit 0 Bremsinfo (brake fluid) clear
+  if (handbrakeForHaldex())
+  {
+    frame.data[1] = frame.data[1] | (1 << 1); // bit 1: handbrake pulled (Follow Handbrake on + handbrake pulled)
+  }
+  frame.data[2] = 0x00; // not read by the 02D
+  frame.data[3] = 0x00; // not read by the 02D
+  frame.data[4] = 0x00; // not read by the 02D
+  frame.data[5] = 0x00; // not read by the 02D
+  frame.data[6] = 0x00; // not read by the 02D
+  frame.data[7] = 0x00; // not read by the 02D
+  standaloneTx(frame);
 }
 void Gen1_frames200()
 {
@@ -428,25 +487,43 @@ void Gen1_frames1000()
 // Gen2 Standalone Frames (PQ - VW Touran/early Audi etc.)
 // Richer than Gen1: needs steering-angle (LW_1), Kombi_1, and several brake-side frames.
 // All transmitted on the haldex bus (twai_bus_1).
+// V11.00.0 (OEM code: documents/haldex-binaries/leaf_trace/spec_gen2_7h0.md §5):
+//   - lock lever = Bremse_4 (0x2A0) byte 0 (0x7F open .. 0xFD full), with Motor_1 held
+//     at full demand and a little front-wheel slip while lock is wanted (gen2DemandValue).
+//   - the unit checks NO checksums; alive counters only on Bremse_1 b7 bits 0-3,
+//     LW_1 b5 bits 4-7 and 0x4A8 b6 bits 4-7 - those must change every frame.
+//   - Motor_3 (0x380), Bremse_9 (0x0AE), Bremse_10 (0x3A0) are not received by the
+//     7H0 / 1K0 - their blocks are off by default (frameEditMaskDefaultsSA).
+//   - 1K0907554B: identical frames and lever (only its internal final-request scale differs).
+//   - one Haldex bus on the car (the second CAN controller the OEM code sets up is
+//     not wired), so every frame here reaches the unit on that bus.
 void Gen2_frames10()
 {
   twai_message_t frame = {};
   // PQ Bremse_1 (0x1A0, DLC 8) - ABS/ESP main broadcast (vw_pq.dbc: Bremse_1).
+  // The unit reads (spec_gen2_7h0 §3): b0 bit2/bit4, b1 bits 0/3/4/7, b2 bit0, b6 low
+  // nibble, b7 bit5, and b7 bits 0-3 as an alive counter. "ABS/ESP bits clear" = normal car.
   frame.identifier = BRAKES1_ID;
   frame.data_length_code = 8;
-  frame.data[0] = 0x00;            // BR1_ASR_Anf / MSR_Anf engine-torque request bits
-  frame.data[1] = 0x41;            // BR1_ABS_Brems / EDS_Ongr / ESP_Ongr (intervention flags)
-  frame.data[2] = 0x00;            // BR1_Lampe_ABS / BR1_Lampe_ASR
-  frame.data[3] = 0xFE;            // status / ABS active flags
-  frame.data[4] = 0xFE;            // BR1_Rad_kmh low (vehicle speed)
-  frame.data[5] = 0xFE;            // BR1_Rad_kmh high
-  frame.data[6] = 0x00;            // reserved
-  frame.data[7] = BRAKES1_counter; // BR1_BZ - rolling 4-bit counter
+  frame.data[0] = 0x00; // b0: BR1_ASR_Anf, MSR_Anf, bit2 BR1_ABS_Brems, bit4 BR1_ESP_Ongr - all off
+  if (absBrakingForHaldex())
+  {
+    frame.data[0] = frame.data[0] | (1 << 2); // bit2 BR1_ABS_Brems: car's ABS is braking - the unit opens the clutch
+  }
+  frame.data[1] = 0x40;                   // b1: bit6 BR1_Sta_MAD. bit0 BR1_Lampe_ABS now OFF (was 0x41 = ABS lamp on) - V11 TODO (bench): confirm
+  frame.data[2] = 0x00;                   // b2: bit0 BR1_BKV_active (brake booster) off, bits1-7 BR1_Rad_kmh low (not read)
+  frame.data[3] = 0xFE;                   // b3: BR1_Rad_kmh high (not read by the unit)
+  frame.data[4] = 0xFE;                   // b4: BR1_ASRMo_sl (not read)
+  frame.data[5] = 0xFE;                   // b5: BR1_ASRMo_fa (not read)
+  frame.data[6] = 0x00;                   // b6: BR1_MSR_Mo (low nibble read - 0 = no engine drag request)
+  frame.data[7] = BRAKES1_counter & 0x0F; // b7: bits0-3 BR1_Zaehler alive counter, bit5 BR1_ESPASR_passive = 0
   if (++BRAKES1_counter > 0xF)
     BRAKES1_counter = 0;
   standaloneTx(frame);
 
   // PQ Bremse_2 (0x5A0, DLC 8) - ESP/ABS sensor broadcast (vw_pq.dbc: Bremse_2).
+  // Gen2 (OEM code, spec_gen2_7h0 §3) only reads b0, b1 bit0 and b7 bit7 - the
+  // lock-adjusted b4/b5 below are ignored by the unit (harmless, left as they were).
   frame.identifier = BRAKES2_ID;
   frame.data_length_code = 8;
   frame.data[0] = 0x7F;                                        // Impulszahl (pulse count, low)
@@ -463,31 +540,38 @@ void Gen2_frames10()
   standaloneTx(frame);
 
   // PQ Bremse_3 (0x4A0, DLC 8) - per-wheel speeds (see Gen1 for signal layout).
+  // The unit works out slip from these (front average - rear average). Front wheels a
+  // little faster than the rear = fake slip, so the unit's own request is above the
+  // Bremse_4 ceiling and the lever decides. Full whenever lock is wanted (gen2DemandValue).
+  // Safety: synthetic speeds - the unit's slip protection never sees real slip in standalone.
   frame.identifier = BRAKES3_ID;
   frame.data_length_code = 8;
-  frame.data[0] = get_lock_target_adjusted_value(0xFE, false); // Radgeschw_VL low
-  frame.data[1] = 0x0A;                                        // Radgeschw_VL high
-  frame.data[2] = get_lock_target_adjusted_value(0xFE, false); // Radgeschw_VR low
-  frame.data[3] = 0x0A;                                        // Radgeschw_VR high
-  frame.data[4] = 0x00;                                        // Radgeschw_HL low
-  frame.data[5] = 0x0A;                                        // Radgeschw_HL high
-  frame.data[6] = 0x00;                                        // Radgeschw_HR low
-  frame.data[7] = 0x0A;                                        // Radgeschw_HR high
+  frame.data[0] = gen2DemandValue(0xFE); // Radgeschw_VL low (front left)
+  frame.data[1] = 0x0A;                  // Radgeschw_VL high
+  frame.data[2] = gen2DemandValue(0xFE); // Radgeschw_VR low (front right)
+  frame.data[3] = 0x0A;                  // Radgeschw_VR high
+  frame.data[4] = 0x00;                  // Radgeschw_HL low (rear left)
+  frame.data[5] = 0x0A;                  // Radgeschw_HL high
+  frame.data[6] = 0x00;                  // Radgeschw_HR low (rear right)
+  frame.data[7] = 0x0A;                  // Radgeschw_HR high
   standaloneTx(frame);
 
-  // PQ Bremse_4 (0x2A0, DLC 8 here / 3 per dbc) - ABS coupling-moment broadcast.
-  // vw_pq.dbc: ABS_Vorgabewert_hinten_Kupplung (rear coupling % 0..100),
-  //            ABS_Vorgabewert_mitte_Kupplungs (centre coupling Nm/min, -381..378).
-  frame.identifier = BRAKES4_ID;   // 0x2A0 includes coupling moment? Affects vehicle mode(!) do not have!
-  frame.data_length_code = 8;      // DLC 8 (/4)
-  frame.data[0] = 0x00;            // affects estimated torque AND vehicle mode(!) - ABS_Vorgabewert_hinten_Kupplung
-  frame.data[1] = 0x00;            // ABS_Vorgabewert_mitte_Kupplungs low
-  frame.data[2] = 0x00;            // ABS_Vorgabewert_mitte_Kupplungs high / status
-  frame.data[3] = 0x00;            // 32605 - reserved/status
-  frame.data[4] = 0x00;            // reserved
-  frame.data[5] = 0x00;            // reserved
-  frame.data[6] = BRAKES4_counter; // checksum / rolling counter
-  frame.data[7] = BRAKES4_counter; // checksum (mirror)
+  // PQ Bremse_4 (0x2A0) - THE LOCK LEVER (OEM code: spec_gen2_7h0 §2.3).
+  // The unit reads b0 (a ceiling on its clutch request), b1 and b2 bit0 (role not
+  // decoded); b3-7 are ignored (it only takes 3 bytes). b0 uses the same 0x80-offset
+  // units as the engagement it sends back (0x2C0 byte 1):
+  //   0x7F = 0 % (clutch open), 0x81..0xFD = (b0 - 0x80) / 0x7D x 100 %, 0xFD = 100 %.
+  //   0xFE / 0xFF / below 0x7F = "no limit" (pre-V11 sent 0x00 here = no limit).
+  frame.identifier = BRAKES4_ID;
+  frame.data_length_code = 8;                    // unit needs at least 3
+  frame.data[0] = vag_lever_byte(0xFD);          // lock request: 0x7F / 0x81..0xFC / 0xFD
+  frame.data[1] = 0x00;                          // read by the unit, role not decoded - 0 as before
+  frame.data[2] = 0x00;                          // bit0 read by the unit, role not decoded - 0 as before
+  frame.data[3] = 0x00;                          // not read
+  frame.data[4] = 0x00;                          // not read
+  frame.data[5] = 0x00;                          // not read
+  frame.data[6] = BRAKES4_counter;               // not read (kept as before)
+  frame.data[7] = BRAKES4_counter;               // not read (kept as before)
   BRAKES4_counter = BRAKES4_counter + 10;
   if (BRAKES4_counter > 0xF0)
   {
@@ -499,21 +583,19 @@ void Gen2_frames10()
   // vw_pq.dbc: BR5_Giergeschw / BR5_Gierrate (yaw rate * 0.01 deg/s),
   //            BR5_Bremsdruck (brake pressure * 0.1 bar), BR5_Bremslicht,
   //            BR5_Notbremsung (emergency-brake), BR5_HDC_bereit (hill-descent-ready).
-  frame.identifier = BRAKES5_ID;    // 0x2A0 includes coupling moment? Affects vehicle mode(!) do not have!
-  frame.data_length_code = 8;       // DLC 8 (/4)
-  frame.data[0] = 0xFE;             // affects estimated torque AND vehicle mode(!) - Giergeschw low (yaw rate)
-  frame.data[1] = 0x7F;             // Giergeschw high
-  frame.data[2] = 0x03;             // BR5_Bremsdruck (brake pressure)
-  frame.data[3] = 0x00;             // 32605 - status / Bremslicht / Notbremsung bits
-  frame.data[4] = 0x00;             // BR5_Gierrate low (signed yaw rate)
-  frame.data[5] = 0x00;             // BR5_Gierrate high
-  frame.data[6] = BRAKES5_counter;  // checksum / rolling counter
-  frame.data[7] = BRAKES5_counter2; // checksum / second rolling counter
-  BRAKES5_counter = BRAKES5_counter + 10;
-  if (BRAKES5_counter > 0xF0)
-  {
-    BRAKES5_counter = 0;
-  }
+  // The unit reads a 12-bit value in b2-3 plus flags, and checks b6 bits 4-7 as an
+  // alive counter - it must change every frame (spec_gen2_7h0 §1). No checksum checked.
+  frame.identifier = BRAKES5_ID;
+  frame.data_length_code = 8;                    // unit needs at least 7
+  frame.data[0] = 0xFE;                          // Giergeschw low (yaw rate)
+  frame.data[1] = 0x7F;                          // Giergeschw high
+  frame.data[2] = 0x03;                          // BR5_Bremsdruck (brake pressure) low
+  frame.data[3] = 0x00;                          // BR5_Bremsdruck high / Stillstand / Druckvalid bits
+  frame.data[4] = 0x00;                          // ESP / Autohold status bits
+  frame.data[5] = 0x00;                          // BR5_Anhi / Bremslicht / Notbremsung bits
+  BRAKES5_counter = BRAKES5_counter + 0x10;      // next alive count in the top 4 bits (wraps 0xF? -> 0x0? on its own)
+  frame.data[6] = BRAKES5_counter & 0xF0;        // b6 bits 4-7 = alive counter (was +10 per frame, which repeated values)
+  frame.data[7] = BRAKES5_counter2;              // checksum byte - the unit does not check it
   BRAKES5_counter2 = BRAKES5_counter2 + 10;
   if (BRAKES5_counter2 > 0xF3)
   {
@@ -522,8 +604,9 @@ void Gen2_frames10()
   standaloneTx(frame);
 
   // PQ Bremse_9 (0x0AE, DLC 8) - extended ABS/ESP frame (NOT in vw_pq.dbc).
-  // Reverse-engineered: only data[6] really matters (0x02 OK, 0x01 changes haldex behaviour).
-  frame.identifier = BRAKES9_ID;    // 0x0AE do not have!
+  // NOT received by the 7H0 / 1K0 (OEM code: no receive object) - block off by default.
+  // Older bench note: "only data[6] really matters (0x02 OK, 0x01 changes haldex behaviour)".
+  frame.identifier = BRAKES9_ID;    // 0x0AE - not received by Gen2
   frame.data_length_code = 8;       // DLC 8
   frame.data[0] = BRAKES9_counter;  // checksum / rolling counter A
   frame.data[1] = BRAKES9_counter2; // checksum / rolling counter B
@@ -554,10 +637,10 @@ void Gen2_frames10()
   frame.data[2] = 0x00;          // LW1_LRW_Sign (0=left, 1=right) / status
   frame.data[3] = 0x00;          // LW1_Lenk_Gesch low (angular velocity * 0.04375 deg/s)
   frame.data[4] = 0x80;          // LW1_Lenk_Gesch high / LW1_Gesch_Sign
-  frame.data[5] = mLW_1_counter; // LW1_Status / rolling counter
+  frame.data[5] = mLW_1_counter; // LW1_Zaehler: bits 4-7 alive counter (steps of 0x10) - the unit checks it changes every frame
   frame.data[6] = 0x00;          // LW1_ID (calibration ID) / Initquelle
   mLW_1_crc = 255 - (frame.data[0] + frame.data[1] + frame.data[2] + frame.data[3] + frame.data[5]);
-  frame.data[7] = mLW_1_crc; // inverted-sum CRC over data[0..3]+data[5]
+  frame.data[7] = mLW_1_crc; // inverted-sum CRC over data[0..3]+data[5] (Gen2 does not check it - harmless)
   mLW_1_counter = mLW_1_counter + 16;
   if (mLW_1_counter >= 0xF0)
     mLW_1_counter = 0;
@@ -568,26 +651,35 @@ void Gen2_frames20()
 {
   twai_message_t frame = {};
   // PQ Motor_1 (0x280, DLC 8) - engine ECU broadcast (vw_pq.dbc: Motor_1).
-  // Lock-adjusted bytes bias inneres_Motor_Moment / mechanisches_Verlustmoment so the
-  // haldex thinks the engine is producing more torque than it actually is.
+  // V11 (OEM code, spec_gen2_7h0 §2.2 / §5): the unit reads b1 inner torque (ADDED to its
+  // torque estimate), b6 loss torque (SUBTRACTED from b1), b5 pedal, b2-3 rpm and b0 bit3.
+  // Before V11 b6 rose with lock and cancelled b1, and the rpm high byte was scaled with
+  // lock (low lock = rpm near 0 = pump off). Now: rpm fixed, b6 = 0, b1/b5 full while lock
+  // is wanted - the Bremse_4 lever (frames10) sets the actual lock.
   frame.identifier = MOTOR1_ID;
   frame.data_length_code = 8;
-  frame.data[0] = 0x08;                                        // status / Momentenangaben_ungenau bits
-  frame.data[1] = 0xFA;                                        // Fahrerwunschmoment (driver-requested torque)
-  frame.data[2] = 0x20;                                        // Motordrehzahl low (engine RPM * 0.25)
-  frame.data[3] = get_lock_target_adjusted_value(0x4E, false); // Motordrehzahl high (lock-biased)
-  frame.data[4] = 0xFA;                                        // Fahrpedalwert (accelerator pedal %)
-  frame.data[5] = 0xFA;                                        // inneres_Motor_Moment_ohne_extern
-  frame.data[6] = get_lock_target_adjusted_value(0x20, false); // mechanisches_Motor_Verlustmoment (lock-biased)
-  frame.data[7] = 0xFA;                                        // inneres_Motor_Moment (actual)
+  frame.data[0] = 0x08;                  // b0: bit3 Kupplungsschalter (read as a status bit) - as before
+  frame.data[1] = gen2DemandValue(0xFE); // b1: inneres_Motor_Moment (inner torque) - full while lock wanted
+  frame.data[2] = 0x20;                  // b2: Motordrehzahl low (engine rpm x 0.25)
+  frame.data[3] = 0x4E;                  // b3: Motordrehzahl high - 0x4E20 = 5000 rpm, fixed (above pump-on)
+  frame.data[4] = 0xFA;                  // b4: inneres_Motor_Moment_ohne_extern (not read by the unit)
+  frame.data[5] = gen2DemandValue(0xFE); // b5: Fahrpedalwert (pedal) - full while lock wanted
+  frame.data[6] = 0x00;                  // b6: mechanisches_Motor_Verlustmoment (loss torque) - 0, never 0xFF (= invalid -> 30 Nm)
+  frame.data[7] = 0xFA;                  // b7: Fahrerwunschmoment (not read by the unit)
   standaloneTx(frame);
 
   // PQ Motor_2 (0x288, DLC 8) - secondary engine broadcast (vw_pq.dbc: Motor_2).
+  // Unit reads b0 (mux 3 = max engine torque; mux 0 here leaves its 300 Nm default)
+  // and b2 bits 0/1 (brake vote).
   frame.identifier = MOTOR2_ID;
   frame.data_length_code = 8;
-  frame.data[0] = 0x00; // MO2_BLS / MO2_BTS / MO2_Sta_Klima (brake-light, brake-test, A/C)
+  frame.data[0] = 0x00; // MO2_Mp_Code mux 0 (MO2_CAN_Vers) - the unit keeps its 300 Nm torque reference
   frame.data[1] = 0x30; // MO2_Kuehlm_T (coolant temp * 0.75 - 48 degC)
-  frame.data[2] = 0x00; // MO2_Sta_Kuehlm / MO2_Sta_No_Bet (status flags)
+  frame.data[2] = 0x00; // MO2_BLS (bit0) brake light, MO2_BTS (bit1), status flags - all off
+  if (brakeForHaldex())
+  {
+    frame.data[2] = frame.data[2] | (1 << 0); // bit0 MO2_BLS: Follow Brake on and the brake is pressed
+  }
   frame.data[3] = 0x0A; // MO2_GRA_Soll low (cruise-control target speed)
   frame.data[4] = 0x0A; // MO2_GRA_Soll high
   frame.data[5] = 0x10; // GRA / cruise status bits
@@ -596,9 +688,8 @@ void Gen2_frames20()
   standaloneTx(frame);
 
   // PQ Motor_5 (0x480, DLC 8) - tertiary engine broadcast (vw_pq.dbc: Motor_5, multiplexed).
-  // NOTE: the if(++BRAKES1_counter > 255) below increments BRAKES1_counter (not MOTOR5_counter)
-  // - looks like a copy-paste bug, left as-is per "comment-only" pass.
-  frame.identifier = MOTOR5_ID;   // 0x1A0
+  // The unit only takes b0 (bits 0-5 value, bits 6-7 mux) - the rest is ignored.
+  frame.identifier = MOTOR5_ID;   // 0x480
   frame.data_length_code = 8;     // DLC 8
   frame.data[0] = 0xFE;           // ASR 0x04 sets bit 4.  0x08 removes set.  Coupling open/closed - MO5_Mp_Code mux
   frame.data[1] = 0x00;           // can use to disable (>130 dec).  Was 0x00; 0x41?  0x43? - MO5_max_Moment / Drehzahl (mux)
@@ -607,16 +698,14 @@ void Gen2_frames20()
   frame.data[4] = 0x00;           // was 0xFE miasrl no effect - reserved
   frame.data[5] = 0x00;           // was 0xFE miasrs no effect - reserved
   frame.data[6] = 0x00;           // was 0x00 - reserved
-  frame.data[7] = MOTOR5_counter; // checksum / rolling counter
-  if (++BRAKES1_counter > 255)
-  {                      // 0xF (NOTE: increments BRAKES1_counter - copy-paste artefact)
-    BRAKES1_counter = 0; // 0
-  }
+  frame.data[7] = MOTOR5_counter; // checksum / rolling counter (not read by the unit)
+  MOTOR5_counter++;               // V11: was ++BRAKES1_counter (copy-paste bug that bumped Bremse_1's alive counter)
   standaloneTx(frame);
 
   // PQ Bremse_10 (0x3A0, DLC 8) - extended ABS/ESP frame (NOT in vw_pq.dbc).
+  // NOT received by the 7H0 / 1K0 (OEM code: no receive object) - block off by default.
   // Inline notes are pre-existing reverse-engineering observations.
-  frame.identifier = BRAKES10_ID;   // 0x1A0
+  frame.identifier = BRAKES10_ID;   // 0x3A0 - not received by Gen2
   frame.data_length_code = 8;       // DLC 8
   frame.data[0] = 0xA6;             // ASR 0x04 sets bit 4.  0x08 removes set.  Coupling open/closed
   frame.data[1] = BRAKES10_counter; // can use to disable (>130 dec).  Was 0x00; 0x41?  0x43? - rolling counter
@@ -641,7 +730,11 @@ void Gen2_frames25()
   frame.identifier = mKombi_1;
   frame.data_length_code = 8;
   frame.data[0] = 0x00; // Oeldruck / Tankwarn / Vorglueh lamp bits
-  frame.data[1] = 0x02; // bit0 KO1_Bremsinfo (fluid warn), bit1 KO1_Handbremse - NOTE: 0x02 = handbrake APPLIED (as captured; Gen4 set uses 0x00)
+  frame.data[1] = 0x00; // bit0 KO1_Bremsinfo (fluid warn) off, bit1 KO1_Handbremse released. V11: was 0x02 = handbrake PULLED (unit reads b1 bit1)
+  if (handbrakeForHaldex())
+  {
+    frame.data[1] = frame.data[1] | (1 << 1); // bit1 KO1_Handbremse: Follow Handbrake on and the handbrake is pulled
+  }
   frame.data[2] = 0x00; // Geschwindigkeit_Kombi_1 low (raw vehicle speed * 0.01 km/h)
   frame.data[3] = 0x00; // Geschwindigkeit_Kombi_1 high
   frame.data[4] = 0x36; // Tankinhalt (fuel level, 1..126 l)
@@ -655,10 +748,40 @@ void Gen2_frames100() {}
 void Gen2_frames200() {}
 void Gen2_frames1000() {}
 
-// Gen4 Standalone Frames (PQ-derived, late VAQ).
-// Replays steering (LW_1) from a 16-step capture (lws_2[]) and synthesises engine/brake
-// frames. BRAKES4 carries an XOR CRC over data[0..6] in data[7].
+// Gen4 Standalone Frames (0BR / 0BS / 2K, PQ frame set).
+// V11.00.0: rebuilt from the OEM code (documents/haldex-binaries/leaf_trace/
+// spec_gen4_0br.md). The lever is Bremse_4 byte 0 (linear, no counter/CRC
+// check). Every other frame the unit monitors is sent with steady, plausible
+// content so it never logs a false "missing message" fault - its own genuine
+// protections (over-temperature, limp, lamp) are left alone and reported.
+// Replays steering (LW_1) from a 16-step capture (lws_2[]).
 // All frames go out on the haldex bus (twai_bus_1).
+
+// Gen4-only rolling counters. "static" here = private to this file.
+static uint8_t gen4Bremse5Counter = 0; // Bremse_5 b6 high nibble, 0..15 (not checked by the 0BR)
+static uint8_t gen4Bremse8Counter = 0; // Bremse_8 b1 low nibble, 0..15 (not checked by the 0BR)
+
+// Wheel / vehicle speed word for Bremse_3 (and Bremse_1 b2-3) on Gen4.
+// Bremse_3 carries each wheel as a 15-bit 0.01 km/h value in bits 1-15 of a
+// 16-bit word (bit 0 is a spare flag), so word = km/h x 100 x 2.
+// Real vehicle speed when the car's CAN is connected; otherwise a steady
+// 10 km/h, close to the ~9.9 km/h (0x07B6-0x07D2) the pre-V11 frames sent.
+// All four wheels get the same value: no fake slip (spec_gen4_0br §5).
+static uint16_t gen4SpeedWord()
+{
+  uint16_t speedKmh = 10; // fallback when no real speed is known
+  if (hasCANChassis)
+  {
+    speedKmh = received_vehicle_speed; // real speed from the car's ABS / engine frames
+  }
+  if (speedKmh > 326)
+  {
+    speedKmh = 326; // top of the 15-bit 0.01 km/h range
+  }
+  uint16_t speedWord = (uint16_t)(speedKmh * 100) << 1; // 0.01 km/h steps, shifted past spare bit 0
+  return speedWord;
+}
+
 void Gen4_frames10()
 {
   twai_message_t frame = {};
@@ -667,91 +790,109 @@ void Gen4_frames10()
   frame.extd = 0;
   frame.rtr = 0;
   frame.data_length_code = 8;
+  // Byte layout as the 0BR reads it (spec_gen4_0br §3); replay table is fine (§5).
   frame.data[0] = lws_2[mLW_1_counter][0]; // LW1_LRW low (steering-wheel angle * 0.04375 deg)
-  frame.data[1] = lws_2[mLW_1_counter][1]; // LW1_LRW high
-  frame.data[2] = lws_2[mLW_1_counter][2]; // LW1_LRW_Sign / status
-  frame.data[3] = lws_2[mLW_1_counter][3]; // LW1_Lenk_Gesch low (angular velocity)
-  frame.data[4] = lws_2[mLW_1_counter][4]; // LW1_Lenk_Gesch high / Gesch_Sign
-  frame.data[5] = lws_2[mLW_1_counter][5]; // LW1_Status / counter
-  frame.data[6] = lws_2[mLW_1_counter][6]; // LW1_ID / Initquelle
-  frame.data[7] = lws_2[mLW_1_counter][7]; // CRC (replayed verbatim)
+  frame.data[1] = lws_2[mLW_1_counter][1]; // LW1_LRW high bits 0-6, b1.7 = sign
+  frame.data[2] = lws_2[mLW_1_counter][2]; // LW1_Lenk_Gesch low (steering rate - not read by Gen4)
+  frame.data[3] = lws_2[mLW_1_counter][3]; // LW1_Lenk_Gesch high (not read by Gen4)
+  frame.data[4] = lws_2[mLW_1_counter][4]; // LW1_ID (read by Gen4)
+  frame.data[5] = lws_2[mLW_1_counter][5]; // b5 bits 1-2 status, bits 4-7 counter (not checked)
+  frame.data[6] = lws_2[mLW_1_counter][6]; // not read by Gen4
+  frame.data[7] = lws_2[mLW_1_counter][7]; // CRC (replayed verbatim; Gen4 copies only 6 bytes)
 
   mLW_1_counter++;
   if (mLW_1_counter > 15)
     mLW_1_counter = 0;
   standaloneTx(frame);
 
+  // Speed shared by Bremse_1 and Bremse_3 this cycle (real, or a steady 10 km/h)
+  uint16_t speedWord = gen4SpeedWord();
+
   // PQ Bremse_1 (0x1A0, DLC 8) - ABS/ESP main broadcast (vw_pq.dbc: Bremse_1).
+  // The 0BR reads b0.0 ASR request, b0.2 ABS braking, b0.3 EDS, b0.4 ESP,
+  // b1.3 / b1.4 and the b7 counter (not checked) - spec_gen4_0br §3. It does
+  // NOT read the vehicle speed (b2-3) or b4-6.
+  uint8_t bremse1Byte0 = 0x00; // no ASR / ABS / EDS / ESP intervention
+  if (absBrakingForHaldex())
+  {
+    bremse1Byte0 = bremse1Byte0 | (1 << 2); // b0.2 BR1_ABS_Brems: the car's ABS is braking
+  }
   frame.identifier = BRAKES1_ID;
   frame.data_length_code = 8;
-  frame.data[0] = 0x20;                                        // BR1_ASR_Anf / MSR_Anf flags
-  frame.data[1] = 0x40;                                        // ABS_Brems / EDS_Ongr / ESP_Ongr intervention bits
-  frame.data[2] = 0xF0;                                        // Lampe_ABS / Lampe_ASR
-  frame.data[3] = 0x07;                                        // status / ABS active flags
-  frame.data[4] = get_lock_target_adjusted_value(0xFE, false); // BR1_Rad_kmh low (vehicle speed)
-  frame.data[5] = get_lock_target_adjusted_value(0xFE, false); // BR1_Rad_kmh high
-  frame.data[6] = 0x00;                                        // reserved
-  frame.data[7] = BRAKES1_counter;                             // BR1_BZ - rolling 5-bit counter (10..0x1F)
-  if (++BRAKES1_counter > 0x1F)
-    BRAKES1_counter = 10;
+  frame.data[0] = bremse1Byte0;                     // BR1_ASR_Anf b0.0 / ABS_Brems b0.2 / EDS b0.3 / ESP b0.4 (V11: was 0x20)
+  frame.data[1] = 0x00;                             // BR1 lamps / status, b1.3 + b1.4 read by Gen4 = 0 (V11: was 0x40)
+  frame.data[2] = (uint8_t)(speedWord & 0xFF);      // BR1_Rad_kmh low (bit 0 = BR1_BKV_active, 0) - not read by Gen4
+  frame.data[3] = (uint8_t)(speedWord >> 8);        // BR1_Rad_kmh high
+  frame.data[4] = 0xFE;                             // BR1_ASRMo_sl: ASR torque limit at max = no ASR cut (not read by Gen4)
+  frame.data[5] = 0xFE;                             // BR1_ASRMo_fa: same (not read by Gen4)
+  frame.data[6] = 0x00;                             // BR1_MSR_Mo: no drag-torque request (not read by Gen4)
+  frame.data[7] = BRAKES1_counter & 0x0F;           // BR1_Zaehler b7 bits 0-3 (0..15); b7.4/b7.5 ASR/ESP off = 0
+  BRAKES1_counter++;
+  if (BRAKES1_counter > 0x0F)
+    BRAKES1_counter = 0; // V11: was 10..0x1F, which jumped F -> A in the nibble (§7 #21)
   standaloneTx(frame);
 
   // PQ Bremse_3 (0x4A0, DLC 8) - per-wheel speeds (vw_pq.dbc: Bremse_3).
+  // V11: four EQUAL, steady speeds (real vehicle speed when we have it). Before
+  // V11 these were lock-scaled to fake slip; the lever is Bremse_4 now (§7 #9).
   frame.identifier = BRAKES3_ID;
   frame.data_length_code = 8;
-  frame.data[0] = get_lock_target_adjusted_value(0xB6, false); // Radgeschw_VL low (front-left)
-  frame.data[1] = 0x07;                                        // Radgeschw_VL high
-  frame.data[2] = get_lock_target_adjusted_value(0xCC, false); // Radgeschw_VR low (front-right)
-  frame.data[3] = 0x07;                                        // Radgeschw_VR high
-  frame.data[4] = get_lock_target_adjusted_value(0xD2, false); // Radgeschw_HL low (rear-left)
-  frame.data[5] = 0x07;                                        // Radgeschw_HL high
-  frame.data[6] = get_lock_target_adjusted_value(0xD2, false); // Radgeschw_HR low (rear-right)
-  frame.data[7] = 0x07;                                        // Radgeschw_HR high
+  frame.data[0] = (uint8_t)(speedWord & 0xFF); // Radgeschw_VL low (front-left)
+  frame.data[1] = (uint8_t)(speedWord >> 8);   // Radgeschw_VL high
+  frame.data[2] = (uint8_t)(speedWord & 0xFF); // Radgeschw_VR low (front-right)
+  frame.data[3] = (uint8_t)(speedWord >> 8);   // Radgeschw_VR high
+  frame.data[4] = (uint8_t)(speedWord & 0xFF); // Radgeschw_HL low (rear-left)
+  frame.data[5] = (uint8_t)(speedWord >> 8);   // Radgeschw_HL high
+  frame.data[6] = (uint8_t)(speedWord & 0xFF); // Radgeschw_HR low (rear-right)
+  frame.data[7] = (uint8_t)(speedWord >> 8);   // Radgeschw_HR high
   standaloneTx(frame);
 
-  if (haldexLearnActive || state.mode != MODE_5050)
-  {
-    appliedTorque = get_lock_target_adjusted_value(0x7F, false); // regulated clamp
-  }
-  else
-  {
-    appliedTorque = get_lock_target_adjusted_value(0xFE, false); // full clamp (27 bar)
-  }
+  // Bremse_4 byte 0 = the 0BR's direct clutch-torque lever (OEM code:
+  // spec_gen4_0br §2.2 / §2.6):
+  //   0 %     -> 0x7F  valid zero request, clutch commanded fully open
+  //   1-99 %  -> 0x80 + % x 1.25 (linear, 112 internal torque units per step)
+  //   100 %   -> 0xFE  the unit's present maximum clutch capacity
+  // The unit still caps this with its own limits (over-temperature etc).
+  // V11: was 0x7F x CF/100 (below 0x7F = ignored) and 0x7F at 100 % outside
+  // 50:50 = clutch open (§7 #1 / #2). Learn sweeps this byte too (§7 #3).
+  appliedTorque = vag_lever_byte(0xFE); // Gen4: 0xFE = full lock
 
-  // PQ Bremse_4 (0x2A0, DLC 8) - ABS coupling moment (vw_pq.dbc: Bremse_4).
-  // data[7] = XOR-CRC over data[0..6]; data[6] is rolling counter (steps of 16).
+  // PQ Bremse_4 (0x2A0, DLC 8) - only byte 0 is read; byte 6 counter and byte
+  // 7 checksum are ignored by the 0BR (§7 #20), kept as before.
   frame.identifier = BRAKES4_ID;
   frame.data_length_code = 8;
-  frame.data[0] = appliedTorque;   // ABS_Vorgabewert_hinten_Kupplung (rear-clutch %)
-  frame.data[1] = 0x00;            // ABS_Vorgabewert_mitte_Kupplungs low (centre stiffness Nm/min)
-  frame.data[2] = 0x00;            // ABS_Vorgabewert_mitte_Kupplungs high
-  frame.data[3] = 0x64;            // status / reserved
-  frame.data[4] = 0x00;            // reserved
-  frame.data[5] = 0x00;            // reserved
-  frame.data[6] = BRAKES4_counter; // rolling counter (16-step)
+  frame.data[0] = appliedTorque;   // lever (see above)
+  frame.data[1] = 0x00;            // not read by Gen4
+  frame.data[2] = 0x00;            // not read by Gen4
+  frame.data[3] = 0x64;            // not read by Gen4
+  frame.data[4] = 0x00;            // not read by Gen4
+  frame.data[5] = 0x00;            // not read by Gen4
+  frame.data[6] = BRAKES4_counter; // rolling counter, high nibble (not checked)
   BRAKES4_crc = 0;
   for (uint8_t i = 0; i < 7; i++)
   {
     BRAKES4_crc ^= frame.data[i];
   }
-  frame.data[7] = BRAKES4_crc; // XOR CRC over data[0..6]
+  frame.data[7] = BRAKES4_crc; // XOR checksum over data[0..6] (not even copied by the 0BR)
   BRAKES4_counter = BRAKES4_counter + 16;
   if (BRAKES4_counter > 0xF0)
     BRAKES4_counter = 0x00;
   standaloneTx(frame);
 
   // PQ Motor_1 (0x280, DLC 8) - engine ECU broadcast (vw_pq.dbc: Motor_1).
-  // Every byte except data[0] is lock-target-adjusted to bias the haldex.
+  // V11: steady values. Motor_1 only feeds the unit's own strategy, which a
+  // valid Bremse_4 byte overrides, so it is no longer lock-scaled (§5).
+  // Light-cruise figures chosen as plausible - not from a log.
   frame.identifier = MOTOR1_ID;
   frame.data_length_code = 8;
-  // data[0] left untouched (whatever frame held previously) - status/Momentenangaben_ungenau
-  frame.data[1] = get_lock_target_adjusted_value(0xFE, false); // Fahrerwunschmoment (driver-requested torque)
-  frame.data[2] = get_lock_target_adjusted_value(0x20, false); // Motordrehzahl low (engine RPM * 0.25)
-  frame.data[3] = get_lock_target_adjusted_value(0x4E, false); // Motordrehzahl high
-  frame.data[4] = get_lock_target_adjusted_value(0xFE, false); // Fahrpedalwert (accelerator pedal %)
-  frame.data[5] = get_lock_target_adjusted_value(0xFE, false); // inneres_Motor_Moment_ohne_extern
-  frame.data[6] = get_lock_target_adjusted_value(0x16, false); // mechanisches_Motor_Verlustmoment
-  frame.data[7] = get_lock_target_adjusted_value(0xFE, false); // inneres_Motor_Moment (actual)
+  frame.data[0] = 0x00; // flags: b0.3 Kupplungsschalter 0 = clutch pedal released (V11: was left over from Bremse_4 = "pressed", §7 #4)
+  frame.data[1] = 0x20; // inneres_Motor_Moment (inner torque, 0.39 % per bit)
+  frame.data[2] = 0x40; // Motordrehzahl low (rpm x 0.25): 0x1F40 = 8000 -> 2000 rpm
+  frame.data[3] = 0x1F; // Motordrehzahl high
+  frame.data[4] = 0x20; // inneres_Motor_Moment_ohne_extern (not read by Gen4)
+  frame.data[5] = 0x20; // Fahrpedalwert (pedal, 0.4 % per bit): 12.8 %
+  frame.data[6] = 0x08; // mechanisches_Motor_Verlustmoment (loss torque)
+  frame.data[7] = 0x20; // Fahrerwunschmoment (driver demand torque)
   standaloneTx(frame);
 }
 
@@ -759,13 +900,14 @@ void Gen4_frames20()
 {
   twai_message_t frame = {};
   // PQ Bremse_2 (0x5A0, DLC 8) - ESP/ABS sensor broadcast (vw_pq.dbc: Bremse_2).
+  // Gen4 reads b0, b1.0, b3 bits 4-7, b6.6, b7.7 - not b4 (spec_gen4_0br §3).
   frame.identifier = BRAKES2_ID;
   frame.data_length_code = 8;
   frame.data[0] = 0x80;                                        // Impulszahl (pulse count)
   frame.data[1] = 0x7A;                                        // Wegimpulse_Vorderachse (front-axle path pulses)
   frame.data[2] = 0x05;                                        // mittlere_Raddrehzahl (mean wheel speed)
   frame.data[3] = BRAKES2_counter;                             // rolling counter (16-step)
-  frame.data[4] = get_lock_target_adjusted_value(0x7F, false); // Querbeschleunigung (lateral G)
+  frame.data[4] = get_lock_target_adjusted_value(0x7F, false); // Querbeschleunigung (lateral G) - not read by Gen4, no effect
   frame.data[5] = 0xCA;                                        // Zeitstempel low (timestamp)
   frame.data[6] = 0x1B;                                        // Zeitstempel high
   frame.data[7] = 0xAB;                                        // status / reserved
@@ -773,22 +915,125 @@ void Gen4_frames20()
   BRAKES2_counter = BRAKES2_counter + 16;
   if (BRAKES2_counter > 0xF0)
     BRAKES2_counter = 0;
+
+  // ---- V11.00.0: frames the 0BR monitors that we never sent (spec_gen4_0br §3 / §7 #5).
+  // Each has a 50-tick alive window in the unit; 20 ms is well inside it.
+  // Content: K-matrix value tables (vw_pq.dbc) with steady, plausible values -
+  // no PQ log of these frames was available.
+
+  // PQ Motor_2 (0x288, DLC 8). Gen4 reads b0 (mux), b2.0 brake light, b2.1, b2.4.
+  uint8_t motor2Byte2 = 0x10; // b2.4 MO2_Sta_No_Bet = 1: engine in normal operation
+  if (brakeForHaldex())
+  {
+    motor2Byte2 = motor2Byte2 | (1 << 0); // b2.0 MO2_BLS: brake light on (Follow Brake)
+  }
+  frame.identifier = MOTOR2_ID;
+  frame.data_length_code = 8;
+  frame.data[0] = 0xDE;        // mux code 3 (bits 6-7) = MO2_max_Mo, data 0x1E x 10 = 300 Nm max engine torque
+  frame.data[1] = 0xB8;        // MO2_Kuehlm_T coolant: 0xB8 x 0.75 - 48 = 90 degC (not read by Gen4)
+  frame.data[2] = motor2Byte2; // b2.0 brake light, b2.1 brake test switch = 0 (spec §5), b2.4 normal operation
+  frame.data[3] = 0x00;        // cruise control flags off
+  frame.data[4] = 0x00;        // MO2_GRA_Soll: no cruise set speed
+  frame.data[5] = 0x50;        // MO2_LL_Solldz: idle target 0x50 x 10 = 800 rpm
+  frame.data[6] = 0xFE;        // MO2_Begr_Mo: no torque limit
+  frame.data[7] = 0x00;        // MO2_Mo_ZWR
+  standaloneTx(frame);
+
+  // PQ Motor_5 (0x480, DLC 8). Must be present: without it the 0BR sets its own
+  // limp bit (0x2C0 b0.4) - OEM code FUN_032880. Gen4 reads b0 (mux) and b6.3.
+  frame.identifier = MOTOR5_ID;
+  frame.data_length_code = 8;
+  frame.data[0] = 0x1E; // mux code 0 (bits 6-7) = MO5_max_Moment, data 0x1E x 10 = 300 Nm (matches Motor_2)
+  frame.data[1] = 0x00; // lamps off (glow, EPC, MIL, hot)
+  frame.data[2] = 0x00; // MO5_Verbrauch low (fuel used)
+  frame.data[3] = 0x00; // MO5_Verbrauch high
+  frame.data[4] = 0x00; // MO5_Luefter: cooling fan 0 %
+  frame.data[5] = 0x00; // lamps / start flags off
+  frame.data[6] = 0x00; // b6.3 MO5_Momente = 0: torque figures single scale (spec §5)
+  frame.data[7] = 0x00; // checksum (worked out below)
+  for (uint8_t i = 0; i < 7; i++)
+  {
+    frame.data[7] ^= frame.data[i]; // XOR of bytes 0-6 (the 0BR copies only 7 bytes, so it never checks it)
+  }
+  standaloneTx(frame);
+
+  // PQ Bremse_5 (0x4A8, DLC 8). Gen4 reads the yaw rate b0 + b1 bits 0-5
+  // (0.01 deg/s), b1.6 status, b1.7 sign and the b6 counter (not checked).
+  frame.identifier = BRAKES5_ID;
+  frame.data_length_code = 8;
+  frame.data[0] = 0x00;                            // BR5_Giergeschw low: yaw rate 0 (driving straight)
+  frame.data[1] = 0x00;                            // yaw high bits 0-5 = 0, b1.6 status 0, b1.7 sign 0
+  frame.data[2] = 0x00;                            // BR5_Bremsdruck low: brake pressure 0 (not read by Gen4)
+  frame.data[3] = 0x00;                            // brake pressure high / status bits (not read by Gen4)
+  frame.data[4] = 0x00;                            // hill-hold / brake light flags (not read by Gen4)
+  frame.data[5] = 0x00;                            // not read by Gen4
+  frame.data[6] = (uint8_t)(gen4Bremse5Counter << 4); // COUNTER in bits 4-7 (vw_pq.dbc 52|4)
+  frame.data[7] = 0x00;                            // checksum (worked out below)
+  for (uint8_t i = 0; i < 7; i++)
+  {
+    frame.data[7] ^= frame.data[i]; // XOR of bytes 0-6 (not copied by the 0BR, DLC 7)
+  }
+  standaloneTx(frame);
+  gen4Bremse5Counter++;
+  if (gen4Bremse5Counter > 0x0F)
+    gen4Bremse5Counter = 0;
+
+  // PQ Bremse_8 (0x1AC, DLC 8). Gen4 reads b1 bits 0-3 counter (not checked),
+  // b1.4, b1.7 and b4.4; b0 checksum is not checked (spec_gen4_0br §3).
+  frame.identifier = BRAKES8_ID;
+  frame.data_length_code = 8;
+  frame.data[0] = 0x00;                       // BR8_Checksumme (worked out below)
+  frame.data[1] = gen4Bremse8Counter & 0x0F;  // BR8_Zaehler bits 0-3; b1.4 / b1.7 status flags = 0
+  frame.data[2] = 0x7F;                       // BR8_TolAbgl_HL: 0x7F = 0 % tyre tolerance
+  frame.data[3] = 0x7F;                       // BR8_TolAbgl_HR: 0x7F = 0 %
+  frame.data[4] = 0x69;                       // BR8_Istbeschl low: 0x169 = 0 m/s2 (b4.4 = 0)
+  frame.data[5] = 0x01;                       // BR8_Istbeschl high bit; brake-light / ESC flags 0
+  frame.data[6] = 0x00;                       // BR8_Laengsbeschl low: 0x200 = 0 m/s2
+  frame.data[7] = 0x02;                       // BR8_Laengsbeschl high bits; Quattro / EPB flags 0
+  for (uint8_t i = 1; i < 8; i++)
+  {
+    frame.data[0] ^= frame.data[i]; // XOR of bytes 1-7 (not checked by the 0BR)
+  }
+  standaloneTx(frame);
+  gen4Bremse8Counter++;
+  if (gen4Bremse8Counter > 0x0F)
+    gen4Bremse8Counter = 0;
+
+  // PQ Getriebe_1 (0x440, DLC 8). Gen4 reads b1 bits 0-3 target gear, b2 wheel /
+  // crank torque ratio (0.1 per bit) and b6 bits 4-7 (spec_gen4_0br §3).
+  frame.identifier = mGetriebe_1;
+  frame.data_length_code = 8;
+  frame.data[0] = 0x00; // no shift running, no protection request
+  frame.data[1] = 0x55; // GE1_Zielgang bits 0-3 = 5 (5th gear), GE1_Wahl_Pos bits 4-7 = 5 (D)
+  frame.data[2] = 0x0A; // GE1_Mrad_Mkurb: ratio 0x0A x 0.1 = 1.0 (spec §5)
+  frame.data[3] = 0x00; // GE1_Soll_Mo
+  frame.data[4] = 0x7F; // GE1_Fahrwistd: 0x7F = 0 (neutral driving resistance)
+  frame.data[5] = 0x00; // GE1_Notlauf 0 = no gearbox limp
+  frame.data[6] = 0x00; // V11 TODO (bench): Gen4 reads b6 bits 4-7 (vw_pq.dbc: counter bits 3-6 + GE1_Fehlereintr bit 7) - sent as 0 = no gearbox fault; try a counter here if the unit logs a Getriebe_1 fault
+  frame.data[7] = 0x00; // GE1_WaVerl_Mo
+  standaloneTx(frame);
 }
 
 void Gen4_frames25()
 {
   twai_message_t frame = {};
   // PQ Kombi_1 (0x320, DLC 8) - instrument-cluster broadcast (vw_pq.dbc: Kombi_1).
+  // Gen4 reads b1.1 handbrake and b5 bits 0-3 (spec_gen4_0br §3).
+  uint8_t kombi1Byte1 = 0x00; // b1.0 brake-fluid warning off, b1.1 handbrake released
+  if (handbrakeForHaldex())
+  {
+    kombi1Byte1 = kombi1Byte1 | (1 << 1); // b1.1 KO1_Handbremse: handbrake pulled (Follow Handbrake)
+  }
   frame.identifier = mKombi_1;
   frame.data_length_code = 8;
-  frame.data[0] = 0x24; // Bremsinfo / Oeldruck status bits
-  frame.data[1] = 0x00; // Angezeigte_Geschwindigkeit (displayed speed)
-  frame.data[2] = 0x1D; // Geschwindigkeit_Kombi_1 low (vehicle speed)
-  frame.data[3] = 0xB9; // Geschwindigkeit_Kombi_1 high
-  frame.data[4] = 0x07; // Tankinhalt (fuel level)
-  frame.data[5] = 0x42; // Dynamische_Oeldruckwarnung / status
-  frame.data[6] = 0x09; // reserved / multiplex
-  frame.data[7] = 0x81; // reserved
+  frame.data[0] = 0x24;        // lamp bits (oil pressure / hot warning etc)
+  frame.data[1] = kombi1Byte1; // Bremsinfo b1.0 + Handbremse b1.1 (V11: was always 0)
+  frame.data[2] = 0x1D;        // Tankinhalt (fuel level, 29 l)
+  frame.data[3] = 0xB9;        // b3.0 speed source, bits 1-7 Geschwindigkeit_Kombi_1 low (~9.9 km/h)
+  frame.data[4] = 0x07;        // Geschwindigkeit_Kombi_1 high
+  frame.data[5] = 0x42;        // b5 bits 0-3 read by Gen4; bits 6-7 = displayed speed low bits
+  frame.data[6] = 0x09;        // Angezeigte_Geschwindigkeit (displayed speed) high bits
+  frame.data[7] = 0x81;        // spare
   standaloneTx(frame);
 
   // PQ Kombi_3 (0x520, DLC 8) - cluster odometer/keys (vw_pq.dbc: Kombi_3).
@@ -809,12 +1054,13 @@ void Gen4_frames100()
 {
   twai_message_t frame = {};
   // PQ Gate_Komf_1 (0x390, DLC 8) - gateway-comfort broadcast (vw_pq.dbc: Gate_Komf_1).
+  // Gen4 reads only b3.4 GK1_Rueckfahr (reverse) - spec_gen4_0br §3.
   frame.identifier = mGate_Komf_1;
   frame.data_length_code = 8;
   frame.data[0] = 0x03; // GK1_Sta_Anhaen / door & light status bits
   frame.data[1] = 0x11; // GK1_Blinker_li / re (indicators)
-  frame.data[2] = 0x58; // Rueckfahrscheinwerfer (reverse light) / alarm bits
-  frame.data[3] = 0x00; // GK1_Sta_RDK_Warn (TPMS warning)
+  frame.data[2] = 0x58; // alarm / light bits
+  frame.data[3] = 0x00; // b3.4 GK1_Rueckfahr = 0: not reversing (the only bit Gen4 reads)
   frame.data[4] = 0x40; // seat-memory / sunroof bits
   frame.data[5] = 0x00; // alarm / lock bits
   frame.data[6] = 0x01; // status
@@ -822,7 +1068,8 @@ void Gen4_frames100()
   standaloneTx(frame);
 
   // PQ Bremse_11 (0x5B7, DLC 8) - extended brake frame (NOT in vw_pq.dbc).
-  // Static placeholder; only data[1]=0xC0 is significant for haldex sanity.
+  // Not in the Gen4 0BR receive table at all - the unit ignores it (spec_gen4_0br
+  // §3), so its block is OFF in the V11 standalone default (same for Kombi_2).
   frame.identifier = BRAKES11_ID;
   frame.data_length_code = 8;
   frame.data[0] = 0x00; // no effect
@@ -880,6 +1127,9 @@ static void frames13()
   case 41:
     Gen41_frames13();
     break;
+  case GEN_VOLVO_P1:
+    VolvoP1_frames13(); // the P1's 14-15 ms frames
+    break;
   }
 }
 
@@ -889,6 +1139,9 @@ static void frames50()
   {
   case 41:
     Gen41_frames50();
+    break;
+  case GEN_VOLVO_P1:
+    VolvoP1_frames50();
     break;
   }
 }
@@ -1766,6 +2019,14 @@ void Gen41_frames250()
 //   ESP_21  0x0FD  no measurable effect at this operating point
 // Command, pump duty and reported value track 1:1 in V3. Note "no effect" was
 // only established at steady 30% on a bench - not during transitions or at speed.
+// V11.00.0 (OEM code, documents/haldex-binaries/leaf_trace/spec_gen5_0cq.md):
+// the roles above were measured with ESP_14 Min = 0, i.e. ESP_14 as a ceiling over
+// the unit's own Motor_11 strategy - which is why Motor_11 looked mandatory. ESP_14
+// now sends Min = Max = V (0..250), the 0CQ's "exact" mode: the clutch target is V
+// itself and the Motor_11 strategy is not used. The 0CQ receives 18 frames
+// (spec §3) and checks no CRC or counter on any of them; ESP_10, EPB_01, ESP_18,
+// ESP_23, Parkhilfe_04, Gateway_72, Getriebe_14 and ESP_29 are not received at
+// all, so their blocks are OFF in the standalone defaults (globals.cpp).
 void Gen5_0CQ_frames10()
 {
   twai_message_t frame = {};
@@ -1787,9 +2048,11 @@ void Gen5_0CQ_frames10()
   // MQB ESP_19 (0x0B2, DLC 8) - wheel speeds (ESP_VL/VR/HL/HR_Radgeschw_02,
   // LE, 0.0075 km/h/bit - see the real decode in OpenHaldexC6_can.cpp).
   // Wheel speed MUST keep changing or haldex slowly disengages - static
-  // makes it fade over time and eventually stop. Front wheels are also
-  // inflated above rear by a lock_target-proportional delta (simulated
-  // slip requesting engagement) - see fill_esp19_wheel_speeds().
+  // makes it fade over time and eventually stop. V11.00.0: the speeds no
+  // longer follow the lock - the 0CQ's strategy and clutch-temperature model
+  // read them (OEM code: spec_gen5_0cq D6), so they are always the gently
+  // varying ~19-31 km/h that used to be sent at 100 % lock. See
+  // fill_esp19_wheel_speeds().
   frame.identifier = ESP_19; // ESP_19 0x0b2
   frame.extd = 0;
   frame.rtr = 0;
@@ -1800,18 +2063,23 @@ void Gen5_0CQ_frames10()
   // MQB Getriebe_11 (0x0AD, DLC 8) - transmission ECU broadcast.
   // GE_MMom_Anf_02 (engine torque request), GE_MMom_Vorhalt_02 (anticipatory torque),
   // GE_Fahrstufe (selected gear), GE_Schalt_Sequenz (shift state), GE_Zielgang.
+  // The 0CQ reads only b7 bits 4-7, the target gear (OEM code: spec_gen5_0cq §3):
+  // 1-7 are used as gears; 0 becomes the unit's internal "no gear" code (0xFE).
+  // (Motor_14's gear is only used when this frame is missing.)
+  // V11 TODO (bench): try a real gear here (e.g. b7 = 0x20 = 2nd) and compare -
+  // the spec cannot say what gear 0 does to the strategy (spec §5).
   frame.identifier = GETRIEBE_11; // 0x0AD
   frame.extd = 0;
   frame.rtr = 0;
   frame.data_length_code = 8;
-  frame.data[0] = 0x00;                // GE_CHK_02 - checksum placeholder (none affect)
+  frame.data[0] = 0x00;                // GE_CHK_02 - checksum (the 0CQ checks no CRC - spec §1)
   frame.data[1] = GETRIEBE_11_counter; // GE_BZ_02 - rolling 4-bit counter (0x00>0x0F)
   frame.data[2] = 0x00;                // GE_MMom_Anf_02 (engine torque-intervention request) - Was 0xFE Torque intervention at the engine. Requests a short-term reduction or increase in torque from the ECU. This signal is only valid in combination with GE_MMom_Status (for MQB) or GE_MMom_Status_02 (for MLBevo).
   frame.data[3] = 0xFE;                // GE_MMom_Vorhalt_02 (Pre-control torque - anticipatory torque request)
   frame.data[4] = 0x00;                // GE_Fahrstufe (Actual gear/range selected: 5=P, 6=R, 7=N, 8=D, 9=S, 10=E, 13/14=T)
   frame.data[5] = 0x00;                // GE_Schalt_Sequenz (Shift sequence state: 0=idle, 1=shift in progress, etc.) - does not affect (>0x00)
   frame.data[6] = 0x00;                // GE_Kraftschluss / clutch lock-up (Power transmission status / clutch lock-up state) - does not affect (>0x00)
-  frame.data[7] = 0x00;                // GE_Zielgang (Target gear of current shift)
+  frame.data[7] = 0x00;                // GE_Zielgang (b7 bits 4-7, target gear) = 0, see the TODO above
 
   frame.data[0] = calcChecksum(frame.data, ID_SEQ_0AD); // for 0x0AD
 
@@ -1825,18 +2093,22 @@ void Gen5_0CQ_frames10()
   // MQB Motor_12 (0x0A8, DLC 8) - engine torque limits / RPM (Motor_12).
   // MO_Mom_neg_verfuegbar (max engine braking), Mom_Statisch_Limit (static limit),
   // Mom_Dynamisch_Limit (dynamic limit), MO_Drehzahl_01 (engine RPM).
+  // The 0CQ reads only b6-b7 = engine speed (OEM code: spec_gen5_0cq §3).
   frame.identifier = MOTOR_12; // Motor_12 0x0A8
   frame.extd = 0;
   frame.rtr = 0;
   frame.data_length_code = 8;
-  frame.data[0] = 0x00;                                                    // MO_CHK_02 - checksum placeholder
-  frame.data[1] = MOTOR_12_counter;                                        // MO_BZ_02 - rolling counter (0x70>0x7F)
-  frame.data[2] = 0x00;                                                    // MO_Mom_neg_verfuegbar (Negative available torque / maximum engine braking) - does not affect (doesn't affect)
-  frame.data[3] = 0x00;                                                    // Static torque limit (sometimes 0xC0, sometimes 0x00) - doesn't affect
-  frame.data[4] = 0x00;                                                    // Dynamic torque limit (sometimes 0x3A, sometimes 0x39) - doesn't affect
-  frame.data[5] = 0x64;                                                    // Vehicle speed signal quality bit (0x64=good, 0x00=bad). True? - doesn't affect
-  frame.data[6] = 0x0F;                                                    // Engine speed signal quality bit (Bool). Was 0xD4 - does affect.
-  frame.data[7] = get_lock_target_adjusted_value(MOTOR_12_counter, false); // MO_Drehzahl_01 (Engine speed / RPM, was 0xAE affects.  >30 slows down.  Only adds 5%. Was 0x10 - does affect)
+  frame.data[0] = 0x00;             // MO_CHK_02 - checksum placeholder
+  frame.data[1] = MOTOR_12_counter; // MO_BZ_02 - rolling counter (0x70>0x7F)
+  frame.data[2] = 0x00;             // MO_Mom_neg_verfuegbar (Negative available torque / maximum engine braking) - not read by the 0CQ
+  frame.data[3] = 0x00;             // Static torque limit - not read by the 0CQ
+  frame.data[4] = 0x00;             // Dynamic torque limit - not read by the 0CQ
+  frame.data[5] = 0x64;             // not read by the 0CQ
+  // V11.00.0: b6-b7 are ONE 16-bit engine speed (MO_Drehzahl_01, 0.25 rpm per
+  // step), not a quality bit + rpm. b7 used to follow the lock, so the rpm ran
+  // from ~4 rpm at 0 % to ~16000 rpm at 100 % (spec D5). Now a steady 2000 rpm.
+  frame.data[6] = 0x40; // engine speed low byte  (0x1F40 = 8000 x 0.25 = 2000 rpm)
+  frame.data[7] = 0x1F; // engine speed high byte
 
   frame.data[0] = calcChecksum(frame.data, ID_SEQ_0A8); // for 0x0A8
 
@@ -1848,10 +2120,16 @@ void Gen5_0CQ_frames10()
   standaloneTx(frame);
 
   // MQB Motor_11 (0x0A7, DLC 8) - engine torque demand/output broadcast.
+  // V11.00.0 (OEM code, spec_gen5_0cq §2.1): the 0CQ reads only MO_Mom_Soll_Roh
+  // (bits 12-21) and MO_Mom_Ist_Summe (bits 22-31), raw = Nm + 509, plus b7 bit 5.
+  // That torque feeds its OWN strategy, which is ignored while ESP_14 sends
+  // Min = Max (the exact request below), so Motor_11 can't fight the ESP_14 lever.
+  // It still feeds the unit's clutch-load model, so it keeps a steady value.
   //
   // Two packings, selected by the user-facing "Fix Hunting" toggle (fixHunting):
-  //   fixHunting == false (default): empirical V3 packing, b6/b7 lock-modulated
-  //                                  0..0xFA. Confirmed working on 554C, 554D,
+  //   fixHunting == false (default): empirical V3 packing, b6/b7 now fixed at
+  //                                  0xFA (they used to follow the lock).
+  //                                  Confirmed working on 554C, 554D,
   //                                  554H, and 554K @ 100% lock.
   //   fixHunting == true            : DBC-correct bit-packed Soll_Roh/Ist/Solf
   //                                  with fixed BPK defaults. Required on 554K
@@ -1871,23 +2149,27 @@ void Gen5_0CQ_frames10()
   if (!fixHunting && !dangerZoneActive())
   {
     // ---- V3 packing (default, working on 554C/D/H and 554K@100%) ----
-    appliedTorque = get_lock_target_adjusted_value(0xFA, false);
-
-    frame.data[0] = 0x00;             // MO_CHK_01 - checksum placeholder
-    frame.data[1] = MOTOR_11_counter; // MO_BZ_01 - rolling counter (0x40..0x4F)
-    frame.data[2] = 0xFA;             // MO_Mom_Soll_Roh
-    frame.data[3] = 0xFA;             // MO_Mom_Ist
-    frame.data[4] = 0x00;             // MO_Mom_Traegheit_Summe
-    frame.data[5] = 0xFA;             // MO_Mom_Soll_gefiltert
-    frame.data[6] = appliedTorque;    // lock-modulated (massive effect)
-    frame.data[7] = appliedTorque;    // lock-modulated (massive effect)
+    frame.data[0] = 0x00;             // MO_CHK_01 - checksum (the 0CQ checks no CRC - spec §1)
+    frame.data[1] = MOTOR_11_counter; // MO_BZ_01 - rolling counter (0x40..0x4F); high nibble = MO_Mom_Soll_Roh low bits
+    frame.data[2] = 0xFA;             // MO_Mom_Soll_Roh / MO_Mom_Ist_Summe bits: Soll_Roh = 423 Nm, Ist = 494 Nm (spec D4)
+    frame.data[3] = 0xFA;             // MO_Mom_Ist_Summe high bits (raw 0x3EB, below the 0x3FB "invalid" codes)
+    frame.data[4] = 0x00;             // MO_Mom_Traegheit_Summe - not read by the 0CQ
+    frame.data[5] = 0xFA;             // MO_Mom_Soll_gefiltert - not read by the 0CQ
+    // b6/b7 only hold MO_Mom_Schub (never used by the 0CQ) and b7 bit 5
+    // MO_Status_Normalbetrieb (fault-monitor enable only). They used to follow
+    // the lock, flipping bit 61 with the lock value; the "massive effect" seen on
+    // the bench came from ESP_14 changing in the same cycle (spec D3). V11.00.0:
+    // fixed at the values that were sent at 100 % lock.
+    frame.data[6] = 0xFA; // MO_Mom_Schub low bits (not used by the 0CQ)
+    frame.data[7] = 0xFA; // MO_Mom_Schub high bits + b7.5 Normalbetrieb = 1
   }
   else
   {
     // ---- BPK packing (Fix Hunting toggle on, or Danger Zone live) ----
     // Shared with the normal-mode packer so the two can never drift, and so the
     // serial lab tunables apply identically in both. See fill_motor11_bpk().
-    appliedTorque = get_lock_target_adjusted_value(0xFE, false); // pre-scale value, for telemetry
+    // The torque here still follows the lock (the "torque-style" lever), but the
+    // 0CQ only uses it when ESP_14 is missing - ESP_14 below is what it follows.
     fill_motor11_bpk(frame.data, MOTOR_11_counter);
   }
 
@@ -1904,44 +2186,31 @@ void Gen5_0CQ_frames10()
   0xd2,0x3d,0xcd,0x28,0x4c,0x14,0x22,0x4b,0x24,0xac,0xfa,0x55,0x66,0x80,0x0d,0x6c
   */
 
-  // MQB ESP_14 (0x08A, DLC 8) - ESP-to-AWD coupling-range limits.
-  // BR_Vorg_Quer_Min/Max (lateral stability range), BR_Vorg_Allrad_Min/Max (AWD range).
-  // 100% torque = 2000 Nm. data[7] has massive effect on engagement.
+  // MQB ESP_14 (0x08A, DLC 8) - THE lock lever on the 0CQ.
+  // BR_Vorg_Quer_Min/Max (b4/b5, front lock - not read by the 0CQ),
+  // BR_Vorg_Allrad_Min/Max (b6/b7 - the only bytes the 0CQ reads, spec_gen5_0cq §2).
+  // V11.00.0 (spec D1/D2): b6 = b7 = V, 0..250. Min = Max is the 0CQ's "exact"
+  // mode: clutch target = V (0.4 % per step, same scale as Allrad_03 byte 2),
+  // and its own Motor_11 strategy is ignored. V = 0 = clutch open. Never above
+  // 250: 251+ means "no ESP request" and the unit runs its own strategy (that
+  // is what happened at full lock with the old 0..0xFE scale). The Launch PWM
+  // floor is not used here any more - Min is already pinned to Max. The unit's
+  // own ramp, capacity limit and fault reactions still apply on top (spec §2.2).
   frame.identifier = ESP_14; // ESP_14 0x08A
   frame.extd = 0;
   frame.rtr = 0;
   frame.data_length_code = 8;
-  frame.data[0] = 0x00;           // ESP_CHK_14 - checksum placeholder
-  frame.data[1] = ESP_14_counter; // ESP_BZ_14 - rolling counter (0x10>0x1F)
-  frame.data[2] = 0x00;           // ESP_14 reserved/status (doesn't affect)
-  frame.data[3] = 0x00;           // ESP_14 reserved/status (doesn't affect, sometimes 0xC0, sometimes 0x00)
+  frame.data[0] = 0x00;           // ESP_CHK_14 - checksum (the 0CQ checks no CRC - spec §1)
+  frame.data[1] = ESP_14_counter; // ESP_BZ_14 - rolling counter (0x10>0x1F), not read by the 0CQ
+  frame.data[2] = 0x00;           // not read by the 0CQ
+  frame.data[3] = 0x00;           // BR_Status_Quer_ESP (VAQ only) - not read by the 0CQ
 
-  appliedTorque = get_lock_target_adjusted_value(0xFE, false);
+  appliedTorque = gen5_esp14_lever_byte(); // V, 0..250
 
-  // Launch PWM floor: raise BR_Vorg_*_Min while lock is commanded, clamped
-  // strictly below Max so the Haldex keeps room to modulate. 0% = unchanged,
-  // and it collapses to 0 whenever Max does (off-throttle, FWD, coasting).
-  // Adopted from OpenHaldex-Edge by Rekt (Kile Thomson) - see THIRD_PARTY_NOTICES.md.
-  {
-    uint8_t esp14Floor = 0;
-    if (esp14MinFloorPct > 0 && appliedTorque > 1)
-    {
-      uint16_t f = ((uint16_t)appliedTorque * esp14MinFloorPct) / 100;
-      if (f > (uint16_t)(appliedTorque - 1))
-        f = (uint16_t)(appliedTorque - 1);
-      esp14Floor = (uint8_t)f;
-    }
-    // (Danger Zone used to pin Min here. Bench 2026-09-20 on the 0CQ: Min =
-    // Max - 1, Min = Max and the K-matrix 251 "Over-pressure" / 252 "fast
-    // close" codes, on Quer and Allrad, all leave the pump at the same ~65 %
-    // duty. The pump follows the Motor_11 torque - see fill_motor11_bpk.)
-    frame.data[4] = esp14Floor; // BR_Vorg_Quer_Min
-    frame.data[6] = esp14Floor; // BR_Vorg_Allrad_Min
-  }
-
-  frame.data[5] = appliedTorque; // BR_Vorg_Quer_Max (Maximum predefined limit of the clutch's operating range by the ESP MQB Haldex: 100% torque corresponds to 2000 Nm.)
-  frame.data[7] = appliedTorque; // BR_Vorg_Allrad_Max (Maximum specified limit of the clutch's operating range by the ESP MQB Haldex: 100% torque corresponds to 2000 Nm.)
-  // massive effects (4>7)
+  frame.data[4] = appliedTorque; // BR_Vorg_Quer_Min - not read by the 0CQ, mirrored
+  frame.data[5] = appliedTorque; // BR_Vorg_Quer_Max - not read by the 0CQ, mirrored
+  frame.data[6] = appliedTorque; // BR_Vorg_Allrad_Min = V (exact mode)
+  frame.data[7] = appliedTorque; // BR_Vorg_Allrad_Max = V
 
   frame.data[0] = calcChecksum(frame.data, ID_SEQ_08A); // for 0x08A
 
@@ -1965,10 +2234,13 @@ void Gen5_0CQ_frames10()
   frame.data_length_code = 8;
   frame.data[0] = 0x00;           // LWI_CHK - checksum placeholder
   frame.data[1] = LWI_01_counter; // LWI_BZ - rolling counter (0x10>0x1F)
-  frame.data[2] = 0x01;           // LWI_Sensorstatus (sensor health/status)
-  frame.data[3] = 0x00;           // LWI_Qbit_sub_daten (sub-data quality bit)
-  frame.data[4] = 0x00;           // LWI_Qbit_Lenkradwinkel (steering-angle quality bit)
-  frame.data[5] = 0x00;           // LWI_Lenkradwinkel (steering-wheel angle, * 0.1 deg)
+  // The 0CQ reads the steering angle from bits 16-28 (b2 + b3 bits 0-4, 0.1 deg
+  // per step) and its sign from bit 29 (OEM code: spec_gen5_0cq §3). b2 is the
+  // angle low byte, not a sensor status. V11.00.0: angle 0 (was 0x01 = 0.1 deg).
+  frame.data[2] = 0x00;           // LWI_Lenkradwinkel low byte = 0 (straight ahead)
+  frame.data[3] = 0x00;           // LWI_Lenkradwinkel high bits + sign (b3.5) = 0
+  frame.data[4] = 0x00;           // not read by the 0CQ
+  frame.data[5] = 0x00;           // not read by the 0CQ
   frame.data[6] = 0x00;           // LWI_Lenkradw_Geschw low (angular velocity, * 5 deg/s)
   frame.data[7] = 0x00;           // LWI_Lenkradw_Geschw high (Unit Degrees of Arc per Second)
 
@@ -2017,16 +2289,19 @@ void Gen5_0CQ_frames20()
 
   // MQB ESP_10 (0x116, DLC 8) - lateral dynamics / yaw + lateral accel.
   // ESP_Gierrate (yaw), ESP_Querbeschleunigung (lateral acceleration), status bits.
+  // V11.00.0: the 0CQ does NOT receive ESP_10 (OEM code: spec_gen5_0cq §1 RX table,
+  // D9), so block 5 is OFF in the standalone defaults. The old "affects 40 %" note
+  // below must have been something else changing at the same time.
   frame.identifier = ESP_10;                            // ESP_10 0x116
   frame.data_length_code = 8;                           // DLC 8
   frame.data[0] = 0x00;                                 // BR_CHK_10 - checksum
   frame.data[1] = ESP_10_counter;                       // BR_BZ_10 - rolling counter (0x00>0x0F)
-  frame.data[2] = 0x01;                                 // ESP_QBit / status flags (no affect all these affect, find which one)
-  frame.data[3] = 0x04;                                 // ESP_Gierrate low (yaw rate) (no effect sometimes 0xC0, sometimes 0x00)
-  frame.data[4] = 0x00;                                 // ESP_Gierrate high (no effect sometimes 0x3A, somtimes 0x39)
-  frame.data[5] = 0x40;                                 // ESP_VZ_Gierrate (yaw sign) (no effect)
-  frame.data[6] = 0x00;                                 // ESP_Querbeschleunigung low (lateral G) (no effect)
-  frame.data[7] = 0xFF;                                 // ESP_Querbeschleunigung high (lateral G - this affects(!) - a good 40%.  Was 0xFF)
+  frame.data[2] = 0x01;                                 // ESP_QBit / status flags
+  frame.data[3] = 0x04;                                 // ESP_Gierrate low (yaw rate)
+  frame.data[4] = 0x00;                                 // ESP_Gierrate high
+  frame.data[5] = 0x40;                                 // ESP_VZ_Gierrate (yaw sign)
+  frame.data[6] = 0x00;                                 // ESP_Querbeschleunigung low (lateral G)
+  frame.data[7] = 0xFF;                                 // ESP_Querbeschleunigung high (old note "affects 40 %" - not a 0CQ effect, see above)
   frame.data[0] = calcChecksum(frame.data, ID_SEQ_116); // for 0x116
 
   ESP_10_counter++;
@@ -2042,17 +2317,27 @@ void Gen5_0CQ_frames20()
 
   // MQB ESP_05 (0x106, DLC 8) - brake pressure + brake-light/brake-pedal flags.
   // BR_Bremsdruck (master cylinder pressure), BR_Bremslicht (brake-light), BR_Bremspedal (pedal active).
-  frame.identifier = ESP_05;                            // ESP_05 0x106
-  frame.data_length_code = 8;                           // DLC 8
-  frame.data[0] = 0x00;                                 // BR_CHK_05 - checksum
-  frame.data[1] = ESP_05_counter;                       // BR_BZ_05 - rolling counter (0x80>0x8F)
-  frame.data[2] = 0x64;                                 // BR_Bremsdruck (master-cylinder brake pressure) (no effect)
-  frame.data[3] = 0xC0;                                 // BR_Bremslicht / brake-light status (this affects(!) sometimes 0xC0, sometimes 0x00)
-  frame.data[4] = 0x00;                                 // BR_Status / brake event flags (no effect sometimes 0x3A, somtimes 0x39)
-  frame.data[5] = 0x00;                                 // BR_Status reserved (no effect)
-  frame.data[6] = 0xFD;                                 // BR_Status reserved (no effect)
-  frame.data[7] = 0x00;                                 // BR_Bremspedal (brake pedal active flag) (this affects(!) - on/off.  Was 0x10.  0x00 doesn't hurt)
-  frame.data[0] = calcChecksum(frame.data, ID_SEQ_106); // for 0x106
+  // The 0CQ reads the brake pressure, bits 16-25 (b2 + b3 bits 0-1), and sets an
+  // internal "braking" flag above a threshold (OEM code: spec_gen5_0cq §3).
+  frame.identifier = ESP_05;      // ESP_05 0x106
+  frame.data_length_code = 8;     // DLC 8
+  frame.data[0] = 0x00;           // BR_CHK_05 - checksum (worked out below)
+  frame.data[1] = ESP_05_counter; // BR_BZ_05 - rolling counter (0x80>0x8F)
+  frame.data[2] = 0x64;           // ESP_Bremsdruck low byte: raw 0x064 = 100 = 0 bar (K-matrix 0.3 bar/step, -30 bar offset) - not braking
+  // b3: bits 0-1 = brake pressure high bits (0), bit 2 = ESP_Fahrer_bremst
+  // (driver braking), bits 6-7 = 0xC0 as before. V11.00.0: bit 2 follows
+  // brakeForHaldex() ("Follow Brake" + brake input wire or the car's CAN). The
+  // 0CQ itself does not read bit 2 (spec §3) but the car's other modules do.
+  frame.data[3] = 0xC0; // brake pressure high bits 0, not braking
+  if (brakeForHaldex())
+  {
+    frame.data[3] = frame.data[3] | (1 << 2); // b3 bit 2 = ESP_Fahrer_bremst (driver is braking)
+  }
+  frame.data[4] = 0x00;                                 // not read by the 0CQ
+  frame.data[5] = 0x00;                                 // not read by the 0CQ
+  frame.data[6] = 0xFD;                                 // not read by the 0CQ
+  frame.data[7] = 0x00;                                 // not read by the 0CQ (old bench note "affects on/off" was not a 0CQ effect)
+  frame.data[0] = calcChecksum(frame.data, ID_SEQ_106); // CRC over the finished bytes (incl. the brake bit), like applyBrakeHandbrakeCANOverride does
 
   ESP_05_counter++;
   if (ESP_05_counter > 0x8F)
@@ -2066,6 +2351,7 @@ void Gen5_0CQ_frames20()
   */
 
   // MQB EPB_01 (0x104, DLC 8) - electronic parking brake state.
+  // Not received by the 0CQ (spec_gen5_0cq §1) - block 7 is OFF in the standalone defaults.
   frame.identifier = EPB_01;                            // EPB_01 0x104
   frame.data_length_code = 8;                           // DLC 8
   frame.data[0] = 0x00;                                 // EPB_CHK - checksum
@@ -2090,16 +2376,19 @@ void Gen5_0CQ_frames20()
   */
 
   // MQB ESP_02 (0x101, DLC 8) - ESP brake/yaw status broadcast.
+  // The 0CQ reads the lateral acceleration (b2) and the yaw rate (bits 40-53)
+  // with its sign (bit 54) (OEM code: spec_gen5_0cq §3). V11.00.0: 0 g and no
+  // yaw (was -0.01 g and 0.12 deg/s) - a car driving straight.
   frame.identifier = ESP_02;                            // ESP_02 0x101
   frame.data_length_code = 8;                           // DLC 8
   frame.data[0] = 0x00;                                 // BR_CHK_02 - checksum
   frame.data[1] = ESP_02_counter;                       // BR_BZ_02 - rolling counter (0x00>0x1F)
-  frame.data[2] = 0x7E;                                 // BR_Bremsdruck / status (doesn't effect one of these affects, find which one - doesn't affect)
-  frame.data[3] = 0x0F;                                 // BR_Status / event flags (doesn't effect sometimes 0xC0, sometimes 0x00)
-  frame.data[4] = 0x82;                                 // ESP_Gierrate / yaw (doesn't effect sometimes 0x3A, somtimes 0x39)
-  frame.data[5] = 0x0C;                                 // ESP_Status (doesn't effect rolling?)
-  frame.data[6] = 0x40;                                 // ESP_Status reserved (doesn't efffect)
-  frame.data[7] = 0x00;                                 // ESP_Status reserved (doesn't effect)
+  frame.data[2] = 0x7F;                                 // ESP_Querbeschleunigung (0.01 g/step, -1.27 g offset): 0x7F = 0 g
+  frame.data[3] = 0x0F;                                 // not read by the 0CQ
+  frame.data[4] = 0x82;                                 // not read by the 0CQ
+  frame.data[5] = 0x00;                                 // ESP_Gierrate low byte (0.01 deg/s per step) = 0
+  frame.data[6] = 0x00;                                 // ESP_Gierrate high bits (b6 bits 0-5) = 0, ESP_VZ_Gierrate sign (b6 bit 6) = 0
+  frame.data[7] = 0x00;                                 // not read by the 0CQ
   frame.data[0] = calcChecksum(frame.data, ID_SEQ_101); // for 0x101
 
   ESP_02_counter++;
@@ -2114,17 +2403,25 @@ void Gen5_0CQ_frames20()
   */
 
   // MQB ESP_21 (0x0FD, DLC 8) - ESP wheel-speed/dynamics diagnostics.
-  frame.identifier = ESP_21;                            // ESP_21 0x0fd
-  frame.data_length_code = 8;                           // DLC 8
-  frame.data[0] = 0x00;                                 // BR_CHK_21 - checksum
-  frame.data[1] = ESP_21_counter;                       // BR_BZ_21 - rolling counter (0x00>0x1F)
-  frame.data[2] = 0x1F;                                 // ESP_21 status (in diagnosis? none affect)
-  frame.data[3] = 0x80;                                 // ESP_21 status (sometimes 0xC0, sometimes 0x00)
-  frame.data[4] = 0x00;                                 // ESP_21 status (sometimes 0x3A, somtimes 0x39)
-  frame.data[5] = 0x00;                                 // ESP_21 reserved
-  frame.data[6] = 0x00;                                 // ESP_21 reserved
-  frame.data[7] = 0x00;                                 // ESP_21 reserved
-  frame.data[0] = calcChecksum(frame.data, ID_SEQ_0fd); // for 0x0fd
+  // The 0CQ reads only b7 bits 0, 1, 4, 5 = ABS_Bremsung, ASR_Anf, EDS_Eingriff,
+  // ESP_Eingriff (OEM code: spec_gen5_0cq §3; K-matrix lists Allrad_Haldex as a
+  // receiver). V11.00.0: ABS_Bremsung carries absBrakingForHaldex() (the car's ABS
+  // module braking, from the chassis CAN); the other three stay 0 (no intervention).
+  frame.identifier = ESP_21;      // ESP_21 0x0fd
+  frame.data_length_code = 8;     // DLC 8
+  frame.data[0] = 0x00;           // BR_CHK_21 - checksum (worked out below)
+  frame.data[1] = ESP_21_counter; // BR_BZ_21 - rolling counter (0x00>0x1F)
+  frame.data[2] = 0x1F;           // not read by the 0CQ
+  frame.data[3] = 0x80;           // not read by the 0CQ
+  frame.data[4] = 0x00;           // not read by the 0CQ
+  frame.data[5] = 0x00;           // not read by the 0CQ
+  frame.data[6] = 0x00;           // not read by the 0CQ
+  frame.data[7] = 0x00;           // b7: no ABS / ASR / EDS / ESP intervention
+  if (absBrakingForHaldex())
+  {
+    frame.data[7] = frame.data[7] | (1 << 0); // b7 bit 0 = ABS_Bremsung (ABS is braking)
+  }
+  frame.data[0] = calcChecksum(frame.data, ID_SEQ_0fd); // for 0x0fd (over the finished bytes)
 
   ESP_21_counter++;
   if (ESP_21_counter > 0x1F)
@@ -2144,11 +2441,18 @@ void Gen5_0CQ_frames25()
   twai_message_t frame = {};
   // MQB Kombi_01 (0x30B, DLC 8) - instrument cluster broadcast.
   // KBI_Kilometerstand (odometer), KBI_Geschw_Anzeige (displayed speed), warning lamps.
+  // The 0CQ reads only b2 bit 7 = KBI_Handbremse (OEM code: spec_gen5_0cq §3,
+  // and only while ESP_20 b1 bits 4-5 are not 3). V11.00.0: it carries
+  // handbrakeForHaldex() ("Follow Handbrake" + wire or the car's CAN); 0 = released.
   frame.identifier = KOMBI_01; // kombi 1 0x30b
   frame.data_length_code = 8;  // DLC 8
   frame.data[0] = 0x10;        // KBI status / KBI_Geschw_Anzeige low (angle of turn (block 011) low byte)
   frame.data[1] = 0x20;        // KBI counter / KBI_Geschw_Anzeige high (checksum (0x20>0x2F))
-  frame.data[2] = 0x02;        // KBI_Kilometerstand byte 0 (odometer)
+  frame.data[2] = 0x02;        // b2: bit 7 KBI_Handbremse = 0 (released), rest 0x02 as before
+  if (handbrakeForHaldex())
+  {
+    frame.data[2] = frame.data[2] | (1 << 7); // b2 bit 7 = KBI_Handbremse (handbrake pulled)
+  }
   frame.data[3] = 0x00;        // KBI_Kilometerstand byte 1
   frame.data[4] = 0x0C;        // KBI_Kilometerstand byte 2
   frame.data[5] = 0x00;        // KBI status
@@ -2263,9 +2567,9 @@ void Gen5_0CQ_frames100()
   frame.data[0] = calcChecksum(frame.data, ID_SEQ_392); // for 0x392
 
   ESP_07_counter++;
-  if (ESP_07_counter > 0x20)
+  if (ESP_07_counter > 0x2F) // V11.00.0: was "> 0x20 -> 0x2F", which ran backwards and stuck at 0x2F (spec_gen5_0cq D15; harmless, the 0CQ doesn't read it)
   {
-    ESP_07_counter = 0x2F;
+    ESP_07_counter = 0x20; // counter runs 0x20..0x2F
   }
   standaloneTx(frame);
   /*
@@ -2345,21 +2649,23 @@ void Gen5_0CQ_frames1000()
   frame.data[7] = 0x00;             // SI info
   standaloneTx(frame);
 
-  frame.identifier = MOTOR_CODE_01;      // motor_code_01 0x641
-  frame.data_length_code = 8;            // DLC 8 no affect from any
-  frame.data[0] = 0x00;                  // checksum
-  frame.data[1] = MOTOR_CODE_01_counter; // rolling (10>1F)
   // MQB Motor_Code_01 (0x641, DLC 8) - engine code / identification broadcast.
-  frame.identifier = MOTOR_CODE_01;      // motor_code_01 0x641
-  frame.data_length_code = 8;            // DLC 8
-  frame.data[0] = 0x00;                  // MO_CHK_Code - checksum placeholder
-  frame.data[1] = MOTOR_CODE_01_counter; // MO_BZ_Code - rolling counter (10>1F)
-  frame.data[2] = 0x2B;                  // MO_Code byte (engine identification ASCII/code)
-  frame.data[3] = 0x53;                  // MO_Code byte
-  frame.data[4] = 0x14;                  // MO_Code byte
-  frame.data[5] = 0x14;                  // MO_Code byte
-  frame.data[6] = 0xD7;                  // MO_Code byte
-  frame.data[7] = 0x24;                  // MO_Code byte
+  // The 0CQ reads b1 bits 4-5 = MO_Faktor_Momente (1/2/3), which MULTIPLIES the
+  // Motor_11 torque, and b4 bits 4-7 once at start-up (must not be 0) (OEM code:
+  // spec_gen5_0cq §3). V11.00.0: the factor is now set on purpose (= 1) instead
+  // of only being 1 because the counter happened to run 0x10..0x1F (spec D18),
+  // and the duplicated header lines are gone (D16).
+  frame.identifier = MOTOR_CODE_01; // motor_code_01 0x641
+  frame.data_length_code = 8;       // DLC 8
+  frame.data[0] = 0x00;             // MO_CHK_Code - checksum (worked out below)
+  frame.data[1] = (1 << 4) | (MOTOR_CODE_01_counter & 0x0F); // b1 bits 0-3 rolling counter, bits 4-5 MO_Faktor_Momente = 1
+  frame.data[2] = 0x2B;             // MO_Code byte (engine identification ASCII/code)
+  frame.data[3] = 0x53;             // MO_Code byte
+  frame.data[4] = 0x14;             // b4 bits 4-7 = 1 (not 0, read once at start-up by the 0CQ)
+  frame.data[5] = 0x14;             // MO_Code byte
+  frame.data[6] = 0xD7;             // MO_Code byte
+  frame.data[7] = 0x24;             // MO_Code byte
+  frame.data[0] = calcChecksum(frame.data, ID_SEQ_641); // V11.00.0: real CRC (was left 0). The 0CQ checks none, the car's other modules may
 
   MOTOR_CODE_01_counter++;
   if (MOTOR_CODE_01_counter > 0x1F)
@@ -2503,6 +2809,9 @@ void Gen5_0CQ_VAQ_frames10()
   // 0CQ lock-modulates b7 ('does affect'): to the VAQ that is the rpm high
   // byte, 0x00..0xFA -> 0..16000 rpm. An 'engine running' gate is a likely
   // reason it mattered - test a fixed b7 (e.g. 0x0C = ~800 rpm) on the VAQ.
+  // V11 TODO (bench): the 0CQ set now sends a steady 2000 rpm (b6 0x40, b7 0x1F,
+  // spec_gen5_0cq D5). The VAQ's use of rpm isn't in the spec (its calibration
+  // block is missing), so this copy still follows the lock until benched.
   frame.identifier = MOTOR_12; // Motor_12 0x0A8
   frame.extd = 0;
   frame.rtr = 0;
@@ -2569,7 +2878,7 @@ void Gen5_0CQ_VAQ_frames10()
     // ---- BPK packing (Fix Hunting toggle on; needed for 554K @ partial lock) ----
     // Shared with the normal-mode packer so the two can never drift, and so the
     // serial lab tunables apply identically in both. See fill_motor11_bpk().
-    appliedTorque = get_lock_target_adjusted_value(0xFE, false); // pre-scale value, for telemetry
+    // (appliedTorque is set by the ESP_14 frame below.)
     fill_motor11_bpk(frame.data, MOTOR_11_counter);
   }
 
@@ -2617,26 +2926,21 @@ void Gen5_0CQ_VAQ_frames10()
   frame.data[2] = 0x00;           // DSR steering-torque offset (not read by the VAQ)
 
   // Cross-lock request in plain percent: 0..250 = 0..100 % (0.4 %/bit).
+  // OEM code (spec_gen5_0cq §8.8, D20): the VAQ reads b3 bits 3-5, b4 and b5 -
+  // this layout matches. V11 TODO (bench): the bench says the VAQ follows Quer_Min
+  // "1:1 in plain percent", but this still goes through the old 0CQ correction
+  // curve. Try quer = gen5_esp14_lever_byte() (linear 0..250) on the bench.
   const uint8_t quer = get_lock_target_adjusted_value(250, false);
   frame.data[3] = quer ? 0x20 : 0x00; // BR_Status_Quer_ESP (b3 bits 3-5): 4 "ESP requests cross lock" / 0 deactivated
   frame.data[4] = quer;               // BR_Vorg_Quer_Min - the VAQ follows this one
   frame.data[5] = quer;               // BR_Vorg_Quer_Max = Min: exact command, no rule-mode headroom
 
-  // Allrad bytes (b6/b7) are not read by the VAQ; keep the 0CQ packing so the
-  // like-for-like set stays comparable if a Haldex is ever put on this bus.
-  appliedTorque = get_lock_target_adjusted_value(0xFE, false);
-  {
-    uint8_t esp14Floor = 0;
-    if (esp14MinFloorPct > 0 && appliedTorque > 1)
-    {
-      uint16_t f = ((uint16_t)appliedTorque * esp14MinFloorPct) / 100;
-      if (f > (uint16_t)(appliedTorque - 1))
-        f = (uint16_t)(appliedTorque - 1);
-      esp14Floor = (uint8_t)f;
-    }
-    frame.data[6] = esp14Floor; // BR_Vorg_Allrad_Min
-  }
-  frame.data[7] = appliedTorque; // BR_Vorg_Allrad_Max
+  // Allrad bytes (b6/b7) are not stored by the VAQ (OEM code: its ESP_14 buffer
+  // is only 6 bytes long, spec §8.8). V11.00.0: same packing as the 0CQ set
+  // (Min = Max = V, 0..250) so the two stay comparable.
+  appliedTorque = gen5_esp14_lever_byte();
+  frame.data[6] = appliedTorque; // BR_Vorg_Allrad_Min (not read by the VAQ)
+  frame.data[7] = appliedTorque; // BR_Vorg_Allrad_Max (not read by the VAQ)
 
   frame.data[0] = calcChecksum(frame.data, ID_SEQ_08A); // for 0x08A
 
@@ -2757,12 +3061,17 @@ void Gen5_0CQ_VAQ_frames20()
   // (b3 bit 2), ESP_Verz_TSK_aktiv (b3 bit 3), ESP_Verz_EPB_aktiv (b7 bit 2).
   // The 0CQ 'b3 affects' finding is ESP_Fahrer_bremst (brake threshold
   // exceeded); 0xC0 leaves it clear.
+  // V11.00.0: b3 bit 2 follows brakeForHaldex() ("Follow Brake"); off = 0 as before.
   frame.identifier = ESP_05;                            // ESP_05 0x106
   frame.data_length_code = 8;                           // DLC 8
   frame.data[0] = 0x00;                                 // BR_CHK_05 - checksum
   frame.data[1] = ESP_05_counter;                       // BR_BZ_05 - rolling counter (0x80>0x8F)
-  frame.data[2] = 0x64;                                 // BR_Bremsdruck (master-cylinder brake pressure) (no effect)
-  frame.data[3] = 0xC0;                                 // BR_Bremslicht / brake-light status (this affects(!) sometimes 0xC0, sometimes 0x00)
+  frame.data[2] = 0x64;                                 // BR_Bremsdruck low byte: raw 100 = 0 bar (not braking)
+  frame.data[3] = 0xC0;                                 // b3: pressure high bits 0, ESP_Fahrer_bremst (bit 2) = 0
+  if (brakeForHaldex())
+  {
+    frame.data[3] = frame.data[3] | (1 << 2); // b3 bit 2 = ESP_Fahrer_bremst (driver is braking)
+  }
   frame.data[4] = 0x00;                                 // BR_Status / brake event flags (no effect sometimes 0x3A, somtimes 0x39)
   frame.data[5] = 0x00;                                 // BR_Status reserved (no effect)
   frame.data[6] = 0xFD;                                 // BR_Status reserved (no effect)
@@ -2840,6 +3149,7 @@ void Gen5_0CQ_VAQ_frames20()
   // MQB ESP_21 (0x0FD, DLC 8) - ESP wheel-speed/dynamics diagnostics.
   // VAQ K-matrix: reads BZ and b7 bits 0 ABS_Bremsung, 1 ASR_Anf, 4
   // EDS_Eingriff, 5 ESP_Eingriff. 0CQ b7 = 0x00 -> no interventions.
+  // V11.00.0: ABS_Bremsung (b7 bit 0) carries absBrakingForHaldex() (the car's ABS).
   frame.identifier = ESP_21;                            // ESP_21 0x0fd
   frame.data_length_code = 8;                           // DLC 8
   frame.data[0] = 0x00;                                 // BR_CHK_21 - checksum
@@ -2849,8 +3159,12 @@ void Gen5_0CQ_VAQ_frames20()
   frame.data[4] = 0x00;                                 // ESP_21 status (sometimes 0x3A, somtimes 0x39)
   frame.data[5] = 0x00;                                 // ESP_21 reserved
   frame.data[6] = 0x00;                                 // ESP_21 reserved
-  frame.data[7] = 0x00;                                 // ESP_21 reserved
-  frame.data[0] = calcChecksum(frame.data, ID_SEQ_0fd); // for 0x0fd
+  frame.data[7] = 0x00;                                 // b7: no ABS / ASR / EDS / ESP intervention
+  if (absBrakingForHaldex())
+  {
+    frame.data[7] = frame.data[7] | (1 << 0); // b7 bit 0 = ABS_Bremsung (ABS is braking)
+  }
+  frame.data[0] = calcChecksum(frame.data, ID_SEQ_0fd); // for 0x0fd (over the finished bytes)
 
   ESP_21_counter++;
   if (ESP_21_counter > 0x1F)
@@ -2881,7 +3195,11 @@ void Gen5_0CQ_VAQ_frames25()
   frame.data[0] = 0x10;                                 // KBI lamps (b0) - all off except bit 4 SILA_gueltig
   frame.data[1] = (uint8_t)(0x20 | (kombi01Bz & 0x0F)); // Kombi_01_BZ (b1[0-3]) rolling + 0CQ high nibble
   kombi01Bz++;
-  frame.data[2] = 0x02; // KBI_Kilometerstand byte 0 (odometer)
+  frame.data[2] = 0x02; // b2: bit 7 KBI_Handbremse = 0 (released), rest 0x02 as before
+  if (handbrakeForHaldex())
+  {
+    frame.data[2] = frame.data[2] | (1 << 7); // V11.00.0: b2 bit 7 = KBI_Handbremse from handbrakeForHaldex()
+  }
   frame.data[3] = 0x00; // KBI_Kilometerstand byte 1
   frame.data[4] = 0x0C; // KBI_Kilometerstand byte 2
   frame.data[5] = 0x00; // KBI status
@@ -3005,9 +3323,9 @@ void Gen5_0CQ_VAQ_frames100()
   frame.data[0] = calcChecksum(frame.data, ID_SEQ_392); // for 0x392
 
   ESP_07_counter++;
-  if (ESP_07_counter > 0x20)
+  if (ESP_07_counter > 0x2F) // V11.00.0: was "> 0x20 -> 0x2F", which ran backwards and stuck at 0x2F (spec_gen5_0cq D15; harmless, the 0CQ doesn't read it)
   {
-    ESP_07_counter = 0x2F;
+    ESP_07_counter = 0x20; // counter runs 0x20..0x2F
   }
   standaloneTx(frame);
   /*
@@ -3101,17 +3419,16 @@ void Gen5_0CQ_VAQ_frames1000()
 
   // VAQ K-matrix: reads MO_Faktor_Momente_02 (b1 bits 4-5) and MO_Kraftstoffart
 
-  // (b4 bits 4-7). Counter 0x10-0x1F -> Faktor 1; b4 = 0x14 -> petrol.
-
-  frame.identifier = MOTOR_CODE_01;      // motor_code_01 0x641
-  frame.data_length_code = 8;            // DLC 8 no affect from any
-  frame.data[0] = 0x00;                  // checksum
-  frame.data[1] = MOTOR_CODE_01_counter; // rolling (10>1F)
+  // (b4 bits 4-7). b4 = 0x14 -> petrol. OEM code (spec_gen5_0cq §8.8): the VAQ
+  // reads Motor_Code_01 b1 bits 4-5 at the same place as the 0CQ.
+  // V11.00.0: Faktor = 1 set on purpose (spec D18), duplicate header lines gone
+  // (D16). Same bytes as before, so nothing changes on the wire. The checksum is
+  // still left at 0 here (it always was on the VAQ set).
   // MQB Motor_Code_01 (0x641, DLC 8) - engine code / identification broadcast.
-  frame.identifier = MOTOR_CODE_01;      // motor_code_01 0x641
-  frame.data_length_code = 8;            // DLC 8
-  frame.data[0] = 0x00;                  // MO_CHK_Code - checksum placeholder
-  frame.data[1] = MOTOR_CODE_01_counter; // MO_BZ_Code - rolling counter (10>1F)
+  frame.identifier = MOTOR_CODE_01; // motor_code_01 0x641
+  frame.data_length_code = 8;       // DLC 8
+  frame.data[0] = 0x00;             // MO_CHK_Code - checksum placeholder
+  frame.data[1] = (1 << 4) | (MOTOR_CODE_01_counter & 0x0F); // b1 bits 0-3 rolling counter, bits 4-5 MO_Faktor_Momente = 1
   frame.data[2] = 0x2B;                  // MO_Code byte (engine identification ASCII/code)
   frame.data[3] = 0x53;                  // MO_Code byte
   frame.data[4] = 0x14;                  // MO_Code byte
@@ -3189,93 +3506,134 @@ void Gen5_0CQ_VAQ_frames1000()
 
 // =============================================================================
 // Gen5 (0AY) Standalone Frames
-// 0AY is a different MQB-era controller variant; the frames below are an
-// initial copy of the Gen4 (PQ-derived) standalone set
+// The 0AY (0AY907554F) is a PQ unit - PQ frame set, feedback Allrad_1 0x2C0 -
+// with the same lever as Gen4 0BR: Bremse_4 (0x2A0) byte 0 (OEM code:
+// spec_gen5_0ay §1/§2). It receives 16 broadcast frames (spec §3); none has a
+// counter or checksum check. Bremse_8 0x1AC, Bremse_11 0x5B7 and Kombi_2 0x420
+// are NOT received by the 0AY - their blocks default OFF (V11.00.0).
 // =============================================================================
 void Gen5_0AY_frames10()
 {
   twai_message_t frame = {};
-  // PQ LW_1 / mLW_1 (0x0C2, DLC 8) - steering-angle replay (vw_pq.dbc: LW_1).
+  // PQ LW_1 / mLW_1 (0x0C2, DLC 8) - steering-angle replay recorded from a real
+  // car (about 1.5 deg, straight ahead). The 0AY reads b0-b1 (angle, b1.7 sign)
+  // and b4; a static frame would also do (spec_gen5_0ay §5).
   frame.identifier = mLW_1;
   frame.extd = 0;
   frame.rtr = 0;
   frame.data_length_code = 8;
   frame.data[0] = lws_2[mLW_1_counter][0]; // LW1_LRW low (steering-wheel angle * 0.04375 deg)
-  frame.data[1] = lws_2[mLW_1_counter][1]; // LW1_LRW high
-  frame.data[2] = lws_2[mLW_1_counter][2]; // LW1_LRW_Sign / status
-  frame.data[3] = lws_2[mLW_1_counter][3]; // LW1_Lenk_Gesch low (angular velocity)
-  frame.data[4] = lws_2[mLW_1_counter][4]; // LW1_Lenk_Gesch high / Gesch_Sign
-  frame.data[5] = lws_2[mLW_1_counter][5]; // LW1_Status / counter
-  frame.data[6] = lws_2[mLW_1_counter][6]; // LW1_ID / Initquelle
-  frame.data[7] = lws_2[mLW_1_counter][7]; // CRC (replayed verbatim)
+  frame.data[1] = lws_2[mLW_1_counter][1]; // LW1_LRW high bits 0-6, b1.7 = sign
+  frame.data[2] = lws_2[mLW_1_counter][2]; // LW1_Lenk_Gesch low (steering rate, not read)
+  frame.data[3] = lws_2[mLW_1_counter][3]; // LW1_Lenk_Gesch high (not read)
+  frame.data[4] = lws_2[mLW_1_counter][4]; // LW1_ID (read by the 0AY)
+  frame.data[5] = lws_2[mLW_1_counter][5]; // LW1_Status / counter (counter not checked)
+  frame.data[6] = lws_2[mLW_1_counter][6]; // not stored by the 0AY (DLC 6)
+  frame.data[7] = lws_2[mLW_1_counter][7]; // CRC (replayed verbatim, not stored)
 
   mLW_1_counter++;
   if (mLW_1_counter > 15)
     mLW_1_counter = 0;
   standaloneTx(frame);
 
+  // Steady wheel / vehicle speed for Bremse_1 and Bremse_3, in 0.01 km/h.
+  // The car's real speed when OpenHaldex has a chassis bus, otherwise a fixed
+  // 10.00 km/h (about what the pre-V11 frames sent). Same on all four wheels:
+  // no fake slip - the lever is Bremse_4 (spec_gen5_0ay §5 / §7 #4).
+  uint16_t wheelSpeed = 1000; // 10.00 km/h when no chassis speed is available
+  if (hasCANChassis)
+  {
+    uint16_t chassisSpeed = received_vehicle_speed; // km/h from the car
+    if (chassisSpeed > 326)
+    {
+      chassisSpeed = 326; // top of the 15-bit 0.01 km/h range
+    }
+    wheelSpeed = chassisSpeed * 100;
+  }
+  uint16_t wheelSpeedWord = wheelSpeed << 1; // 15-bit value sits above bit 0 of each word
+
   // PQ Bremse_1 (0x1A0, DLC 8) - ABS/ESP main broadcast (vw_pq.dbc: Bremse_1).
+  // The 0AY reads b0.0, b0.2, b0.3, b0.4 and b1.3 (spec_gen5_0ay §3/§5).
+  // Before V11 b0 was 0x20 (BR1_ASR_Ongr) and b1 0x40 - now all intervention
+  // flags off, except the real ABS-braking bit carried from the car.
   frame.identifier = BRAKES1_ID;
   frame.data_length_code = 8;
-  frame.data[0] = 0x20;            // BR1_ASR_Anf / MSR_Anf flags
-  frame.data[1] = 0x40;            // ABS_Brems / EDS_Ongr / ESP_Ongr intervention bits
-  frame.data[2] = 0xF0;            // Lampe_ABS / Lampe_ASR
-  frame.data[3] = 0x07;            // status / ABS active flags
-  frame.data[4] = 0xFE;            // BR1_Rad_kmh low (vehicle speed)
-  frame.data[5] = 0xFE;            // BR1_Rad_kmh high
-  frame.data[6] = 0x00;            // reserved
-  frame.data[7] = BRAKES1_counter; // BR1_BZ - rolling 5-bit counter (10..0x1F)
+  frame.data[0] = 0x00; // b0.0 ASR_Anf, b0.3 EDS, b0.4 ESP intervention = 0
+  if (absBrakingForHaldex())
+  {
+    frame.data[0] = frame.data[0] | (1 << 2); // b0.2 BR1_ABS_Brems - ABS module is braking
+  }
+  frame.data[1] = 0x00; // lamps off
+  if (brakeForHaldex())
+  {
+    frame.data[1] = frame.data[1] | (1 << 3); // b1.3 BR1_Lichtschalt - brake-light switch
+  }
+  frame.data[2] = (uint8_t)(wheelSpeedWord & 0xFF); // b2.0 BKV = 0, bits 1-7 BR1_Rad_kmh low (not read by the 0AY)
+  frame.data[3] = (uint8_t)(wheelSpeedWord >> 8);   // BR1_Rad_kmh high
+  frame.data[4] = 0xFE;                             // BR1_ASRMo_sl (ASR torque, no reduction)
+  frame.data[5] = 0xFE;                             // BR1_ASRMo_fa (ASR torque, no reduction)
+  frame.data[6] = 0x00;                             // BR1_MSR_Mo
+  frame.data[7] = BRAKES1_counter;                  // BR1_Zaehler - counter, not checked by the 0AY
   if (++BRAKES1_counter > 0x1F)
     BRAKES1_counter = 10;
   standaloneTx(frame);
 
   // PQ Bremse_3 (0x4A0, DLC 8) - per-wheel speeds (vw_pq.dbc: Bremse_3).
+  // Each wheel is a 16-bit little-endian word, speed in bits 1-15 (0.01 km/h).
+  // Was lock-scaled before V11 (fake rear>front slip that changed with lock).
   frame.identifier = BRAKES3_ID;
   frame.data_length_code = 8;
-  frame.data[0] = get_lock_target_adjusted_value(0xB6, false); // Radgeschw_VL low (front-left)
-  frame.data[1] = 0x07;                                        // Radgeschw_VL high
-  frame.data[2] = get_lock_target_adjusted_value(0xCC, false); // Radgeschw_VR low (front-right)
-  frame.data[3] = 0x07;                                        // Radgeschw_VR high
-  frame.data[4] = get_lock_target_adjusted_value(0xD2, false); // Radgeschw_HL low (rear-left)
-  frame.data[5] = 0x07;                                        // Radgeschw_HL high
-  frame.data[6] = get_lock_target_adjusted_value(0xD2, false); // Radgeschw_HR low (rear-right)
-  frame.data[7] = 0x07;                                        // Radgeschw_HR high
+  frame.data[0] = (uint8_t)(wheelSpeedWord & 0xFF); // Radgeschw_VL low (front-left)
+  frame.data[1] = (uint8_t)(wheelSpeedWord >> 8);   // Radgeschw_VL high
+  frame.data[2] = (uint8_t)(wheelSpeedWord & 0xFF); // Radgeschw_VR low (front-right)
+  frame.data[3] = (uint8_t)(wheelSpeedWord >> 8);   // Radgeschw_VR high
+  frame.data[4] = (uint8_t)(wheelSpeedWord & 0xFF); // Radgeschw_HL low (rear-left)
+  frame.data[5] = (uint8_t)(wheelSpeedWord >> 8);   // Radgeschw_HL high
+  frame.data[6] = (uint8_t)(wheelSpeedWord & 0xFF); // Radgeschw_HR low (rear-right)
+  frame.data[7] = (uint8_t)(wheelSpeedWord >> 8);   // Radgeschw_HR high
   standaloneTx(frame);
 
-  // PQ Bremse_4 (0x2A0, DLC 8) - ABS coupling moment (vw_pq.dbc: Bremse_4).
-  // data[7] = XOR-CRC over data[0..6]; data[6] is rolling counter (steps of 16).
+  // PQ Bremse_4 (0x2A0, DLC 8) - THE LEVER (OEM code: spec_gen5_0ay §2).
+  // Byte 0: 0x7F = clutch open, 0x80 + n = n x 112 torque request, 0xFD = max.
+  // 0xFE means HOLD on the 0AY and 0x00-0x7E / 0xFF are ignored, so 100 % is
+  // 0xFD. vag_lever_byte() sends 0x7F whenever a lock gate is closed - ABS
+  // braking, handbrake (Follow Handbrake), speed / throttle settings - which
+  // a valid Bremse_4 needs, because it outranks the unit's own clutch-open.
+  // Before V11 this was adj(0x7F) - 0x7F: 100 % gave 0x00 (ignored!).
   frame.identifier = BRAKES4_ID;
   frame.data_length_code = 8;
-  frame.data[0] = get_lock_target_adjusted_value(0x7F, false) - 0x7F; // ABS_Vorgabewert_hinten_Kupplung (rear-clutch %)
-  frame.data[1] = 0x00;                                               // ABS_Vorgabewert_mitte_Kupplungs low (centre stiffness Nm/min)
-  frame.data[2] = 0x00;                                               // ABS_Vorgabewert_mitte_Kupplungs high
-  frame.data[3] = 0x64;                                               // status / reserved
-  frame.data[4] = 0x00;                                               // reserved
-  frame.data[5] = 0x00;                                               // reserved
-  frame.data[6] = BRAKES4_counter;                                    // rolling counter (16-step)
+  frame.data[0] = vag_lever_byte(0xFD); // lever byte
+  frame.data[1] = 0x00;                 // not read by the 0AY
+  frame.data[2] = 0x00;                 // b2 bits 0-1 have a getter but no user in the 0AY
+  frame.data[3] = 0x00;                 // not stored by the 0AY (it keeps bytes 0-2 only)
+  frame.data[4] = 0x00;                 // not stored
+  frame.data[5] = 0x00;                 // not stored
+  frame.data[6] = BRAKES4_counter;      // rolling counter - harmless, never read by the 0AY
   BRAKES4_crc = 0;
   for (uint8_t i = 0; i < 7; i++)
   {
     BRAKES4_crc ^= frame.data[i];
   }
-  frame.data[7] = BRAKES4_crc; // XOR CRC over data[0..6]
+  frame.data[7] = BRAKES4_crc; // XOR over data[0..6] - harmless, never read by the 0AY
   BRAKES4_counter = BRAKES4_counter + 16;
   if (BRAKES4_counter > 0xF0)
     BRAKES4_counter = 0x00;
   standaloneTx(frame);
 
   // PQ Motor_1 (0x280, DLC 8) - engine ECU broadcast (vw_pq.dbc: Motor_1).
-  // Every byte except data[0] is lock-target-adjusted to bias the haldex.
+  // Only feeds the unit's own strategy (which a valid Bremse_4 overrides), so
+  // steady plausible values from spec_gen5_0ay §5. Was lock-scaled before V11
+  // (rpm 0 at FWD, torque / pedal 0xFE at 100 %).
   frame.identifier = MOTOR1_ID;
   frame.data_length_code = 8;
-  frame.data[0] = 0x00;                                        // Fahrerwunschmoment (driver-requested torque)
-  frame.data[1] = get_lock_target_adjusted_value(0xFE, false); // Fahrerwunschmoment (driver-requested torque)
-  frame.data[2] = get_lock_target_adjusted_value(0x20, false); // Motordrehzahl low (engine RPM * 0.25)
-  frame.data[3] = get_lock_target_adjusted_value(0x4E, false); // Motordrehzahl high
-  frame.data[4] = get_lock_target_adjusted_value(0xFE, false); // Fahrpedalwert (accelerator pedal %)
-  frame.data[5] = get_lock_target_adjusted_value(0xFE, false); // inneres_Motor_Moment_ohne_extern
-  frame.data[6] = get_lock_target_adjusted_value(0x16, false); // mechanisches_Motor_Verlustmoment
-  frame.data[7] = get_lock_target_adjusted_value(0xFE, false); // inneres_Motor_Moment (actual)
+  frame.data[0] = 0x00; // flags: b0.3 Kupplungsschalter (clutch pedal) = 0 released
+  frame.data[1] = 0x20; // inneres_Motor_Moment (inner torque) small, not 0xFF
+  frame.data[2] = 0x80; // Motordrehzahl low  (0x0C80 x 0.25 = 800 rpm idle)
+  frame.data[3] = 0x0C; // Motordrehzahl high
+  frame.data[4] = 0x20; // inneres_Motor_Moment_ohne_extern - never read by the 0AY
+  frame.data[5] = 0x00; // Fahrpedalwert (accelerator pedal) 0 %
+  frame.data[6] = 0x10; // mechanisches_Motor_Verlustmoment (loss torque), not 0xFF
+  frame.data[7] = 0x00; // Fahrerwunschmoment (driver-wish torque)
   standaloneTx(frame);
 
   // ---------------------------------------------------------------------------
@@ -3307,15 +3665,22 @@ void Gen5_0AY_frames10()
   frame.data[7] = 0xFF;                              // gear display = ---, Fahrstufe = N
   mGetriebe_2_counter = (mGetriebe_2_counter + 1) & 0x0F;
   standaloneTx(frame);
+  // The 0AY reads Getriebe_2 b6.5 and b7 bits 0-3 (gear) only when Getriebe_1
+  // is missing and b6.5 = 1 (spec_gen5_0ay §3). b6 = 0 here, so the gear comes
+  // from Getriebe_1 (sent in Gen5_0AY_frames20).
 
   // PQ Bremse_5 (0x4A8, DLC 8) - ESP brake-event broadcast.
   // vw_pq.dbc: BR5_Giergeschw / BR5_Gierrate (yaw rate * 0.01 deg/s),
   //            BR5_Bremsdruck (brake pressure * 0.1 bar), BR5_Bremslicht,
   //            BR5_Notbremsung (emergency-brake), BR5_HDC_bereit (hill-descent-ready).
-  frame.identifier = BRAKES5_ID;    // 0x2A0 includes coupling moment? Affects vehicle mode(!) do not have!
-  frame.data_length_code = 8;       // DLC 8 (/4)
-  frame.data[0] = 0xFE;             // affects estimated torque AND vehicle mode(!) - Giergeschw low (yaw rate)
-  frame.data[1] = 0x7F;             // Giergeschw high
+  // The 0AY reads only b0 + b1 bits 0-5 (yaw rate) and b1.7 (sign) - spec_gen5_0ay
+  // §3/§5: yaw 0. Before V11 b0/b1 were 0xFE/0x7F (near-maximum yaw), noted on
+  // the car as "affects estimated torque AND vehicle mode" - that was the unit's
+  // own strategy, which only ran because Bremse_4 was being ignored.
+  frame.identifier = BRAKES5_ID;
+  frame.data_length_code = 8;       // DLC 8 (the 0AY stores 2 bytes)
+  frame.data[0] = 0x00;             // Giergeschw low (yaw rate) = 0
+  frame.data[1] = 0x00;             // Giergeschw high bits 0-5 = 0, b1.7 sign = 0
   frame.data[2] = 0x03;             // BR5_Bremsdruck (brake pressure)
   frame.data[3] = 0x00;             // 32605 - status / Bremslicht / Notbremsung bits
   frame.data[4] = 0x00;             // BR5_Gierrate low (signed yaw rate)
@@ -3335,6 +3700,8 @@ void Gen5_0AY_frames10()
   standaloneTx(frame);
 
   // PQ Bremse_8 / mBremse_8 (0x1AC, DLC 8) - ESP supplemental broadcast.
+  // NOT received by the 0AY (no message object - spec_gen5_0ay §1): its block
+  // defaults OFF in standalone (V11.00.0), so standaloneTx() skips it.
   // data[0] rolls 0x80..0x8F, data[1] rolls 0x00..0x0F (independent counters).
   frame.identifier = BRAKES8_ID;
   frame.data_length_code = 8;
@@ -3357,16 +3724,19 @@ void Gen5_0AY_frames20()
 {
   twai_message_t frame = {};
   // PQ Bremse_2 (0x5A0, DLC 8) - ESP/ABS sensor broadcast (vw_pq.dbc: Bremse_2).
+  // The 0AY reads b0 (lateral accel, 0x7F = 0 g), b1.0 (mux) and b7.7 -
+  // spec_gen5_0ay §5: b0 = 0x7F, b1.0 = 0, b7.7 = 0. Before V11: b0 0x80
+  // (+0.01 g) and b7 0xAB (b7.7 = 1). Byte names corrected from vw_pq.dbc.
   frame.identifier = BRAKES2_ID;
   frame.data_length_code = 8;
-  frame.data[0] = 0x80;            // Impulszahl (pulse count)
-  frame.data[1] = 0x7A;            // Wegimpulse_Vorderachse (front-axle path pulses)
-  frame.data[2] = 0x05;            // mittlere_Raddrehzahl (mean wheel speed)
-  frame.data[3] = BRAKES2_counter; // rolling counter (16-step)
-  frame.data[4] = 0x7F;            // Querbeschleunigung (lateral G) was 0x7f with lock calc
-  frame.data[5] = 0xCA;            // Zeitstempel low (timestamp)
-  frame.data[6] = 0x1B;            // Zeitstempel high
-  frame.data[7] = 0xAB;            // status / reserved
+  frame.data[0] = 0x7F;            // Querbeschleunigung (lateral accel) = 0 g
+  frame.data[1] = 0x7A;            // b1.0 = 0 (lateral-accel mux), bits 1-7 mittlere_Raddrehzahl low
+  frame.data[2] = 0x05;            // mittlere_Raddrehzahl high (mean wheel speed, not read)
+  frame.data[3] = BRAKES2_counter; // Zeitstempel low (timestamp, not read)
+  frame.data[4] = 0x7F;            // Zeitstempel high (not read)
+  frame.data[5] = 0xCA;            // Wegimpulse_Vorderachse low (not read)
+  frame.data[6] = 0x1B;            // Wegimpulse high / status bits (not read)
+  frame.data[7] = 0x2B;            // Impulszahl bits 0-5; b7.7 gemessene_Querbeschleunigung = 0
   standaloneTx(frame);
   BRAKES2_counter = BRAKES2_counter + 16;
   if (BRAKES2_counter > 0xF0)
@@ -3374,36 +3744,58 @@ void Gen5_0AY_frames20()
     BRAKES2_counter = 0;
   }
 
-  // PQ Motor_2 (0x288, DLC 8) - secondary engine broadcast (vw_pq.dbc: Motor_2).
+  // PQ Motor_2 (0x288, DLC 8) - engine broadcast (vw_pq.dbc: Motor_2).
+  // The 0AY reads b0 (mux: bits 6-7 = 3 -> max torque), b2.0 MO2_BLS
+  // (brake-light switch, used for its own brake clutch-open) and b2.4.
   frame.identifier = MOTOR2_ID;
   frame.data_length_code = 8;
-  frame.data[0] = 0x00; // MO2_BLS / MO2_BTS / MO2_Sta_Klima (brake-light, brake-test, A/C)
+  frame.data[0] = 0x00; // mux 0 (MO2_CAN_Vers) - not the max-torque mux 3
   frame.data[1] = 0x30; // MO2_Kuehlm_T (coolant temp * 0.75 - 48 degC)
-  frame.data[2] = 0x00; // MO2_Sta_Kuehlm / MO2_Sta_No_Bet (status flags)
-  frame.data[3] = 0x0A; // MO2_GRA_Soll low (cruise-control target speed)
-  frame.data[4] = 0x0A; // MO2_GRA_Soll high
-  frame.data[5] = 0x10; // GRA / cruise status bits
-  frame.data[6] = 0xFE; // reserved
-  frame.data[7] = 0xFE; // reserved
+  frame.data[2] = 0x00; // b2.0 MO2_BLS = 0 (set below), b2.1 BTS, b2.4 MO2_Sta_No_Bet = 0
+  if (brakeForHaldex())
+  {
+    frame.data[2] = frame.data[2] | (1 << 0); // b2.0 MO2_BLS - brake pedal pressed
+  }
+  frame.data[3] = 0x0A; // MO2_Sta_GRA / TSK bits
+  frame.data[4] = 0x0A; // MO2_GRA_Soll (cruise target speed)
+  frame.data[5] = 0x10; // MO2_LL_Solldz (idle target, 0x10 x 10 rpm)
+  frame.data[6] = 0xFE; // MO2_Begr_Mo
+  frame.data[7] = 0xFE; // MO2_Mo_ZWR
   standaloneTx(frame);
 
-  // PQ Motor_5 (0x480, DLC 8) - tertiary engine broadcast (vw_pq.dbc: Motor_5, multiplexed).
-  // NOTE: the if(++BRAKES1_counter > 255) below increments BRAKES1_counter (not MOTOR5_counter)
-  // - looks like a copy-paste bug, left as-is per "comment-only" pass.
-  frame.identifier = MOTOR5_ID;   // 0x1A0
+  // PQ Motor_5 (0x480, DLC 8) - engine broadcast (vw_pq.dbc: Motor_5, multiplexed).
+  // The 0AY only latches b0 once, when the mux (bits 6-7) = 2 (spec_gen5_0ay §3).
+  // 0xFE = mux 3, so nothing is latched. Must be present: if Motor_5 is missing
+  // the unit sets the limp bit 0x2C0 b0.4 by itself (spec §6).
+  frame.identifier = MOTOR5_ID;   // 0x480
   frame.data_length_code = 8;     // DLC 8
-  frame.data[0] = 0xFE;           // ASR 0x04 sets bit 4.  0x08 removes set.  Coupling open/closed - MO5_Mp_Code mux
-  frame.data[1] = 0x00;           // can use to disable (>130 dec).  Was 0x00; 0x41?  0x43? - MO5_max_Moment / Drehzahl (mux)
-  frame.data[2] = 0x00;           // was 0x00 no effect - MO5_Vorgluehen / E_Gas / OBD_2 lamps
-  frame.data[3] = 0x00;           // was 0xFE no effect - MO5_Luefter (cooling-fan PWM)
-  frame.data[4] = 0x00;           // was 0xFE miasrl no effect - reserved
-  frame.data[5] = 0x00;           // was 0xFE miasrs no effect - reserved
-  frame.data[6] = 0x00;           // was 0x00 - reserved
-  frame.data[7] = MOTOR5_counter; // checksum / rolling counter
-  if (++BRAKES1_counter > 255)
-  {                      // 0xF (NOTE: increments BRAKES1_counter - copy-paste artefact)
-    BRAKES1_counter = 0; // 0
-  }
+  frame.data[0] = 0xFE;           // MO5_Mp_Code mux 3 (bits 6-7); from car testing: ASR 0x04 sets bit 4, 0x08 removes it
+  frame.data[1] = 0x00;           // was 0x00; 0x41? 0x43? tried - MO5 lamps (Vorgluehen / E_Gas / OBD_2)
+  frame.data[2] = 0x00;           // was 0x00 no effect - MO5_Verbrauch low
+  frame.data[3] = 0x00;           // was 0xFE no effect - MO5_Verbrauch high
+  frame.data[4] = 0x00;           // was 0xFE no effect - MO5_Luefter (cooling-fan PWM)
+  frame.data[5] = 0x00;           // was 0xFE no effect - lamp / status bits
+  frame.data[6] = 0x00;           // was 0x00 - status bits
+  frame.data[7] = MOTOR5_counter; // checksum / rolling counter (not read by the 0AY)
+  MOTOR5_counter++;               // V11: was BRAKES1_counter++ (copy-paste bug, spec_gen5_0ay §7 #14)
+  standaloneTx(frame);
+
+  // PQ Getriebe_1 (0x440, DLC 8) - gearbox broadcast (vw_pq.dbc: Getriebe_1).
+  // V11.00.0: NEW. The 0AY receives it (PDU 8, stores 2 bytes) and prefers it
+  // for the gear: b1 bits 0-3 GE1_Zielgang (spec_gen5_0ay §3/§5, §7 #8). It
+  // was never sent before, so the unit was missing a frame it supervises.
+  // Values: K-matrix / DBC meanings, gear 0 = "P / disengaged" (no gear).
+  // No counter / checksum check in the 0AY.
+  frame.identifier = mGetriebe_1;
+  frame.data_length_code = 8;
+  frame.data[0] = 0x00; // GE1 flags (Schaltung, Sta_Schutz, WK...) all 0 - b0 bits 3-4 not used by the 0AY
+  frame.data[1] = 0x00; // GE1_Zielgang (bits 0-3) = 0 disengaged; GE1_Wahl_Pos (bits 4-7) not read
+  frame.data[2] = 0x0A; // GE1_Mrad_Mkurb wheel/crank torque ratio 1.0 (not read by the 0AY)
+  frame.data[3] = 0x00; // GE1_Soll_Mo (not read)
+  frame.data[4] = 0x7F; // GE1_Fahrwistd about 0 (not read)
+  frame.data[5] = 0x00; // GE1_Notlauf = 0 no emergency, GE1_Kuehlung = 0 (not read)
+  frame.data[6] = 0x00; // LaunchControl / Infobit / counter = 0 (not read)
+  frame.data[7] = 0x00; // GE1_WaVerl_Mo (not read)
   standaloneTx(frame);
 }
 
@@ -3411,10 +3803,15 @@ void Gen5_0AY_frames25()
 {
   twai_message_t frame = {};
   // PQ Kombi_1 (0x320, DLC 8) - instrument-cluster broadcast (vw_pq.dbc: Kombi_1).
+  // The 0AY reads b1.1 KO1_Handbremse (handbrake) only - spec_gen5_0ay §3.
   frame.identifier = mKombi_1;
   frame.data_length_code = 8;
-  frame.data[0] = 0x24; // Bremsinfo / Oeldruck status bits
-  frame.data[1] = 0x00; // Angezeigte_Geschwindigkeit (displayed speed)
+  frame.data[0] = 0x24; // status bits (not read by the 0AY)
+  frame.data[1] = 0x00; // b1.0 brake-fluid warning = 0, b1.1 handbrake = 0 (set below)
+  if (handbrakeForHaldex())
+  {
+    frame.data[1] = frame.data[1] | (1 << 1); // b1.1 KO1_Handbremse - handbrake pulled
+  }
   frame.data[2] = 0x1D; // Geschwindigkeit_Kombi_1 low (vehicle speed)
   frame.data[3] = 0xB9; // Geschwindigkeit_Kombi_1 high
   frame.data[4] = 0x07; // Tankinhalt (fuel level)
@@ -3454,11 +3851,12 @@ void Gen5_0AY_frames100()
   standaloneTx(frame);
 
   // PQ Bremse_11 (0x5B7, DLC 8) - extended brake frame (NOT in vw_pq.dbc).
-  // Static placeholder; only data[1]=0xC0 is significant for haldex sanity.
+  // NOT received by the 0AY (no message object - spec_gen5_0ay §1): its block
+  // defaults OFF in standalone (V11.00.0), so standaloneTx() skips it.
   frame.identifier = BRAKES11_ID;
   frame.data_length_code = 8;
   frame.data[0] = 0x00; // no effect
-  frame.data[1] = 0XC0; // mode/status (only byte that matters)
+  frame.data[1] = 0XC0; // mode/status
   frame.data[2] = 0x00; // no effect
   frame.data[3] = 0x00; // no effect
   frame.data[4] = 0x00; // no effect
@@ -3471,6 +3869,7 @@ void Gen5_0AY_frames100()
   // PQ Systeminfo_1 / mSysteminfo_1 (0x5D0, DLC 8) - gateway vehicle-identity
   // broadcast.  Source: PQ35_46 ACAN KMatrix V5.20.6F, cycle 100 ms, TO 1000 ms.
   // Required by haldex DTC 16659 (Sys_01 / Systeminfo_1 timeout) on 0AY.
+  // The 0AY reads only b6.6 / b6.7 (not in the clutch path) - b6 = 0 here.
   // Layout (KMatrix bytes 1-based; byte 1 = data[0]):
   //   data[0]: status bits (Verbauinfo, Lenker, Tueren, ...) - 0 = defaults
   //   data[1]: low nibble Fzg_Klasse, high nibble Fzg_Marke (Audi/VW/...)
@@ -3499,6 +3898,8 @@ void Gen5_0AY_frames200()
 {
   twai_message_t frame = {};
   // PQ Kombi_2 (0x420, DLC 8) - cluster temps (vw_pq.dbc: Kombi_2).
+  // NOT received by the 0AY (no message object - spec_gen5_0ay §1): its block
+  // defaults OFF in standalone (V11.00.0), so standaloneTx() skips it.
   frame.identifier = mKombi_2;
   frame.data_length_code = 8;
   frame.data[0] = 0x4C; // Kuehlmitteltemp (coolant * 0.75 - 48 degC)
@@ -4093,20 +4494,56 @@ void VolvoP2Gen2_frames100()
 // --- Volvo P2 Gen3 (facelift, 500 kbit/s, 29-bit IDs) ------------------------
 // Haldex replies on VOLVO_P2G3_HALDEX_ID (0x1020000A), decoded in parseCAN_hdx.
 
+// V11.00.0 (OEM code: spec_volvo_p2_s60r.md): the S60R DEM's own message table
+// confirms every ID here (29-bit, all DLC 8). It runs a closed-loop slip +
+// engine-torque strategy (same family as the VAG Gen2 unit), so there is no
+// single "ceiling" byte: our lever is LOCK 0x0062401E byte 1 plus the
+// ACTIVE / MODE / LOCK "active" bytes, all switched together (bench-proven).
+// "500k S60 log" = the public log volvo-CAN-exploration/0000286.TXT (500 kbit/s,
+// model year not stated, carries these facelift IDs). It gave us the counters
+// below and the content of four frames the DEM listens for that we never sent.
+// The 2002/2003 P2 logs are pre-facelift (250 kbit/s, other IDs), not used here.
+
 // Static frames: starting values, byte meanings not known yet
-static const uint8_t VOLVO_P2G3_42406C_DATA[8] = {0x80, 0x88, 0x00, 0x71, 0x60, 0x00, 0xC1, 0xF3}; // 0x0042406C
-static const uint8_t VOLVO_P2G3_224024_DATA[8] = {0x3F, 0xF8, 0x00, 0x00, 0x13, 0xFF, 0xC0, 0x00}; // 0x00224024
+static const uint8_t VOLVO_P2G3_42406C_DATA[8] = {0x80, 0x88, 0x00, 0x71, 0x60, 0x00, 0xC1, 0xF3}; // 0x0042406C (byte 0 is replaced by the counter)
+static const uint8_t VOLVO_P2G3_224024_DATA[8] = {0x3F, 0xF8, 0x00, 0x00, 0x13, 0xFF, 0xC0, 0x00}; // 0x00224024 (byte 0 bit 2 is toggled)
 static const uint8_t VOLVO_P2G3_E24026_DATA[8] = {0x00, 0x01, 0xE0, 0xE4, 0x9F, 0x08, 0x00, 0x00}; // 0x00E24026
+
+// V11.00.0: frames the DEM subscribes to (OEM code: MO table) that we never sent.
+// Steady values from the 500k S60 log - what the bytes mean is not known.
+static const uint8_t VOLVO_P2G3_C0402A_DATA[8] = {0x1E, 0xE4, 0x00, 0x00, 0x27, 0xFF, 0xD3, 0xFF};   // 0x00C0402A (bytes 4/6 move with the gear lever in the log)
+static const uint8_t VOLVO_P2G3_10E24000_DATA[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}; // 0x10E24000 (all zero for the whole log)
+static const uint8_t VOLVO_P2G3_11220028_DATA[8] = {0x23, 0x60, 0x0F, 0x3C, 0x01, 0x00, 0x35, 0x2E}; // 0x11220028 (bytes 6-7 drift slowly in the log)
+static const uint8_t VOLVO_P2G3_11420006_DATA[8] = {0x00, 0x00, 0x00, 0x0F, 0x00, 0x00, 0xC0, 0x00}; // 0x11420006
+// 0x01A2402A is also in the DEM's table but never appears in the log, so it is not sent.
+// V11 TODO (bench): if a scan shows a "no communication" fault for it, capture a car.
+
+// static = these counters belong to this file only
+static uint8_t volvoP2G3Counter42406C = 0; // 0x0042406C byte 0 bits 6-7: counts 0-3, one step per send (500k S60 log: 00 40 80 C0)
+static bool volvoP2G3Toggle = false;       // flips every 10 ms: 0x00224024 byte 0 bit 2 and 0x0080401E byte 0 (1E <-> 06)
+static uint8_t volvoP2G3Slow = 0;          // counts 10 ms sends, 0-4, so the 56/60 ms frames go out every 50 ms
 
 void VolvoP2Gen3_frames10()
 {
   uint8_t data[8];
 
-  // lock request: 0 = no lock, 0xBC = the strongest value seen (100 %)
-  const uint8_t lockByte = get_lock_target_adjusted_value(0xBC, false);
+  // lock request: 0 = no lock, 0xBC = the strongest value seen on the bench (100 %).
+  // lever_lock_percent() already gives 0 while a lock gate holds lock off, and
+  // the learn sweep position while Learn runs. Straight line 0..0xBC (spec section 2).
+  // V11 TODO (bench): the OEM code does not prove 0xBC is exactly full scale.
+  const uint8_t lockPercent = lever_lock_percent();
+  const uint8_t lockByte = (uint8_t)(((uint16_t)0xBC * lockPercent + 50) / 100); // round to nearest
   const bool isLockActive = (lockByte > 0);
 
-  // 0x10004002 - "lock active" flags in bytes 4-7
+  // the toggle bit flips once per 10 ms send, like the real car
+  volvoP2G3Toggle = !volvoP2G3Toggle;
+
+  // 0x10004002 - "lock active" flags in bytes 4-7. The 500k S60 log shows this
+  // frame is most likely four 10-bit wheel speeds (2 bits in bytes 0/2/4/6 +
+  // bytes 1/3/5/7, all near-equal when driving), so "lock active" = 0x142 on
+  // the last two wheels with the first two at 0 - probably a speed difference
+  // the DEM's slip strategy answers with lock. Kept exactly as bench-proven.
+  // V11 TODO (bench): the log has byte 0 = 0x80, we send 0xC0 (bench capture).
   data[0] = 0xC0; // static
   data[1] = 0x00; // static
   data[2] = 0x00; // static
@@ -4124,9 +4561,25 @@ void VolvoP2Gen3_frames10()
   }
   sendVolvoSaabFrame(VOLVO_P2G3_ACTIVE_ID, true, data);
 
-  sendVolvoSaabFrame(VOLVO_P2G3_42406C_ID, true, VOLVO_P2G3_42406C_DATA);
+  // 0x0042406C - bench-captured bytes, plus the 2-bit rolling counter the
+  // real car has in byte 0 bits 6-7 (500k S60 log: 00 40 80 C0 00 ... every
+  // 10 ms). V11.00.0: was a frozen 0x80.
+  for (uint8_t i = 0; i < 8; i++)
+  {
+    data[i] = VOLVO_P2G3_42406C_DATA[i]; // copy the starting values
+  }
+  data[0] = (uint8_t)((VOLVO_P2G3_42406C_DATA[0] & 0x3F) | (volvoP2G3Counter42406C << 6)); // byte 0: counter in bits 6-7, low bits as captured
+  sendVolvoSaabFrame(VOLVO_P2G3_42406C_ID, true, data);
+  volvoP2G3Counter42406C = (volvoP2G3Counter42406C + 1) & 0x03; // next count, 0-3
 
-  // 0x0062401E - carries the lock request
+  // 0x00C0402A - V11.00.0 new: the DEM listens for it (OEM code: MO table),
+  // 10 ms in the 500k S60 log, sent with that log's steady bytes
+  sendVolvoSaabFrame(VOLVO_P2G3_C0402A_ID, true, VOLVO_P2G3_C0402A_DATA);
+
+  // 0x0062401E - carries the lock request.
+  // V11 TODO (bench): in the 500k S60 log this frame comes from the engine side
+  // (byte 0 = 0x02 most of the time, byte 1 moves a little either side of 0,
+  // so byte 1 is probably an engine-torque signal the DEM feeds forward).
   data[0] = 0x00;     // 0x00 idle, 0x02 lock active
   data[1] = lockByte; // lock request
   data[2] = 0x42;     // static
@@ -4145,8 +4598,15 @@ void VolvoP2Gen3_frames10()
   }
   sendVolvoSaabFrame(VOLVO_P2G3_LOCK_ID, true, data);
 
-  // 0x0080401E - mode flags in bytes 2-3
-  data[0] = 0x1E; // static
+  // 0x0080401E - mode flags in bytes 2-3. In the 500k S60 log bytes 2-3 follow
+  // the engine (0x0366 just after start, about 0x0290 at idle, rising when driving), so
+  // they are most likely engine rpm with a flag in bit 7: "lock active" 87 D0 =
+  // 2000 rpm, the same trick as our Volvo P3 / SAAB frames. Kept as bench-proven.
+  data[0] = 0x1E; // 1E and 06 every other send (500k S60 log). V11.00.0: was a frozen 1E
+  if (volvoP2G3Toggle)
+  {
+    data[0] = 0x06;
+  }
   data[1] = 0x03; // static
   data[2] = 0x80; // 80 00 idle, 87 D0 lock active
   data[3] = 0x00;
@@ -4161,8 +4621,34 @@ void VolvoP2Gen3_frames10()
   }
   sendVolvoSaabFrame(VOLVO_P2G3_MODE_ID, true, data);
 
-  sendVolvoSaabFrame(VOLVO_P2G3_224024_ID, true, VOLVO_P2G3_224024_DATA);
+  // 0x00224024 - bench-captured bytes; byte 0 bit 2 flips every send like the
+  // real car (500k S60 log: 1C 18 1C 18 ...). V11.00.0: was a frozen 0x3F.
+  for (uint8_t i = 0; i < 8; i++)
+  {
+    data[i] = VOLVO_P2G3_224024_DATA[i]; // copy the starting values
+  }
+  if (volvoP2G3Toggle)
+  {
+    data[0] = (uint8_t)(VOLVO_P2G3_224024_DATA[0] & ~(1 << 2)); // byte 0 bit 2 = 0 this time
+  }
+  else
+  {
+    data[0] = (uint8_t)(VOLVO_P2G3_224024_DATA[0] | (1 << 2)); // byte 0 bit 2 = 1 this time
+  }
+  sendVolvoSaabFrame(VOLVO_P2G3_224024_ID, true, data);
+
   sendVolvoSaabFrame(VOLVO_P2G3_E24026_ID, true, VOLVO_P2G3_E24026_DATA);
+
+  // V11.00.0 new: 0x10E24000 (56 ms in the log) and 0x11220028 (60 ms in the
+  // log) go out on every 5th 10 ms send = 50 ms - a bit faster than the car,
+  // which can never trip the DEM's "frame missing" timer.
+  volvoP2G3Slow++;
+  if (volvoP2G3Slow >= 5)
+  {
+    volvoP2G3Slow = 0; // start counting again
+    sendVolvoSaabFrame(VOLVO_P2G3_10E24000_ID, true, VOLVO_P2G3_10E24000_DATA);
+    sendVolvoSaabFrame(VOLVO_P2G3_11220028_ID, true, VOLVO_P2G3_11220028_DATA);
+  }
 }
 
 void VolvoP2Gen3_frames100()
@@ -4185,6 +4671,10 @@ void VolvoP2Gen3_frames100()
   }
   volvoHeartbeatFlip = !volvoHeartbeatFlip;
   sendVolvoSaabFrame(VOLVO_P2G3_NETWORK_ID, true, data);
+
+  // 0x11420006 - V11.00.0 new: the DEM listens for it (OEM code: MO table).
+  // 120 ms in the 500k S60 log; sent every 100 ms with that log's steady bytes.
+  sendVolvoSaabFrame(VOLVO_P2G3_11420006_ID, true, VOLVO_P2G3_11420006_DATA);
 }
 
 // --- Volvo Gen4 (P3 family, 500 kbit/s, 11-bit IDs) --------------------------
@@ -4261,6 +4751,105 @@ void VolvoGen4_frames100()
   }
   volvoHeartbeatFlip = !volvoHeartbeatFlip;
   sendVolvoSaabFrame(VOLVO_G4_NETWORK_ID, false, data);
+}
+
+// --- Volvo Gen5 "SPC" 31380867 (generation 53, 500 kbit/s assumed, 11-bit) ---
+// Added V11.00.0 from the unit's OEM code (spec_ppc_volvo_spc_bmw.md, Volvo part).
+// Haldex replies on VOLVO_SPC_HALDEX_ID (0x126), decoded in parseCAN_hdx.
+//
+// The lever is known exactly: 0x041 bytes 6-7, signed 16-bit, high byte first.
+// The unit takes the size of the number (ignores the sign): 0 = clutch fully
+// open, bigger = more lock, and past its calibrated full scale = full lock.
+// No checksum or counter is checked on anything it receives.
+//
+// What is NOT known yet: the content of the other 23 frames it listens to
+// (ignition / status / variant inputs that gate the strategy - if one is
+// missing or wrong the unit may stay open) and every frame's real send rate.
+// They are sent as all-zero starting values so each byte can be tried live with
+// the serial lab (OVR <id> <byte> <value>); set VOLVO_SPC_SEND_PLACEHOLDERS to 0
+// to send only the lever and the network frame.
+// V11 TODO (bench): rates below are guesses (0x0xx 10 ms, 0x1xx/0x2xx 20 ms,
+// 0x5xx 100 ms); confirm content + rates from a log of a car with this unit.
+// No brake / handbrake bit is known in these frames, so none is sent.
+
+static const uint8_t VOLVO_SPC_ZERO_DATA[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}; // starting value for the unknown frames
+
+void VolvoSpc_frames10()
+{
+  uint8_t data[8];
+
+  // lock request 0-100 % (0 while a lock gate holds lock off, the sweep
+  // position while Learn runs) -> 0 .. VOLVO_SPC_LEVER_FULL_SCALE
+  const uint8_t lockPercent = lever_lock_percent();
+  const uint32_t leverValue = ((uint32_t)VOLVO_SPC_LEVER_FULL_SCALE * lockPercent + 50) / 100; // round to nearest
+
+  // 0x041 - clutch demand (OEM code: COM signal 12, bytes 6-7, signed 16-bit high byte first)
+  data[0] = 0x00; // not read by the unit
+  data[1] = 0x00; // not read by the unit
+  data[2] = 0x00; // not read by the unit
+  data[3] = 0x00; // not read by the unit
+  data[4] = 0x00; // not read by the unit
+  data[5] = 0x00; // not read by the unit
+  data[6] = (uint8_t)((leverValue >> 8) & 0xFF); // clutch demand high byte (positive, so the top bit stays 0)
+  data[7] = (uint8_t)(leverValue & 0xFF);        // clutch demand low byte
+  sendVolvoSaabFrame(VOLVO_SPC_LEVER_ID, false, data);
+
+  if (VOLVO_SPC_SEND_PLACEHOLDERS)
+  {
+    sendVolvoSaabFrame(VOLVO_SPC_04A_ID, false, VOLVO_SPC_ZERO_DATA); // starting value, content unknown
+    sendVolvoSaabFrame(VOLVO_SPC_050_ID, false, VOLVO_SPC_ZERO_DATA); // starting value, content unknown
+    sendVolvoSaabFrame(VOLVO_SPC_056_ID, false, VOLVO_SPC_ZERO_DATA); // starting value, content unknown
+    sendVolvoSaabFrame(VOLVO_SPC_066_ID, false, VOLVO_SPC_ZERO_DATA); // starting value, content unknown
+    sendVolvoSaabFrame(VOLVO_SPC_071_ID, false, VOLVO_SPC_ZERO_DATA); // starting value, content unknown
+    sendVolvoSaabFrame(VOLVO_SPC_076_ID, false, VOLVO_SPC_ZERO_DATA); // starting value, content unknown
+    sendVolvoSaabFrame(VOLVO_SPC_081_ID, false, VOLVO_SPC_ZERO_DATA); // starting value, content unknown
+    sendVolvoSaabFrame(VOLVO_SPC_086_ID, false, VOLVO_SPC_ZERO_DATA); // starting value, content unknown
+  }
+}
+
+void VolvoSpc_frames20()
+{
+  if (VOLVO_SPC_SEND_PLACEHOLDERS)
+  {
+    sendVolvoSaabFrame(VOLVO_SPC_131_ID, false, VOLVO_SPC_ZERO_DATA); // starting value, content unknown
+    sendVolvoSaabFrame(VOLVO_SPC_155_ID, false, VOLVO_SPC_ZERO_DATA); // starting value, content unknown
+    sendVolvoSaabFrame(VOLVO_SPC_158_ID, false, VOLVO_SPC_ZERO_DATA); // starting value, content unknown
+    sendVolvoSaabFrame(VOLVO_SPC_161_ID, false, VOLVO_SPC_ZERO_DATA); // starting value, content unknown
+    sendVolvoSaabFrame(VOLVO_SPC_165_ID, false, VOLVO_SPC_ZERO_DATA); // starting value, content unknown
+    sendVolvoSaabFrame(VOLVO_SPC_171_ID, false, VOLVO_SPC_ZERO_DATA); // starting value, content unknown
+    sendVolvoSaabFrame(VOLVO_SPC_200_ID, false, VOLVO_SPC_ZERO_DATA); // starting value, content unknown
+    sendVolvoSaabFrame(VOLVO_SPC_211_ID, false, VOLVO_SPC_ZERO_DATA); // starting value, content unknown
+    sendVolvoSaabFrame(VOLVO_SPC_231_ID, false, VOLVO_SPC_ZERO_DATA); // starting value, content unknown
+    sendVolvoSaabFrame(VOLVO_SPC_235_ID, false, VOLVO_SPC_ZERO_DATA); // starting value, content unknown
+    sendVolvoSaabFrame(VOLVO_SPC_281_ID, false, VOLVO_SPC_ZERO_DATA); // starting value, content unknown
+    sendVolvoSaabFrame(VOLVO_SPC_285_ID, false, VOLVO_SPC_ZERO_DATA); // starting value, content unknown
+  }
+}
+
+void VolvoSpc_frames100()
+{
+  uint8_t data[8];
+
+  // 0x501 - network management. The unit's CanNm listens to 0x500-0x53F (its
+  // own frame is 0x51E); any frame in that range keeps its network awake.
+  // Byte layout assumed from the usual AUTOSAR NM frame (byte 0 = sender
+  // node number, byte 1 = control bits). V11 TODO (bench): confirm.
+  data[0] = 0x01; // sender node number (ours, made up - matches the ID 0x500 + 1)
+  data[1] = 0x00; // control bits: no "repeat message" request
+  data[2] = 0x00; // user data
+  data[3] = 0x00; // user data
+  data[4] = 0x00; // user data
+  data[5] = 0x00; // user data
+  data[6] = 0x00; // user data
+  data[7] = 0x00; // user data
+  sendVolvoSaabFrame(VOLVO_SPC_NM_ID, false, data);
+
+  if (VOLVO_SPC_SEND_PLACEHOLDERS)
+  {
+    sendVolvoSaabFrame(VOLVO_SPC_57E_ID, false, VOLVO_SPC_ZERO_DATA); // starting value, content unknown
+    sendVolvoSaabFrame(VOLVO_SPC_57F_ID, false, VOLVO_SPC_ZERO_DATA); // starting value, content unknown
+    sendVolvoSaabFrame(VOLVO_SPC_587_ID, false, VOLVO_SPC_ZERO_DATA); // starting value, content unknown
+  }
 }
 
 // --- SAAB 9-3 XWD (GM family, 500 kbit/s, 11-bit IDs) ------------------------
@@ -4370,4 +4959,540 @@ void Saab93_frames1000()
 {
   sendVolvoSaabFrame(SAAB_93_510_ID, false, SAAB_93_510_DATA);
   sendVolvoSaabFrame(SAAB_93_398_ID, false, SAAB_93_398_DATA);
+}
+
+// =============================================================================
+// Volvo P1 (S40 / V50 AWD, generation 31) Standalone Frames (V11.00.1)
+// =============================================================================
+// Built from Adam's 2005 V50 T5 AWD logs (documents/vehicle-logs/gen3/
+// P1_V50_T5_AWD_DECODE.md). Standalone sends EVERY frame the car puts on its
+// high-speed bus (22 of them), so the AWD module sees a whole car. Each one is a
+// frame-edit block, so the ones it turns out not to need can be switched off.
+//
+// What goes in them:
+//   - Steady bytes: a real frame of each, taken from Drive.csv at 56.9 s
+//     (30 km/h, light throttle, no brake, wheel straight).
+//   - Counters / toggles: copied from the full C30 PCAN trace (idle.trc), which
+//     caught every frame, so the patterns are exact.
+//   - The lock: chosen on the Settings page (Volvo P1 Standalone card, saved):
+//       Engine Torque - torque + pedal + rpm rise with the lock. In the logs the
+//                       module follows torque almost 1:1, so this is the default.
+//       Wheel Slip    - the front wheels run faster than the rears (wheelspin).
+//       Both          - the two together.
+//     lever_lock_percent() gives the lock % (Learn sweep, learn table and every
+//     lock gate already applied), exactly as on the other direct-lever units.
+//   - Speed: the Road Speed setting on the rear wheels and the road speed frame;
+//     the fronts the same unless Wheel Slip is in use.
+//   - Steering: straight ahead and still, with the sensor's own check byte.
+//   - Brake / handbrake: from Follow Brake / Follow Handbrake.
+// The AWD module answers on 0x1960000A, decoded in parseCAN_hdx.
+//
+// Send times: 10 ms frames go out every 10 ms, the car's 14-15 ms frames every
+// 13 ms, 20 ms every 20 ms, 28 ms every 25 ms, 50 ms every 50 ms - never slower
+// than the car. The slow ones (80 ms and up) count 10 ms steps.
+// =============================================================================
+
+// Steady values (Drive.csv, 56.9 s). Bytes that are worked out each send are
+// marked in the send functions below.
+static const uint8_t VOLVO_P1_0300410E_DATA[8] = {0x98, 0x8C, 0xB8, 0x17, 0xA8, 0x86, 0xF5, 0x23}; // torque / pedal / brake switch
+static const uint8_t VOLVO_P1_0090411E_DATA[8] = {0x42, 0x07, 0xE7, 0xD0, 0x9F, 0x00, 0x9C, 0x1D}; // rpm (2000 here)
+static const uint8_t VOLVO_P1_02104136_DATA[8] = {0xBB, 0x03, 0x3F, 0xFF, 0x24, 0xE0, 0x0B, 0xCD}; // vehicle speed in bytes 6-7
+static const uint8_t VOLVO_P1_02000026_DATA[8] = {0x7F, 0x34, 0x00, 0xFC, 0x52, 0x00, 0xE0, 0xEF}; // brake released, DSTC on
+static const uint8_t VOLVO_P1_0110483C_DATA[8] = {0x08, 0xE7, 0x22, 0x00, 0x44, 0x7A, 0xFD, 0x0F}; // handbrake off
+static const uint8_t VOLVO_P1_02804026_DATA[8] = {0xF8, 0x00, 0x78, 0x00, 0xF2, 0x24, 0xFD, 0xFF}; // steering + yaw set to straight (0x800)
+static const uint8_t VOLVO_P1_0100082C_DATA[8] = {0x0F, 0x40, 0xB9, 0xA8, 0x66, 0x11, 0x00, 0x00};
+static const uint8_t VOLVO_P1_02C00020_DATA[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x36, 0x34};
+static const uint8_t VOLVO_P1_00800006_DATA[8] = {0x0A, 0x8F, 0x46, 0x95, 0x41, 0xED, 0xAF, 0x3F}; // byte 0 bits 6-7 = counter
+static const uint8_t VOLVO_P1_03800006_DATA[8] = {0x1A, 0x8F, 0x9D, 0x13, 0xC1, 0xAD, 0x02, 0x85};
+static const uint8_t VOLVO_P1_19000026_DATA[8] = {0x00, 0xFF, 0x01, 0x40, 0x30, 0x11, 0x86, 0x00};
+static const uint8_t VOLVO_P1_19E00006_DATA[8] = {0x0A, 0x00, 0x19, 0xC6, 0x98, 0x66, 0x40, 0x00};
+static const uint8_t VOLVO_P1_1B200002_DATA[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x73};
+static const uint8_t VOLVO_P1_1B600002_DATA[8] = {0x00, 0x00, 0x00, 0x00, 0x87, 0x26, 0x4D, 0xCA};
+static const uint8_t VOLVO_P1_1B700030_DATA[8] = {0x6F, 0xA8, 0x26, 0x1E, 0x45, 0xC0, 0x03, 0x01};
+static const uint8_t VOLVO_P1_1A200020_DATA[8] = {0x0F, 0x00, 0xA2, 0x29, 0x00, 0x9D, 0x02, 0x2A}; // byte 0 bits 6-7 = counter
+static const uint8_t VOLVO_P1_1AE0092C_DATA[8] = {0x00, 0x00, 0x22, 0xE0, 0x41, 0xCA, 0x00, 0x00}; // byte 0 bits 6-7 = counter
+
+// 0x1B600002 byte 1: a 6-step pattern on the real car (C30 trace, V50 values)
+static const uint8_t VOLVO_P1_1B600002_BYTE1[6] = {0x40, 0x00, 0x80, 0x00, 0x00, 0x00};
+
+// 0x1BA0493C: 20 pages, byte 0 = page number 1-20, each with its own steady data
+// (the most common value of each page across the V50 driving logs).
+static const uint8_t VOLVO_P1_1BA0493C_PAGES[20][8] = {
+    {0x01, 0x03, 0x02, 0x08, 0x01, 0x03, 0x04, 0x02},
+    {0x02, 0x01, 0x05, 0x01, 0x03, 0x01, 0x01, 0x02},
+    {0x03, 0x03, 0x02, 0x01, 0x02, 0x02, 0x01, 0x02},
+    {0x04, 0x12, 0x10, 0x02, 0x01, 0x02, 0x01, 0x02},
+    {0x05, 0x03, 0x01, 0x05, 0x01, 0x03, 0x01, 0x03},
+    {0x06, 0x02, 0x02, 0x07, 0x01, 0x03, 0x02, 0x01},
+    {0x07, 0x01, 0x03, 0x00, 0x02, 0x01, 0x01, 0x01},
+    {0x08, 0x02, 0x01, 0x12, 0x02, 0x03, 0x01, 0x02},
+    {0x09, 0x00, 0x00, 0x02, 0x01, 0x01, 0x01, 0x01},
+    {0x0A, 0x01, 0x01, 0x01, 0x01, 0x02, 0x06, 0x01},
+    {0x0B, 0x01, 0x01, 0x01, 0x01, 0x03, 0x01, 0x01},
+    {0x0C, 0x02, 0x01, 0x01, 0x02, 0x02, 0x01, 0x08},
+    {0x0D, 0x04, 0x02, 0x01, 0x01, 0x01, 0x01, 0x01},
+    {0x0E, 0x01, 0x02, 0x02, 0x02, 0x02, 0x01, 0x02},
+    {0x0F, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+    {0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+    {0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+    {0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+    {0x13, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+    {0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+};
+
+// 0x1BE0493C pages (byte 0 = page). Page 01 is built each time (clock + heartbeat).
+// The car also sends its VIN on pages 10, 11 and 12 - not needed, so not sent.
+static const uint8_t VOLVO_P1_NETWORK_PAGE02[8] = {0x02, 0x56, 0x8A, 0x00, 0x4A, 0x03, 0xAE, 0xA2}; // status
+static const uint8_t VOLVO_P1_NETWORK_PAGE05[8] = {0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x8F};
+
+// Counters and toggles ('static' = they belong to this file only)
+static uint32_t volvoP1Tick10 = 0;         // counts 10 ms sends, for the every-Nth bits and the slow frames
+static uint8_t volvoP1SteerSensorCount = 0; // 0x0340412E byte 0 low nibble: 0-15, one step per send
+static uint8_t volvoP1Count20 = 0;         // counts 20 ms sends: 0x00800006 counter, 0x0090411E / 0x03800006 every-Nth bits
+static bool volvoP1Toggle13 = false;       // 0x19000026 byte 6 bit 3, flips every send
+static uint8_t volvoP1PulsePage = 0;       // 0x19A00002 byte 0 page: 0-3 -> 02, 12, 6E, 12
+static uint8_t volvoP1PulseCounter[4] = {0x52, 0x50, 0xFA, 0xAF}; // 0x19A00002 bytes 1-4: four wheel pulse counters (start as logged)
+static uint8_t volvoP1Distance = 0x30;     // 0x19A00002 byte 5: distance count (start as logged)
+static uint16_t volvoP1PulseHundredths = 0; // rear pulses not sent yet, in hundredths of a pulse
+static uint16_t volvoP1FrontPulseHundredths = 0; // front pulses not sent yet, in hundredths of a pulse
+static uint8_t volvoP1DistancePulses = 0;  // pulses since byte 5 last went up
+static uint8_t volvoP1Count1B6 = 0;        // 0x1B600002 sends, 0-5
+static uint8_t volvoP1Count1B7 = 0;        // 0x1B700030 sends, 0-2
+static uint8_t volvoP1Count1A2 = 0;        // 0x1A200020 byte 0 bits 6-7 counter, 0-3
+static uint8_t volvoP1Count1AE = 0;        // 0x1AE0092C byte 0 bits 6-7 counter, 0-3
+static uint8_t volvoP1Page1BA = 0;         // 0x1BA0493C page to send next, 0-19
+static uint8_t volvoP1NetworkSlot = 0;     // 0x1BE0493C 250 ms slot, 0-3
+static uint32_t volvoP1NetworkClock = 0x94DECF27; // 0x1BE0493C page 01 bytes 2-5: goes up 10 a second (start as logged)
+static bool volvoP1NetworkHeartbeat = false; // 0x1BE0493C page 01 bytes 6-7: 02 04, then FD FB on the next page 01
+
+// A value part-way along a straight line: atZero at 0 % lock, atFull at 100 %
+static uint16_t volvoP1Scale(uint16_t atZero, uint16_t atFull, uint8_t lockPercent)
+{
+  int32_t change = (int32_t)atFull - (int32_t)atZero;     // how far the value moves from 0 % to 100 %
+  int32_t value = (int32_t)atZero + change * lockPercent / 100;
+  return (uint16_t)value;
+}
+
+// Copy a steady 8-byte frame into data[]
+static void volvoP1Copy(uint8_t data[8], const uint8_t steady[8])
+{
+  for (uint8_t i = 0; i < 8; i++)
+  {
+    data[i] = steady[i];
+  }
+}
+
+// The lock % that goes into the engine frames (torque, pedal, rpm): the lock
+// when Lock Source is Engine Torque or Both, otherwise 0 (engine at a light cruise)
+static uint8_t volvoP1EngineLockPercent(uint8_t lockPercent)
+{
+  if (volvoP1LockSource == VOLVO_P1_SOURCE_SLIP)
+  {
+    return 0;
+  }
+  return lockPercent;
+}
+
+// The lock % that goes into the wheel speeds: the lock when Lock Source is Wheel
+// Slip or Both, otherwise 0 (all four wheels the same)
+static uint8_t volvoP1SlipLockPercent(uint8_t lockPercent)
+{
+  if (volvoP1LockSource == VOLVO_P1_SOURCE_TORQUE)
+  {
+    return 0;
+  }
+  return lockPercent;
+}
+
+// Rear wheel / road speed to send, 0.01 km/h per count (Road Speed setting)
+static uint16_t volvoP1RearSpeedRaw()
+{
+  return (uint16_t)volvoP1RoadSpeedKmh * 100;
+}
+
+// Front wheel speed to send, 0.01 km/h: the rears plus the Wheel Slip share of the lock
+static uint16_t volvoP1FrontSpeedRaw(uint8_t lockPercent)
+{
+  uint16_t slipRaw = volvoP1Scale(0, (uint16_t)volvoP1SlipFullKmh * 100, volvoP1SlipLockPercent(lockPercent));
+  return volvoP1RearSpeedRaw() + slipRaw;
+}
+
+// 0x0300410E - engine: two torques, brake switch, accelerator pedal (follow the lock)
+static void volvoP1SendEngineTorque(uint8_t lockPercent)
+{
+  uint8_t data[8];
+  volvoP1Copy(data, VOLVO_P1_0300410E_DATA);
+
+  // engine torque, 12-bit with 2048 = 0 (scale not known): 0 at 0 % lock,
+  // Torque at 100 % (setting) at full lock
+  uint8_t enginePercent = volvoP1EngineLockPercent(lockPercent);
+  uint16_t torqueAboveZero = volvoP1Scale(0, volvoP1TorqueFull, enginePercent);
+  uint16_t torque = 2048 + torqueAboveZero;
+  uint8_t pedal = (uint8_t)volvoP1Scale(0, VOLVO_P1_PEDAL_FULL, enginePercent);
+
+  data[0] = 0x90 | ((torque >> 8) & 0x0F); // top nibble steady (9), bottom = torque top 4 bits
+  data[1] = torque & 0xFF;                 // torque bottom 8 bits
+  data[4] = 0xA0 | ((torque >> 8) & 0x0F); // top nibble A = brake off, bottom = second torque top 4 bits
+  data[5] = torque & 0xFF;                 // second torque bottom 8 bits (the car keeps the two within a few counts)
+  data[7] = pedal;                         // accelerator pedal, 0-255
+
+  volvoP1SentTorque = torqueAboveZero; // for the live readout
+  volvoP1SentPedal = pedal;
+
+  if (brakeForHaldex())
+  {
+    data[4] = data[4] | (1 << 4); // byte 4 bit 4 = brake switch
+    data[4] = data[4] | (1 << 6); // byte 4 bit 6 = second brake switch (always together in the logs)
+  }
+  sendVolvoSaabFrame(VOLVO_P1_ENGINE_TORQUE_ID, true, data);
+}
+
+// 0x0110483C - handbrake in byte 2 bit 6; byte 2 bit 7 set on every 5th send
+static void volvoP1SendHandbrake()
+{
+  uint8_t data[8];
+  volvoP1Copy(data, VOLVO_P1_0110483C_DATA);
+  if (volvoP1Tick10 % 5 == 0)
+  {
+    data[2] = data[2] | (1 << 7); // every 5th send, like the car
+  }
+  if (handbrakeForHaldex())
+  {
+    data[2] = data[2] | (1 << 6); // handbrake on
+  }
+  sendVolvoSaabFrame(VOLVO_P1_HANDBRAKE_ID, true, data);
+}
+
+// 0x0100082C - steady, byte 4 bit 4 set on every 10th send
+static void volvoP1Send0100082C()
+{
+  uint8_t data[8];
+  volvoP1Copy(data, VOLVO_P1_0100082C_DATA);
+  if (volvoP1Tick10 % 10 == 0)
+  {
+    data[4] = data[4] | (1 << 4); // every 10th send, like the car
+  }
+  sendVolvoSaabFrame(VOLVO_P1_0100082C_ID, true, data);
+}
+
+// 0x0340412E byte 3, the steering angle sensor's check byte. From all 26,820
+// logged frames (V50 and C30, every one fits):
+//   byte 3 = 0x02 - (byte 0 with its two nibbles swapped + byte 1 bit 7
+//                    + byte 4 + byte 5 + byte 6 + byte 7)       (wraps at 256)
+// with 0x04 instead of 0x02 when byte 0 bit 6 (the angle direction) is set.
+// Bytes 1-2 (the fine steering rate) are not in it, apart from byte 1's sign bit.
+static uint8_t volvoP1SteerSensorCheck(const uint8_t data[8])
+{
+  uint8_t byte0Swapped = (uint8_t)(((data[0] & 0x0F) << 4) | (data[0] >> 4)); // byte 0 with its nibbles swapped
+  uint8_t base = VOLVO_P1_STEER_CHECK_BASE;                                  // 0x02
+  if (data[0] & (1 << 6))
+  {
+    base = VOLVO_P1_STEER_CHECK_BASE + 2; // byte 0 bit 6 set (the other steering direction): 0x04
+  }
+  uint8_t total = byte0Swapped;  // adds up in a byte, so it wraps at 256 by itself
+  total = total + (data[1] & 0x80); // byte 1 sign bit only
+  total = total + data[4];
+  total = total + data[5];
+  total = total + data[6];
+  total = total + data[7];
+  return (uint8_t)(base - total);
+}
+
+// 0x0340412E - steering angle sensor (it was called the steering pump frame
+// before the decode). Sent as "straight ahead and not turning":
+//   byte 0   0x30 + 0-15 counter (bits 4-5 = 11 as on the car, bit 6 = direction, 0)
+//   bytes 1-2 fine steering rate (bit 7 of byte 1 = direction): 0
+//   byte 3   check byte (above)
+//   bytes 4-5 coarse steering rate (bit 7 of byte 4 = direction): 0x80 00 = 0, as the V50 sends when still
+//   bytes 6-7 steering angle size: 0 = straight
+static void volvoP1SendSteerSensor()
+{
+  uint8_t data[8];
+  data[0] = 0x30 | volvoP1SteerSensorCount; // counter 0-15
+  data[1] = 0x00;                           // fine rate, top byte
+  data[2] = 0x00;                           // fine rate, bottom byte
+  data[3] = 0x00;                           // check byte - worked out below, once the rest is filled in
+  data[4] = 0x80;                           // coarse rate, top byte (sign bit set, value 0, as logged)
+  data[5] = 0x00;                           // coarse rate, bottom byte
+  data[6] = 0x00;                           // angle, top byte
+  data[7] = 0x00;                           // angle, bottom byte
+  data[3] = volvoP1SteerSensorCheck(data);
+  sendVolvoSaabFrame(VOLVO_P1_STEER_SENSOR_ID, true, data);
+  volvoP1SteerSensorCount = (volvoP1SteerSensorCount + 1) & 0x0F; // next count, 0-15
+}
+
+// 0x1BE0493C - one page every 250 ms: page 05, then page 01 (clock and
+// heartbeat), then page 02, then a gap. Each page comes once a second.
+static void volvoP1SendNetwork()
+{
+  uint8_t data[8];
+
+  if (volvoP1NetworkSlot == 0)
+  {
+    sendVolvoSaabFrame(VOLVO_P1_NETWORK_ID, true, VOLVO_P1_NETWORK_PAGE05); // page 05
+  }
+  else if (volvoP1NetworkSlot == 1)
+  {
+    // page 01: a clock in bytes 2-5 (+10 a second) and the heartbeat in bytes 6-7
+    volvoP1NetworkClock = volvoP1NetworkClock + 10;
+    data[0] = 0x01;                                     // page 01
+    data[1] = 0x10;                                     // steady
+    data[2] = (volvoP1NetworkClock >> 24) & 0xFF;       // clock, top byte
+    data[3] = (volvoP1NetworkClock >> 16) & 0xFF;       // clock
+    data[4] = (volvoP1NetworkClock >> 8) & 0xFF;        // clock
+    data[5] = volvoP1NetworkClock & 0xFF;               // clock, bottom byte
+    data[6] = 0x02;                                     // heartbeat: 02 04 ...
+    data[7] = 0x04;
+    if (volvoP1NetworkHeartbeat)
+    {
+      data[6] = 0xFD;                                   // ... then its exact opposite, FD FB
+      data[7] = 0xFB;
+    }
+    volvoP1NetworkHeartbeat = !volvoP1NetworkHeartbeat;
+    sendVolvoSaabFrame(VOLVO_P1_NETWORK_ID, true, data);
+  }
+  else if (volvoP1NetworkSlot == 2)
+  {
+    sendVolvoSaabFrame(VOLVO_P1_NETWORK_ID, true, VOLVO_P1_NETWORK_PAGE02); // page 02, status
+  }
+  // slot 3: nothing, like the car
+
+  volvoP1NetworkSlot = (volvoP1NetworkSlot + 1) & 0x03; // next slot, 0-3
+}
+
+// The slow frames (80 ms and up): counted in 10 ms steps
+static void volvoP1SlowFrames()
+{
+  uint8_t data[8];
+
+  // 0x1B200002 - steady, every 80 ms (85 ms on the car)
+  if (volvoP1Tick10 % 8 == 0)
+  {
+    sendVolvoSaabFrame(VOLVO_P1_1B200002_ID, true, VOLVO_P1_1B200002_DATA);
+  }
+
+  // 0x1B600002 - every 170 ms: byte 0 bit 5 on every 6th send, byte 1 6-step pattern
+  if (volvoP1Tick10 % 17 == 0)
+  {
+    volvoP1Copy(data, VOLVO_P1_1B600002_DATA);
+    data[1] = VOLVO_P1_1B600002_BYTE1[volvoP1Count1B6]; // byte 1 pattern step
+    if (volvoP1Count1B6 == 0)
+    {
+      data[0] = data[0] | (1 << 5); // byte 0 bit 5, every 6th send
+    }
+    sendVolvoSaabFrame(VOLVO_P1_1B600002_ID, true, data);
+    volvoP1Count1B6++;
+    if (volvoP1Count1B6 >= 6)
+    {
+      volvoP1Count1B6 = 0; // pattern starts again
+    }
+  }
+
+  // 0x1B700030 - every 210 ms: byte 0 bit 4 on every 3rd send
+  if (volvoP1Tick10 % 21 == 0)
+  {
+    volvoP1Copy(data, VOLVO_P1_1B700030_DATA);
+    if (volvoP1Count1B7 == 0)
+    {
+      data[0] = data[0] | (1 << 4); // 6F -> 7F every 3rd send
+    }
+    sendVolvoSaabFrame(VOLVO_P1_1B700030_ID, true, data);
+    volvoP1Count1B7++;
+    if (volvoP1Count1B7 >= 3)
+    {
+      volvoP1Count1B7 = 0;
+    }
+  }
+
+  // 0x1A200020 - every 310 ms (315 on the car): byte 0 bits 6-7 = 2-bit counter
+  if (volvoP1Tick10 % 31 == 0)
+  {
+    volvoP1Copy(data, VOLVO_P1_1A200020_DATA);
+    data[0] = (uint8_t)((VOLVO_P1_1A200020_DATA[0] & 0x3F) | (volvoP1Count1A2 << 6)); // counter in bits 6-7
+    sendVolvoSaabFrame(VOLVO_P1_1A200020_ID, true, data);
+    volvoP1Count1A2 = (volvoP1Count1A2 + 1) & 0x03; // next count, 0-3
+  }
+
+  // 0x1AE0092C - every 420 ms: byte 0 bits 6-7 = 2-bit counter
+  if (volvoP1Tick10 % 42 == 0)
+  {
+    volvoP1Copy(data, VOLVO_P1_1AE0092C_DATA);
+    data[0] = (uint8_t)((VOLVO_P1_1AE0092C_DATA[0] & 0x3F) | (volvoP1Count1AE << 6)); // counter in bits 6-7
+    sendVolvoSaabFrame(VOLVO_P1_1AE0092C_ID, true, data);
+    volvoP1Count1AE = (volvoP1Count1AE + 1) & 0x03; // next count, 0-3
+  }
+
+  // 0x1BA0493C - every 250 ms, the 20 pages in turn
+  if (volvoP1Tick10 % 25 == 0)
+  {
+    sendVolvoSaabFrame(VOLVO_P1_1BA0493C_ID, true, VOLVO_P1_1BA0493C_PAGES[volvoP1Page1BA]);
+    volvoP1Page1BA++;
+    if (volvoP1Page1BA >= 20)
+    {
+      volvoP1Page1BA = 0; // back to page 1
+    }
+  }
+
+  // 0x1BE0493C - every 250 ms, network heartbeat / VIN pages
+  if (volvoP1Tick10 % 25 == 0)
+  {
+    volvoP1SendNetwork();
+  }
+}
+
+void VolvoP1_frames10()
+{
+  // lock % to ask for: 0-100, with the learn table and every lock gate applied
+  const uint8_t lockPercent = lever_lock_percent();
+
+  volvoP1SendEngineTorque(lockPercent); // 0x0300410E - torque + pedal follow the lock
+  volvoP1SendHandbrake();               // 0x0110483C
+  volvoP1Send0100082C();                // 0x0100082C
+  volvoP1SendSteerSensor();             // 0x0340412E
+  volvoP1SlowFrames();                  // 80 ms and slower
+
+  volvoP1Tick10++;
+}
+
+// The car's 14-15 ms frames, sent every 13 ms
+void VolvoP1_frames13()
+{
+  uint8_t data[8];
+  const uint8_t lockPercent = lever_lock_percent();
+  uint16_t rearRaw = volvoP1RearSpeedRaw();             // Road Speed setting
+  uint16_t frontRaw = volvoP1FrontSpeedRaw(lockPercent); // the same, plus any Wheel Slip
+  volvoP1SentRearRaw = rearRaw;   // for the live readout
+  volvoP1SentFrontRaw = frontRaw;
+
+  // 0x01C04026 - four wheel speeds, 16-bit, 0x8000 = stopped, order RL RR FL FR
+  uint16_t rearWord = 0x8000 + rearRaw;
+  uint16_t frontWord = 0x8000 + frontRaw;
+  data[0] = (rearWord >> 8) & 0xFF;  // rear left, high byte
+  data[1] = rearWord & 0xFF;         // rear left, low byte
+  data[2] = (rearWord >> 8) & 0xFF;  // rear right, high byte
+  data[3] = rearWord & 0xFF;         // rear right, low byte
+  data[4] = (frontWord >> 8) & 0xFF; // front left, high byte
+  data[5] = frontWord & 0xFF;        // front left, low byte
+  data[6] = (frontWord >> 8) & 0xFF; // front right, high byte
+  data[7] = frontWord & 0xFF;        // front right, low byte
+  sendVolvoSaabFrame(VOLVO_P1_WHEELS_ID, true, data);
+
+  // 0x02104136 - road speed in bytes 6-7 (follows the rear wheels, which don't spin)
+  volvoP1Copy(data, VOLVO_P1_02104136_DATA);
+  data[6] = (rearRaw >> 8) & 0xFF; // speed high byte
+  data[7] = rearRaw & 0xFF;        // speed low byte
+  sendVolvoSaabFrame(VOLVO_P1_SPEED_ID, true, data);
+
+  // 0x02000026 - brake pressure (byte 5 + byte 4 bits 6-7). Released = as logged.
+  volvoP1Copy(data, VOLVO_P1_02000026_DATA);
+  if (brakeForHaldex())
+  {
+    data[2] = 0xAD; // braking: a real pair of values from the wheelspin log
+    data[5] = 0x35; // brake pressure byte (released = 0x00)
+  }
+  sendVolvoSaabFrame(VOLVO_P1_BRAKE_ID, true, data);
+
+  // 0x02804026 - steering angle and yaw, both straight ahead
+  sendVolvoSaabFrame(VOLVO_P1_STEERING_ID, true, VOLVO_P1_02804026_DATA);
+
+  // 0x02C00020 - steady
+  sendVolvoSaabFrame(VOLVO_P1_02C00020_ID, true, VOLVO_P1_02C00020_DATA);
+
+  // 0x19000026 - byte 6 bit 3 flips every send (15 ms on the car)
+  volvoP1Copy(data, VOLVO_P1_19000026_DATA);
+  if (volvoP1Toggle13)
+  {
+    data[6] = data[6] | (1 << 3); // 86 -> 8E
+  }
+  volvoP1Toggle13 = !volvoP1Toggle13;
+  sendVolvoSaabFrame(VOLVO_P1_19000026_ID, true, data);
+}
+
+void VolvoP1_frames20()
+{
+  uint8_t data[8];
+  const uint8_t lockPercent = lever_lock_percent();
+
+  // 0x0090411E - engine rpm follows the lock (Engine Torque / Both); byte 0 bit 7 on every 10th send
+  volvoP1Copy(data, VOLVO_P1_0090411E_DATA);
+  uint16_t rpm = volvoP1Scale(VOLVO_P1_RPM_AT_ZERO, VOLVO_P1_RPM_FULL, volvoP1EngineLockPercent(lockPercent));
+  volvoP1SentRpm = rpm; // for the live readout
+  data[2] = 0xE0 | ((rpm >> 8) & 0x1F); // top 3 bits steady, bottom 5 = rpm top bits
+  data[3] = rpm & 0xFF;                 // rpm bottom 8 bits
+  if (volvoP1Count20 % 10 == 0)
+  {
+    data[0] = data[0] | (1 << 7); // every 10th send, like the car
+  }
+  sendVolvoSaabFrame(VOLVO_P1_ENGINE_RPM_ID, true, data);
+
+  // 0x00800006 - byte 0 bits 6-7 = 2-bit counter
+  volvoP1Copy(data, VOLVO_P1_00800006_DATA);
+  data[0] = (uint8_t)((VOLVO_P1_00800006_DATA[0] & 0x3F) | ((volvoP1Count20 & 0x03) << 6)); // counter in bits 6-7
+  sendVolvoSaabFrame(VOLVO_P1_00800006_ID, true, data);
+
+  // 0x03800006 - byte 0 bit 6 on every 5th send
+  volvoP1Copy(data, VOLVO_P1_03800006_DATA);
+  if (volvoP1Count20 % 5 == 0)
+  {
+    data[0] = data[0] | (1 << 6); // 1A -> 5A every 5th send
+  }
+  sendVolvoSaabFrame(VOLVO_P1_03800006_ID, true, data);
+
+  volvoP1Count20++;
+  if (volvoP1Count20 >= 100)
+  {
+    volvoP1Count20 = 0; // 100 is a multiple of 4, 5 and 10, so every pattern carries on smoothly
+  }
+}
+
+// 0x19A00002 - wheel pulse counters, every 25 ms (28 ms on the car). Byte 0 goes
+// 02, 12, 6E, 12; the counters move on the 6E page (every 100 ms here).
+void VolvoP1_frames25()
+{
+  uint8_t data[8];
+  const uint8_t pages[4] = {0x02, 0x12, 0x6E, 0x12}; // byte 0, in order
+
+  if (volvoP1PulsePage == 2)
+  {
+    // pulses in 100 ms at the speeds being sent. Logs: about speed / 150 pulses
+    // every 112 ms, so speed / 168 every 100 ms - kept in hundredths so none get lost.
+    volvoP1PulseHundredths = volvoP1PulseHundredths + (uint16_t)((uint32_t)volvoP1SentRearRaw * 100 / 168);
+    uint8_t newPulses = volvoP1PulseHundredths / 100;                            // whole rear pulses to add now
+    volvoP1PulseHundredths = volvoP1PulseHundredths - (uint16_t)newPulses * 100; // keep the part-pulse for next time
+
+    volvoP1FrontPulseHundredths = volvoP1FrontPulseHundredths + (uint16_t)((uint32_t)volvoP1SentFrontRaw * 100 / 168);
+    uint8_t newFrontPulses = volvoP1FrontPulseHundredths / 100;                               // whole front pulses
+    volvoP1FrontPulseHundredths = volvoP1FrontPulseHundredths - (uint16_t)newFrontPulses * 100; // keep the part-pulse
+
+    // counters 1-2 = rear, 3-4 = front (same order as the wheel speeds; wraps at 255)
+    volvoP1PulseCounter[0] = volvoP1PulseCounter[0] + newPulses;
+    volvoP1PulseCounter[1] = volvoP1PulseCounter[1] + newPulses;
+    volvoP1PulseCounter[2] = volvoP1PulseCounter[2] + newFrontPulses;
+    volvoP1PulseCounter[3] = volvoP1PulseCounter[3] + newFrontPulses;
+
+    // byte 5 goes up by one about every 48 pulses (from the logs)
+    volvoP1DistancePulses = volvoP1DistancePulses + newPulses;
+    while (volvoP1DistancePulses >= 48)
+    {
+      volvoP1DistancePulses = volvoP1DistancePulses - 48;
+      volvoP1Distance++;
+    }
+  }
+
+  data[0] = pages[volvoP1PulsePage];  // page
+  data[1] = volvoP1PulseCounter[0];   // wheel pulse counter 1
+  data[2] = volvoP1PulseCounter[1];   // wheel pulse counter 2
+  data[3] = volvoP1PulseCounter[2];   // wheel pulse counter 3
+  data[4] = volvoP1PulseCounter[3];   // wheel pulse counter 4
+  data[5] = volvoP1Distance;          // distance
+  data[6] = 0x00;                     // steady
+  data[7] = 0xFF;                     // 0xFF moving (0xF7 stopped)
+  sendVolvoSaabFrame(VOLVO_P1_PULSES_ID, true, data);
+
+  volvoP1PulsePage = (volvoP1PulsePage + 1) & 0x03; // next page, 0-3
+}
+
+void VolvoP1_frames50()
+{
+  sendVolvoSaabFrame(VOLVO_P1_19E00006_ID, true, VOLVO_P1_19E00006_DATA); // 0x19E00006 - steady
 }

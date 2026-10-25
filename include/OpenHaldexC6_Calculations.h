@@ -12,6 +12,10 @@ extern volatile uint8_t haldexLearnCF;
 
 float get_lock_target_adjustment();
 
+// Which of the speed / throttle settings is holding lock at 0% right now, as
+// LOCK_GATE_* bits (see _defs.h); 0 = nothing is blocking.
+uint8_t lock_gate_blocking();
+
 // Which force-mode value applies right now: 0..5 (Stock/FWD/5050/6040/7525/
 // Expert) when an enabled force trigger's flag is active (priority picked by
 // forceModesPriority), or -1 when no force mode applies. Used by
@@ -26,6 +30,26 @@ int get_forced_mode_value();
 int get_drive_mode_forced_value();
 static float get_expert_lock_target();
 uint8_t get_lock_target_adjusted_value(uint8_t value, bool invert);
+
+// Direct-lever units (V11.00.0) - see OpenHaldexC6_Calculations.cpp
+uint8_t lever_lock_percent();               // 0-100 % to ask for now (learn sweep, learn table, lock gates applied)
+uint8_t vag_lever_byte(uint8_t fullLockByte); // Bremse_4 byte 0: 0x7F at 0 %, 0x81..0xFC, fullLockByte at 100 %
+
+// Brake / handbrake / ABS for the Haldex (V11.00.0)
+bool brakeForHaldex();      // Follow Brake on and the brake pedal is pressed (wire or CAN)
+bool handbrakeForHaldex();  // Follow Handbrake on and the handbrake is pulled (wire or CAN)
+bool absBrakingForHaldex(); // Follow ABS on and the ABS module is braking
+
+// Gen1 02D lock lever (V11.00.0) - see OpenHaldexC6_Calculations.cpp
+uint8_t gen1_lever_byte();                       // Bremse_4 byte 0 ceiling: 0x7F at 0 %, 0x81..0xC9, 0xFD at 100 %
+bool gen1_ceiling_lever_active();                // true when Bremse_4 byte 0 is the lever (standalone, or the car sends 0x2A0)
+uint8_t gen1_demand_value(uint8_t fullValue);    // Motor_1 / Bremse_3 demand byte (max while the ceiling is the lever)
+uint8_t gen1_loss_torque_byte(uint8_t oemValue); // Motor_1 byte 6 loss torque (subtracted by the unit)
+extern volatile uint32_t gen1CarBremse4Ms;       // millis() of the last car Bremse_4 seen in OEM mode (0 = never)
+
+// Gen2 7H0 / 1K0 (V11.00.0) - see OpenHaldexC6_Calculations.cpp
+uint8_t gen2DemandValue(uint8_t fullValue);      // Motor_1 b1/b5, Bremse_3 slip byte: full while the Bremse_4 lever is on the bus and lock is wanted
+
 void getLockData(twai_message_t& rx_message_chs);
 void startHaldexLearn();
 
@@ -44,7 +68,13 @@ bool runLearnSweep(uint32_t preHoldMs = 0);
 // proportional front/rear delta was tried here and made things worse on the
 // car (lock faded then collapsed to 0%), so this stays the flat, proven
 // dither. Fills data[0..7] and advances the shared counters.
+// V11.00.0: the speeds no longer scale with the lock (OEM code, spec_gen5_0cq
+// D6) - they are always the values that used to be sent at 100 % lock.
 void fill_esp19_wheel_speeds(uint8_t data[8]);
+
+// Gen5 0CQ ESP_14 lever (V11.00.0) - see OpenHaldexC6_Calculations.cpp.
+// 0..250 for ESP_14 bytes 6 AND 7 (Min = Max = exact clutch target, 0.4 %/step).
+uint8_t gen5_esp14_lever_byte();
 
 // Motor_11 (0x0A7) BPK packing, shared by standalone generation and normal-mode
 // in-place editing so the two can't drift. Fills data[0..7] (byte 0 is left as

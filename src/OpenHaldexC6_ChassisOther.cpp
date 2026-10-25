@@ -15,6 +15,7 @@
 //   44 SAAB 9-3 (P-bus)               - from a published decode of a 2007 9-3 Aero (real car)
 //   21 Volvo P2 pre-facelift          - 2002 model-year ID set only (Volvo moves IDs
 //                                       between model years); from a 2002 S60 drive log
+//   31 Volvo P1 (S40 / V50 AWD)       - from Adam's 2005 V50 T5 AWD logs (V11.00.1)
 // =============================================================================
 
 // ----- Vauxhall / Opel Insignia (generation 41) -----
@@ -54,6 +55,7 @@ bool hasOtherCarChassisDecode(uint8_t generation)
   if (generation == GEN_VOLVO_GEN4) return true;    // Volvo P3
   if (generation == GEN_SAAB_93_XWD) return true;   // SAAB 9-3
   if (generation == GEN_VOLVO_P2_GEN2) return true; // Volvo P2 pre-facelift (2002 IDs)
+  if (generation == GEN_VOLVO_P1) return true;      // Volvo P1 S40 / V50
   return false;
 }
 
@@ -213,6 +215,45 @@ static void decodeVolvoP2Gen2(const twai_message_t &frame)
   }
 }
 
+// Volvo P1 S40 / V50 (500 kbit/s, 29-bit). IDs are in canID.h (VOLVO_P1_*);
+// byte positions from Adam's 2005 V50 T5 AWD logs.
+static void decodeVolvoP1(const twai_message_t &frame)
+{
+  if (frame.data_length_code < 8)
+  {
+    return; // every P1 frame is 8 bytes
+  }
+
+  if (frame.identifier == VOLVO_P1_SPEED_ID)
+  {
+    uint16_t speedRaw = (frame.data[6] << 8) | frame.data[7]; // bytes 6-7, 0.01 km/h per bit (assumed - check against the speedo)
+    received_vehicle_speed = speedRaw / 100;
+  }
+  else if (frame.identifier == VOLVO_P1_ENGINE_RPM_ID)
+  {
+    uint16_t rpmRaw = (frame.data[2] & 0x1F) << 8; // byte 2 bits 4-0 = top 5 bits
+    rpmRaw = rpmRaw | frame.data[3];               // byte 3 = bottom 8 bits
+    received_vehicle_rpm = rpmRaw;                 // 1 rpm per bit (about 770 at idle)
+  }
+  else if (frame.identifier == VOLVO_P1_ENGINE_TORQUE_ID)
+  {
+    received_pedal_value = frame.data[7] * 100.0f / 255.0f; // byte 7 = pedal, 0-255 (about 250 floored)
+    brakeFromCAN = bitRead(frame.data[4], 4);               // byte 4 bit 4 = brake pressed
+  }
+  else if (frame.identifier == VOLVO_P1_HANDBRAKE_ID)
+  {
+    handbrakeFromCAN = bitRead(frame.data[2], 6); // byte 2 bit 6 = handbrake on
+  }
+  else if (frame.identifier == VOLVO_P1_BRAKE_ID)
+  {
+    // byte 6 bit 4 = DSTC switched off by the driver (1 for as long as it's off:
+    // the dstc-off and wheelspin logs). Same job as the VW "ESP passive" bit, so
+    // "Use TC to Force Mode" forces its chosen mode while DSTC is off.
+    tcForceModeFlag = bitRead(frame.data[6], 4);
+    asrForceModeFlag = tcForceModeFlag; // the P1 has one DSTC switch - show it on the ASR pill too
+  }
+}
+
 // Read one chassis frame for whichever of these cars is selected
 void decodeOtherCarChassis(const twai_message_t &frame)
 {
@@ -221,6 +262,15 @@ void decodeOtherCarChassis(const twai_message_t &frame)
     if (frame.extd)
     {
       decodeVolvoP2Gen2(frame); // Volvo P2 uses 29-bit IDs
+    }
+    return;
+  }
+
+  if (haldexGeneration == GEN_VOLVO_P1)
+  {
+    if (frame.extd)
+    {
+      decodeVolvoP1(frame); // Volvo P1 uses 29-bit IDs
     }
     return;
   }

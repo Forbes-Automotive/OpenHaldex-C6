@@ -86,62 +86,99 @@ static void transmitFrameCopy(twai_handle_t bus, const twai_message_t &src, twai
   canTransmit(bus, &scratch);
 }
 
-// Brake/handbrake override applied to chassis frames before forwarding to the
-// Haldex bus. When `followBrake`/`followHandbrake` is enabled, the bit on the
-// outgoing frame is rewritten to mirror (or, with `invertBrake`/`invertHandbrake`,
-// invert) the live `brakeFromCAN` / `handbrakeFromCAN` value decoded by the
-// switch above. With follow=OFF the frame is forwarded untouched.
+// Brake/handbrake bits on the chassis frames we pass to the Haldex in OEM mode.
+// With Follow Brake / Follow Handbrake on, the bit sent to the Haldex is set when
+// EITHER the car's own bit is set (passed through as it was) OR a switch wired
+// to our brake / handbrake input pin is on (V11.00.0 - for cars where a physical
+// brake or handbrake switch is fitted, so it reaches the Haldex over CAN too).
+// brakeActive / handbrakeActive are the input pins with "Invert ... Input"
+// already applied by IO.cpp; the car's CAN bit is never inverted.
+// With Follow off the frame is forwarded untouched.
 //
 // Bit positions (verified against vw_pq.dbc / PQ35_46 K-matrix / vw_mqb.dbc):
-//   PQ Gen2/4: Motor_2  (0x288) byte 2 bit 0  - MO2_BLS         (no CRC)
-//   PQ Gen2/4: Kombi_1  (0x320) byte 1 bit 1  - KO1_Handbremse  (no CRC)
-//   MQB Gen5:  ESP_05   (0x106) byte 3 bit 2  - ESP_Fahrer_bremst (CRC at byte 0 via ID_SEQ_106)
-//   MQB Gen5:  Kombi_01 (0x30B) byte 2 bit 7  - KBI_Handbremse   (no CRC)
+//   PQ Gen1/2/4/0AY: Motor_2  (0x288) byte 2 bit 0  - MO2_BLS         (no CRC)
+//   PQ Gen1/2/4/0AY: Kombi_1  (0x320) byte 1 bit 1  - KO1_Handbremse  (no CRC)
+//   MQB Gen5:        ESP_05   (0x106) byte 3 bit 2  - ESP_Fahrer_bremst (CRC at byte 0 via ID_SEQ_106)
+//   MQB Gen5:        Kombi_01 (0x30B) byte 2 bit 7  - KBI_Handbremse   (no CRC)
 static void applyBrakeHandbrakeCANOverride(twai_message_t &m)
 {
+  // What the Haldex should see: the car's bit OR our input pin
+  bool brakeOut = false;
+  if (brakeFromCAN || brakeActive)
+  {
+    brakeOut = true;
+  }
+  bool handbrakeOut = false;
+  if (handbrakeFromCAN || handbrakeActive)
+  {
+    handbrakeOut = true;
+  }
+
   switch (haldexGeneration)
   {
+  case 1:  // Gen1 02D (V11.00.0): same Motor_2 / Kombi_1 bits as the PQ cars
   case 2:  // PQ35 (1K0): brake + handbrake both broadcast on chassis CAN
-  case 4:  // PQ35/46 (0AY): brake + handbrake both broadcast on chassis CAN
-  case 51: // 0AY variant - PQ frame set (see Gen5_0AY_frames*)
+  case 4:  // PQ35/46 (0BR): brake + handbrake both broadcast on chassis CAN
+  case 51: // 0AY - a PQ unit, PQ frame set (see Gen5_0AY_frames*)
+    // PQ Motor_2 (0x288) - MO2_BLS brake light switch: byte 2 bit 0. No CRC.
     if (followBrake && m.identifier == MOTOR2_ID && m.data_length_code >= 3)
     {
-      const bool out = invertBrake ? !brakeFromCAN : brakeFromCAN;
-      m.data[2] = (uint8_t)((m.data[2] & ~0x01) | (out ? 0x01 : 0x00));
+      if (brakeOut)
+      {
+        m.data[2] = m.data[2] | 0x01; // byte 2 bit 0 = brake pressed
+      }
+      else
+      {
+        m.data[2] = m.data[2] & ~0x01; // byte 2 bit 0 = brake released
+      }
     }
     // PQ Kombi_1 (0x320) - KO1_Handbremse: byte 1 bit 1 (PQ35/46 K-matrix
     // "Byte 2 / Bit 1", 1 = angezogen / applied). Byte 1 bit 0 is the
     // brake-fluid warning (KO1_Bremsinfo) and is left untouched. No CRC.
     if (followHandbrake && m.identifier == mKombi_1 && m.data_length_code >= 2)
     {
-      const bool out = invertHandbrake ? !handbrakeFromCAN : handbrakeFromCAN;
-      m.data[1] = (uint8_t)((m.data[1] & ~0x02) | (out ? 0x02 : 0x00));
+      if (handbrakeOut)
+      {
+        m.data[1] = m.data[1] | 0x02; // byte 1 bit 1 = handbrake applied
+      }
+      else
+      {
+        m.data[1] = m.data[1] & ~0x02; // byte 1 bit 1 = handbrake off
+      }
     }
-    // Gen51 (0AY) may also see MQB Kombi_01 (0x30B) byte 2 bit 7 - kept for
-    // that variant in case it is fitted to an MQB-era loom.
-    if (followHandbrake && haldexGeneration == 51 &&
-        m.identifier == KOMBI_01 && m.data_length_code >= 3)
-    {
-      const bool out = invertHandbrake ? !handbrakeFromCAN : handbrakeFromCAN;
-      m.data[2] = (uint8_t)((m.data[2] & ~0x80) | (out ? 0x80 : 0x00));
-    }
+    // (The old Gen51 MQB Kombi_01 0x30B rewrite is gone: the OEM code shows
+    // the 0AY has no receive slot for 0x30B - spec_gen5_0ay #12.)
     break;
 
   case 50:
   case 52: // Gen5 0CQ VAQ - copies 0CQ brake/handbrake overrides
+    // MQB ESP_05 (0x106) - ESP_Fahrer_bremst: byte 3 bit 2, CRC at byte 0
     if (followBrake && m.identifier == ESP_05 && m.data_length_code >= 8)
     {
-      const bool out = invertBrake ? !brakeFromCAN : brakeFromCAN;
-      m.data[3] = (uint8_t)((m.data[3] & ~0x04) | (out ? 0x04 : 0x00));
+      if (brakeOut)
+      {
+        m.data[3] = m.data[3] | 0x04; // byte 3 bit 2 = driver braking
+      }
+      else
+      {
+        m.data[3] = m.data[3] & ~0x04; // byte 3 bit 2 = not braking
+      }
       // Recompute AUTOSAR CRC8 at byte 0 - counter nibble at byte 1 already
       // matches the original sender, so the same ID_SEQ_106 lookup applies.
       m.data[0] = calcChecksum(m.data, ID_SEQ_106);
     }
+    // MQB Kombi_01 (0x30B) - KBI_Handbremse: byte 2 bit 7. No CRC byte
+    // (byte 0 is fully populated with KBI lamp flags).
     if (followHandbrake && m.identifier == KOMBI_01 && m.data_length_code >= 3)
     {
-      const bool out = invertHandbrake ? !handbrakeFromCAN : handbrakeFromCAN;
-      m.data[2] = (uint8_t)((m.data[2] & ~0x80) | (out ? 0x80 : 0x00));
-      // Kombi_01 carries no CRC byte (byte 0 is fully populated with KBI lamp flags).
+      if (handbrakeOut)
+      {
+        m.data[2] = m.data[2] | 0x80; // byte 2 bit 7 = handbrake applied
+      }
+      else
+      {
+        m.data[2] = m.data[2] & ~0x80; // byte 2 bit 7 = handbrake off
+      }
     }
     break;
 
@@ -677,8 +714,9 @@ void parseCAN_chs(void *arg)
           // (vw_pq.dbc lumps both as "Bremsinfo : 8|2".) Gen2 (1K0) and Gen4 (0AY)
           // read the handbrake from this frame, not from a physical wire. Gated to
           // the PQ-frame generations so a foreign 0x320 on another platform can't
-          // spoof it.
-          if ((haldexGeneration == 2 || haldexGeneration == 4 || haldexGeneration == 51) &&
+          // spoof it. Gen1 (02D) added in V11: its OEM code reads this same bit
+          // (handbrake pulled at 5-100 km/h -> clutch opens, spec_gen1_02d §2.2).
+          if ((haldexGeneration == 1 || haldexGeneration == 2 || haldexGeneration == 4 || haldexGeneration == 51) &&
               rx_message_chs.data_length_code >= 2)
           {
             handbrakeFromCAN = bitRead(rx_message_chs.data[1], 1);
@@ -786,6 +824,12 @@ void parseCAN_chs(void *arg)
           asrForceModeFlag = bitRead(rx_message_chs.data[7], 4); // PQ - Byte 7 (BR1_ASR_passiv)    - ASR disabled by driver
           tcForceModeFlag = bitRead(rx_message_chs.data[7], 5);  // PQ - Byte 7 (BR1_ESPASR_passiv) - ESP disabled by driver
 
+          // BR1_ABS_Brems (vw_pq.dbc 2|1) - byte 0 bit 2, the ABS module is braking.
+          // The Haldex reads this bit itself and opens the clutch (OEM code: Gen4
+          // 0BR "state 4"). Our lock request outranks that, so lock_gate_blocking()
+          // releases lock while it is set (V11.00.0).
+          absBrakingFromCAN = bitRead(rx_message_chs.data[0], 2);
+
           // BR1_Rad_kmh: 15-bit @ start bit 17, factor 0.01 km/h.
           // start bit 17 in LE = data[2] bit 1; therefore raw = ((data[3]<<8)|data[2]) >> 1.
           const uint16_t br1_speed_raw = (((uint16_t)rx_message_chs.data[3] << 8) | rx_message_chs.data[2]) >> 1;
@@ -892,6 +936,14 @@ void parseCAN_chs(void *arg)
           //   SG_ ESP_v_Signal : 16@1+ (0.01,0) "km/h"          -> bytes 4..5 LE, vehicle reference speed
           asrForceModeFlag = bitRead(rx_message_chs.data[6], 0); // MQB - Byte 6 Bit 0 (ASR_Tastung_passiv) - ASR passive
           tcForceModeFlag = bitRead(rx_message_chs.data[6], 1);  // MQB - Byte 6 Bit 1 (ESP_Tastung_passiv) - ESP disabled by driver
+
+          // ABS_Bremsung (MQB FCAN K-matrix 56|1) - byte 7 bit 0, the ABS module is
+          // braking. The K-matrix lists Allrad_Haldex as a receiver of this signal.
+          // Released by lock_gate_blocking() while set (V11.00.0).
+          if (rx_message_chs.data_length_code >= 8)
+          {
+            absBrakingFromCAN = bitRead(rx_message_chs.data[7], 0);
+          }
 
           received_vehicle_speed = (uint16_t)((((rx_message_chs.data[5] << 8) | rx_message_chs.data[4]) * 0.01f) + 0.5f);
           isABSValid = true;
@@ -1091,6 +1143,34 @@ static inline void hdxFbCapture(const twai_message_t &m)
   hdxFbMs = millis();
 }
 
+// Clear every Haldex health flag (V11.00.0). Each generation's feedback decode
+// in parseCAN_hdx() calls this first, then sets only the bits its own frame
+// really carries - so a flag can never be left over from another generation.
+static void clearHaldexHealth()
+{
+  received_report_clutch1 = false;    // fault present
+  received_report_clutch2 = false;    // plausibility fault
+  received_temp_protection = false;   // over-temperature protection
+  received_coupling_open = false;     // clutch commanded fully open (status)
+  received_limp_mode = false;         // limp / fault reaction
+  received_awd_warning = false;       // AWD warning lamp
+  received_speed_limit = false;       // speed limit request
+  received_temp_sensor_fault = false; // temperature sensor fault
+  received_fault_stored = false;      // fault stored in the unit's memory
+}
+
+// PQ Allrad_1 (0x2C0) byte 0 with the vw_pq.dbc names was decoded in one shared
+// block for Gen1/2/4/0AY before V11 (bit 0 clutch fault, 1 over-temp, 2 stiffness
+// fault, 3 coupling open, 4 limp, 5 lamp, 6 speed limit). The OEM code shows each
+// unit uses these bits differently, so each generation's case decodes its own.
+
+// Gen5 0CQ (V11.00.0): the "fault reaction active" bit from the unit's own status
+// frame 0x17F0000F (byte 0 bit 0, OEM code: spec_gen5_0cq §6). That frame comes
+// far less often than Allrad_03, so the last value is kept here and merged into
+// the health flags on every Allrad_03. 'static' keeps these private to this file.
+static bool gen5StatusFaultReaction = false; // 0x17F0000F byte 0 bit 0 as last received
+static uint32_t gen5StatusFrameMs = 0;       // millis() of the last 0x17F0000F (0 = never)
+
 void parseCAN_hdx(void *arg)
 {
   // for all haldex frames received
@@ -1125,23 +1205,109 @@ void parseCAN_hdx(void *arg)
       switch (haldexGeneration)
       {
       case 1:
-        // Gen1 Haldex (early pre-PQ): engagement on byte 1, raw range ~128..198.
-        received_haldex_engagement_raw = rx_message_hdx.data[1];
-        received_haldex_engagement = map(received_haldex_engagement_raw, 128, 198, 0, 100);
-        received_haldex_state = rx_message_hdx.data[0];
+        // Gen1 Haldex (02D900554B) Allrad_1 / 0x2C0, DLC 2 (OEM code: spec_gen1_02d §6).
+        // Only decode 0x2C0 - before V11 every frame on the Haldex bus was decoded (D2).
+        if (rx_message_hdx.identifier == HALDEX_ID)
+        {
+          // Byte 1 = 0x80 + measured clutch torque. 0x7F = released (very common - it
+          // used to wrap round to 255 %, D1), 0x80 = no pressure, OEM top 0xDF.
+          // 198 (0xC6) is kept as "100 %": the most our bench unit ever reported.
+          received_haldex_engagement_raw = rx_message_hdx.data[1];
+          int32_t engagementPercent = 0; // worked out in a signed number so it can't wrap
+          if (received_haldex_engagement_raw >= 0x80)
+          {
+            engagementPercent = map(received_haldex_engagement_raw, 128, 198, 0, 100);
+          }
+          if (engagementPercent < 0)
+          {
+            engagementPercent = 0;
+          }
+          if (engagementPercent > 100)
+          {
+            engagementPercent = 100; // 199..223 is real extra clamping force - still shown as 100 %
+          }
+          received_haldex_engagement = (uint8_t)engagementPercent;
+          received_haldex_state = rx_message_hdx.data[0];
+
+          // Byte 0 status bits as the 02D's OEM code really sets them (spec §6).
+          // Not the vw_pq.dbc names: bit 2 and bit 4 are NOT faults on this unit.
+          clearHaldexHealth();
+          if (received_haldex_state & (1 << 0))
+          {
+            received_report_clutch1 = true; // bit 0: unit is in its fault-reaction (suspended) mode...
+            received_limp_mode = true;      // ...with the clutch held open = limp
+          }
+          if (received_haldex_state & (1 << 1))
+          {
+            received_temp_protection = true; // bit 1: oil over-temperature (or oil temperature sensor problem)
+          }
+          // bit 2: our Bremse_4 ceiling is active and the clutch is still ramping down to it - status, not a fault
+          if (received_haldex_state & (1 << 3))
+          {
+            received_coupling_open = true; // bit 3: coupling fully open (no clutch pressure)
+          }
+          // bit 4: "input signals incomplete" (a monitored frame missing / invalid) - status only,
+          //        the 02D takes no action on it, so it is NOT limp mode (D3, D4)
+          if (received_haldex_state & (1 << 5))
+          {
+            received_awd_warning = true; // bit 5: AWD warning lamp (inputs implausible for a long time, or fault mode)
+          }
+          // bits 6-7: never set by the 02D (no speed-limit bit on Gen1)
+          received_haldex_temp_c = -128; // Gen1 does not report its temperature on CAN
+          haldexHealthSupported = true;
+          received_long_lock_state = 0; // not present on PQ Allrad_1
+        }
         break;
 
       case 2:
-        // Gen2 Haldex (PQ Allrad_1 / 0x2C0). As per vw_pq.dbc:
-        // SG_ Kupplungssteifigkeit_Hinten__Ist : 32|8@1+ (0.7874,0) [0|100] "%" -> byte 4
-        // Byte 1 is centre-clutch torque-rate (Nm/min), unrelated to engagement.
-        // Only decode the Allrad_1 frame; like Gen4/Gen5 the module broadcasts
-        // other IDs whose byte 4 would otherwise be misread as engagement.
-        if (rx_message_hdx.identifier == HALDEX_ID)
+        // Gen2 Haldex 7H0907554 / 1K0907554B (Allrad_1 / 0x2C0), V11.00.0 from the
+        // OEM code (documents/haldex-binaries/leaf_trace/spec_gen2_7h0.md §6):
+        //   byte 1 = engagement: min(measured clutch value / 28 + 0x80, 0xFE).
+        //            0x80 = open, about 0xFD = full - the same scale as the
+        //            Bremse_4 lever we send. (1K0 identical.)
+        //   byte 4 / byte 6 are NEVER written by the unit (always 0) - before V11
+        //            we read byte 4 (vw_pq.dbc name), so the UI always showed 0 %.
+        //   byte 0 = status bits, see below. byte 7 bits 4-7 = message counter.
+        // Only decode the Allrad_1 frame; the module also sends 0x081 and diagnostic IDs.
+        if (rx_message_hdx.identifier == HALDEX_ID && rx_message_hdx.data_length_code >= 2)
         {
-          received_haldex_engagement_raw = rx_message_hdx.data[4];
-          received_haldex_engagement = map(received_haldex_engagement_raw, 0, 127, 0, 100);
+          received_haldex_engagement_raw = rx_message_hdx.data[1];
+          int gen2Engagement = 0;                                 // worked out in int so it can't wrap below 0
+          if (received_haldex_engagement_raw > 0x80)
+          {
+            gen2Engagement = ((int)received_haldex_engagement_raw - 0x80) * 100 / 0x7D; // 0x81..0xFD -> 0..100 %
+          }
+          if (gen2Engagement > 100)
+          {
+            gen2Engagement = 100; // 0xFE (the unit's own top value) reads 100 %
+          }
           received_haldex_state = rx_message_hdx.data[0];
+
+          // Byte 0 status bits, as the OEM code sets them (spec_gen2_7h0 §6). The vw_pq.dbc
+          // names (clutch fault, limp, AWD lamp, speed limit ...) do NOT match this unit:
+          //   bit 0 = controller active / engaged (status, not a fault)
+          //   bit 1 = over-temperature derate - the unit forces its request to 0 (genuine protection)
+          //   bit 2 = fault / warning-lamp composite (genuine fault)
+          //   bit 3 = coupling fully open (no clutch pressure)
+          //   bit 4, bit 5 = status, meaning not decoded yet (kept raw in received_haldex_state)
+          //   bit 6, bit 7 = never written on Gen2 (no speed-limit bit)
+          clearHaldexHealth();
+          received_temp_protection = (received_haldex_state & (1 << 1)); // bit 1: over-temperature derate
+          received_report_clutch1 = (received_haldex_state & (1 << 2));  // bit 2: fault present ...
+          received_awd_warning = (received_haldex_state & (1 << 2));     // ... and it is what lights the AWD lamp
+          received_coupling_open = (received_haldex_state & (1 << 3));   // bit 3: coupling fully open
+          received_haldex_temp_c = -128;                                 // Gen2 does not send a temperature
+          haldexHealthSupported = true;
+
+          // At rest a real 1K0 sends byte 1 = 0x88 with bit 3 (coupling open) set (from log
+          // "1K0 554A - clear codes, brake on,off ..."): the measured value has a small floor.
+          // When the unit itself says the coupling is open, show 0 %.
+          if (received_coupling_open)
+          {
+            gen2Engagement = 0;
+          }
+          received_haldex_engagement = (uint8_t)gen2Engagement;
+          received_long_lock_state = 0; // not present on PQ Allrad_1
         }
         break;
 
@@ -1151,11 +1317,58 @@ void parseCAN_hdx(void *arg)
         // engagement frame. Without this guard a stray frame's byte 1 (< 128) makes
         // map() go negative and wrap in the uint8_t result -> the learn procedure
         // saw engagement jumping between 0 and >150%.
+        // V11.00.0: decode per the 0BR's own code (spec_gen4_0br §6).
         if (rx_message_hdx.identifier == HALDEX_ID)
         {
+          // Byte 1 = the clutch torque the unit is applying, on the SAME scale
+          // as our Bremse_4 lever: 0x7F / 0x80 = none, 0x80 + n = n x 112 units,
+          // 0xFD = top of the linear range, 0xFE = at full capacity. The unit
+          // never sends 0xFF. V11: was mapped 0x80..0xFF (§7 #14).
           received_haldex_engagement_raw = rx_message_hdx.data[1];
-          received_haldex_engagement = map(received_haldex_engagement_raw, 128, 255, 0, 100);
+          int engagementPercent = 0; // worked out in int so it can't wrap round
+          if (received_haldex_engagement_raw >= 0xFE)
+          {
+            engagementPercent = 100; // at the unit's present maximum capacity
+          }
+          else if (received_haldex_engagement_raw > 0x80)
+          {
+            engagementPercent = ((int)received_haldex_engagement_raw - 0x80) * 100 / 125; // 0x81..0xFD -> 0..100 %
+          }
+          if (engagementPercent > 100)
+          {
+            engagementPercent = 100;
+          }
+          received_haldex_engagement = (uint8_t)engagementPercent;
+
           received_haldex_state = rx_message_hdx.data[0];
+          clearHaldexHealth();
+          // Byte 0 flags the 0BR really writes (b0.6 speed limit is never set
+          // by Gen4, so it stays false - §7 #16; b0.7 is always 0):
+          received_report_clutch1 = (received_haldex_state & (1 << 0));  // b0.0 fault present (fault memory active)
+          received_temp_protection = (received_haldex_state & (1 << 1)); // b0.1 over-temperature protection active
+          received_report_clutch2 = (received_haldex_state & (1 << 2));  // b0.2 clutch / sensor plausibility fault
+          received_coupling_open = (received_haldex_state & (1 << 3));   // b0.3 clutch commanded fully open (status)
+          received_limp_mode = (received_haldex_state & (1 << 4));       // b0.4 limp / fault reaction (also set if Motor_5 is missing)
+          received_awd_warning = (received_haldex_state & (1 << 5));     // b0.5 AWD warning lamp
+
+          if (rx_message_hdx.data_length_code >= 5)
+          {
+            received_temp_sensor_fault = (rx_message_hdx.data[3] & (1 << 3)); // b3.3 the unit's temperature sensor has failed
+            received_fault_stored = (rx_message_hdx.data[3] & (1 << 7));      // b3.7 fault-memory entry stored
+            // b4 = Haldex temperature, degC = b4 - 60; 0xFF = sensor invalid
+            if (rx_message_hdx.data[4] == 0xFF)
+            {
+              received_haldex_temp_c = -128; // no valid temperature
+            }
+            else
+            {
+              received_haldex_temp_c = (int16_t)rx_message_hdx.data[4] - 60;
+            }
+          }
+          // b7 high nibble is an alive counter (0-15); not decoded - a silent
+          // unit already shows as "no Haldex" through hasCANHaldex.
+          haldexHealthSupported = true;
+          received_long_lock_state = 0; // not present on PQ Allrad_1
         }
         break;
 
@@ -1163,6 +1376,9 @@ void parseCAN_hdx(void *arg)
         // Gen41 (Vauxhall / GM FDCM) - per GMW8762 PPEI:
         //   0x1CC Secondary Axle Status (DLC=3): clutch torque feedback + state
         //   0x1D1 Rear Axle Status (DLC=4): status flags + diagnostic response
+        // No OEM code held for the GM unit, so no health bits are decoded.
+        clearHaldexHealth();
+        haldexHealthSupported = false;
         switch (rx_message_hdx.identifier)
         {
         case HALDEX_GEN41_SEC_AXLE_STATUS_ID:
@@ -1198,17 +1414,82 @@ void parseCAN_hdx(void *arg)
 
       case 50:
       case 52:
-        // Gen5 Haldex (MQB Allrad_03 / 0x118). Per MQB FCAN K-matrix:
-        // SG_ ALR_Ist_Proz : 16|8@1+ (0.4,0) "%" -> byte 2
-        // SG_ ALR_Charisma_FahrPr / ALR_Charisma_Status -> byte 3
-        // Only update on the actual engagement frame (the ECU sends 2 different IDs).
-        // Gen52 (VAQ) accepts this too, in case the unit turns out to talk Allrad_03.
-        if (rx_message_hdx.identifier == HALDEX_ID_GEN5)
+        // Gen5 Haldex 0CQ (MQB Allrad_03 / 0x118, DLC 4). V11.00.0: decoded per the
+        // 0CQ907554D's own code (spec_gen5_0cq §6):
+        //   b0       always 0x00 (never written)
+        //   b1[0..3] rolling counter 0-15
+        //   b1[4..5] status: 0 = normal, 2 = fault reaction - clutch released and
+        //            b2 forced to 0. 1 and 3 are never sent. (Was read as
+        //            "0 open / 1 partial / 2 closed" - wrong, spec D11.)
+        //   b1[6]    1 = the unit accepts our ESP_14 request (0 = it sees no valid
+        //            request and runs its own strategy)
+        //   b2       actual clutch torque, 0-250 = 0-100 % (0.4 %/step, the same
+        //            scale as our ESP_14 lever); 0xFE until the first value after
+        //            power-up (was shown as 101 %, spec D13)
+        //   b3       never written by the 0CQ907554D (always 0x00). Other 0CQ units
+        //            DO send their drive-mode reply here - our 554C bench log and the
+        //            car logs show 0x12 - so it is still kept raw in
+        //            received_haldex_state for the Drive Mode display, but nothing
+        //            is decided from it (spec D12).
+        // Only Gen 50: the VAQ (52) sends Quersperre_03 0x137 instead, never 0x118
+        // (OEM code: its TX table, spec §8.8).
+        if (haldexGeneration == 50 && rx_message_hdx.identifier == HALDEX_ID_GEN5)
         {
           received_haldex_engagement_raw = rx_message_hdx.data[2];
-          received_haldex_engagement = map(received_haldex_engagement_raw, 0, 250, 0, 100);
-          received_haldex_state = rx_message_hdx.data[3]; // Charisma byte (mode/status)
+          int engagementPercent = 0; // worked out in int so it can't wrap round
+          if (received_haldex_engagement_raw <= 250)
+          {
+            engagementPercent = (int)received_haldex_engagement_raw * 100 / 250; // 0..250 -> 0..100 %
+          }
+          // 251 and up (0xFE = no value yet after power-up) = not available -> 0 %
+          if (engagementPercent > 100)
+          {
+            engagementPercent = 100;
+          }
+          received_haldex_engagement = (uint8_t)engagementPercent;
+          received_haldex_state = rx_message_hdx.data[3]; // drive-mode reply on units that send it (0 on 554D), display only
           hdxFbCapture(rx_message_hdx);
+
+          // Health (spec §6). Status 2 = the unit is in a fault-reaction state and has
+          // released the clutch. 0x17F0000F byte 0 bit 0 says the same thing (kept
+          // from the last status frame, forgotten if that frame stops).
+          clearHaldexHealth();
+          uint8_t allradStatus = (rx_message_hdx.data[1] >> 4) & 0x03; // b1 bits 4-5
+          bool isFaultReaction = false;
+          if (allradStatus == 2)
+          {
+            isFaultReaction = true; // ALR_Sta = 2: fault reaction, clutch released
+          }
+          if (gen5StatusFaultReaction && gen5StatusFrameMs != 0 &&
+              (millis() - gen5StatusFrameMs) < HALDEX_GEN5_STATUS_TIMEOUT_MS)
+          {
+            isFaultReaction = true; // 0x17F0000F byte 0 bit 0
+          }
+          if (isFaultReaction)
+          {
+            received_report_clutch1 = true; // a genuine fault is active - read the codes over UDS
+            received_limp_mode = true;      // fault reaction
+            received_coupling_open = true;  // the unit has released the clutch
+          }
+          received_lever_request_valid = (rx_message_hdx.data[1] & (1 << 6)); // b1 bit 6: our ESP_14 request accepted
+          received_haldex_temp_c = -128;                                      // the 0CQ does not send a temperature
+          haldexHealthSupported = true;
+
+          // Same 0..3 slot the UI / serial lab already read: 0 = normal, 2 = fault -
+          // clutch released (1 and 3 are never sent by the 0CQ).
+          received_long_lock_state = allradStatus;
+        }
+        else if (haldexGeneration == 50 && rx_message_hdx.identifier == HALDEX_GEN5_STATUS_ID && rx_message_hdx.extd)
+        {
+          // 0CQ status frame 0x17F0000F (29-bit, DLC 8). OEM code (spec §6): byte 0
+          // bit 0 = 1 while the unit is in a fault-reaction state. Byte 7 bit 7 is
+          // set by its fault-memory loop but is ALSO set on healthy cars in our logs,
+          // so it is not decoded (spec §8 item 5).
+          if (rx_message_hdx.data_length_code >= 1)
+          {
+            gen5StatusFaultReaction = (rx_message_hdx.data[0] & (1 << 0)); // byte 0 bit 0
+            gen5StatusFrameMs = millis();
+          }
         }
         else if (haldexGeneration == 52 && rx_message_hdx.identifier == QUERSPERRE_03)
         {
@@ -1231,26 +1512,77 @@ void parseCAN_hdx(void *arg)
           received_quer_state = (rx_message_hdx.data[1] >> 4) & 0x07;
           received_quer_sync = (rx_message_hdx.data[1] >> 7) & 0x01;
           hdxFbCapture(rx_message_hdx);
+          clearHaldexHealth();
+          // V11 TODO (bench): the VAQ file has its app code but not its 0x137
+          // builder traced yet (spec_gen5_0cq §8.8), so these K-matrix states are
+          // not confirmed from the OEM code - no health flags are set from them.
+          haldexHealthSupported = false;
+          received_lever_request_valid = false; // 0CQ-only bit
+          // Same slot for the VAQ: QUER_Sta_Quersperre shares the first four
+          // meanings with ALR_Sta_Laengssperre (0 rule, 1 driver, 2/3 error).
+          received_long_lock_state = received_quer_state;
         }
         break;
 
       case 51:
-        // Gen5 (0AY) Haldex: PQ Allrad_1 (0x2C0) format.
-        // Byte 0 = fault/state flags (confirmed per PQ K-matrix DBC: bit0=Fehler_Allrad_Kupplung,
-        // bit1=Übertemperaturschutz, bit2=Fehlerstatus_Kupplungssteifigkeit, bit3=Kupplung_komplett_offen,
-        // bit4=Notlauf, bit5=Allrad_Warnlampe, bit6=Geschwindigkeitsbegrenzung).
-        // Byte 1 = engagement raw (Gen4-empirical; DBC defines byte1 as Kupplungssteifigkeit_Mitte, byte4 as rear).
+        // Gen5 (0AY, 0AY907554F) Haldex - a PQ unit: feedback is PQ Allrad_1
+        // (0x2C0, DLC 8). V11.00.0: decoded per the 0AY's own code
+        // (spec_gen5_0ay §6) - same layout as Gen4 0BR.
         if (rx_message_hdx.identifier == HALDEX_ID)
         {
+          // Byte 1 = the clutch torque the unit is applying, on the SAME scale
+          // as our Bremse_4 lever: 0x7F / 0x80 = none, 0x80 + n = n x 112 units,
+          // 0xFD = our 100 % request (0xFD on the lever), 0xFE = at / over 0xFD.
+          // The unit never sends 0xFF. Before V11 this was mapped 0x80..0xFF
+          // with a ">= 99 -> 100" snap, because 0xFD only read 98-99 % on that
+          // scale (spec §7 #10). The correct scale makes the snap unnecessary.
           received_haldex_engagement_raw = rx_message_hdx.data[1];
-          received_haldex_engagement = map(received_haldex_engagement_raw, 128, 255, 0, 100);
-          // Snap the top of the curve: the pump audibly keeps ramping after the
-          // decoded percentage stalls at 99, so treat >=99% as fully engaged.
-          if (received_haldex_engagement >= 99)
+          int engagementPercent = 0; // worked out in int so it can't wrap round
+          if (received_haldex_engagement_raw >= 0xFD)
           {
-            received_haldex_engagement = 100;
+            engagementPercent = 100; // full request reached (0xFD) or above it (0xFE)
           }
+          else if (received_haldex_engagement_raw > 0x80)
+          {
+            engagementPercent = ((int)received_haldex_engagement_raw - 0x80) * 100 / 125; // 0x81..0xFC -> 0..99 %
+          }
+          if (engagementPercent > 100)
+          {
+            engagementPercent = 100;
+          }
+          received_haldex_engagement = (uint8_t)engagementPercent;
+
           received_haldex_state = rx_message_hdx.data[0];
+          clearHaldexHealth();
+          // Byte 0 flags the 0AY really writes (spec_gen5_0ay §6). b0.5 (warning
+          // lamp) and b0.6 (speed limit) are never set by the 0AY - always 0 -
+          // so they stay false; b0.7 is always 0 too.
+          received_report_clutch1 = (received_haldex_state & (1 << 0));  // b0.0 clutch-system fault present
+          received_temp_protection = (received_haldex_state & (1 << 1)); // b0.1 over-temperature protection
+          received_report_clutch2 = (received_haldex_state & (1 << 2));  // b0.2 clutch stiffness / actuator fault
+          received_coupling_open = (received_haldex_state & (1 << 3));   // b0.3 clutch commanded fully open (status)
+          received_limp_mode = (received_haldex_state & (1 << 4));       // b0.4 limp / emergency (also set if Motor_5 is missing)
+
+          if (rx_message_hdx.data_length_code >= 5)
+          {
+            received_temp_sensor_fault = (rx_message_hdx.data[3] & (1 << 3)); // b3.3 the unit's temperature sensor is invalid
+            // b3.7 = Fehlerspeichereintrag_Allrad_1 (vw_pq.dbc); the 0AY writes it
+            // from its background memory self-test (spec §6, meaning inferred).
+            received_fault_stored = (rx_message_hdx.data[3] & (1 << 7));
+            // b4 = Haldex temperature, degC = b4 - 60; 0xFF = sensor invalid
+            if (rx_message_hdx.data[4] == 0xFF)
+            {
+              received_haldex_temp_c = -128; // no valid temperature
+            }
+            else
+            {
+              received_haldex_temp_c = (int16_t)rx_message_hdx.data[4] - 60;
+            }
+          }
+          // b7 high nibble is an alive counter (0-15); not decoded - a silent
+          // unit already shows as "no Haldex" through hasCANHaldex.
+          haldexHealthSupported = true;
+          received_long_lock_state = 0; // not present on PQ Allrad_1
         }
         break;
 
@@ -1263,16 +1595,62 @@ void parseCAN_hdx(void *arg)
           received_haldex_engagement = map(received_haldex_engagement_raw, 0, 255, 0, 100);
           received_haldex_state = rx_message_hdx.data[0]; // byte 0 kept raw for the logs (not decoded)
           hdxFbCapture(rx_message_hdx);
+          clearHaldexHealth(); // no OEM code held for the pre-facelift unit: no health bits known
+          haldexHealthSupported = false;
+          received_long_lock_state = 0;
         }
         break;
 
       case GEN_VOLVO_P2_GEN3:
+        // OEM code (S60R DEM signal table, leaf_trace/volvo_bitrate.md goal 4):
+        //   bytes 0-4      never written by the unit
+        //   byte 5 b0-2    "updated" bits for the fields below
+        //   byte 6         measured clutch value (analog input, most likely clutch
+        //                  pressure = real engagement), ~0-150 at sensor full scale
+        //   byte 7 b6-7    fault / limp: 0 normal, 1 mode-selector condition,
+        //                  2 not ready or stored input fault (clutch held at 0),
+        //                  3 a diagnostic monitor reports a fault
+        //   byte 7 b2-3    3 = input monitors clear, anything else = an input the
+        //                  unit watches is missing / flagged (comms)
+        //   byte 7 b0-1    internal state (2 or 3), not decoded
         if (rx_message_hdx.identifier == VOLVO_P2G3_HALDEX_ID)
         {
-          received_haldex_engagement_raw = rx_message_hdx.data[6]; // status byte
-          received_haldex_engagement = map(received_haldex_engagement_raw, 0, 255, 0, 100);
-          received_haldex_state = rx_message_hdx.data[0]; // byte 0 kept raw for the logs (not decoded)
+          received_haldex_engagement_raw = rx_message_hdx.data[6]; // byte 6 = measured clutch value
+          int engagementPercent = (int)received_haldex_engagement_raw * 100 / VOLVO_P2G3_ENGAGEMENT_FULL_SCALE;
+          if (engagementPercent > 100)
+          {
+            engagementPercent = 100; // clamp - full scale is a bench calibration value
+          }
+          received_haldex_engagement = (uint8_t)engagementPercent;
+          received_haldex_state = rx_message_hdx.data[7]; // byte 7 = status bits (shown as binary on the dashboard)
           hdxFbCapture(rx_message_hdx);
+
+          clearHaldexHealth();
+          haldexHealthSupported = true;
+          received_long_lock_state = 0;
+
+          uint8_t faultLimpValue = (rx_message_hdx.data[7] >> 6) & 0x03; // byte 7 bits 6-7
+          if (faultLimpValue == 2)
+          {
+            received_limp_mode = true;     // unit not ready / stored input fault - clutch held at 0
+            received_coupling_open = true; // ...so the clutch is open
+          }
+          else if (faultLimpValue == 3)
+          {
+            received_report_clutch1 = true; // a diagnostic monitor reports a fault
+          }
+          // faultLimpValue 1 = mode-selector condition: status, not a fault
+
+          uint8_t inputMonitorValue = (rx_message_hdx.data[7] >> 2) & 0x03; // byte 7 bits 2-3
+          if (inputMonitorValue != 3)
+          {
+            // An input the unit watches is missing or flagged - shown as a
+            // "signal plausibility fault". In standalone this points straight at
+            // a frame we aren't sending (yet).
+            received_report_clutch2 = true;
+          }
+          // V11 TODO (bench): confirm byte 6 full scale (VOLVO_P2G3_ENGAGEMENT_FULL_SCALE)
+          // at 100 % lock, and which situations set byte 7 bits 6-7 = 1 / 2 / 3.
         }
         break;
 
@@ -1283,6 +1661,94 @@ void parseCAN_hdx(void *arg)
           received_haldex_engagement = map(received_haldex_engagement_raw, 0, 255, 0, 100);
           received_haldex_state = rx_message_hdx.data[0]; // byte 0 kept raw for the logs (not decoded)
           hdxFbCapture(rx_message_hdx);
+          clearHaldexHealth(); // no OEM code held for the P3 unit: no health bits known
+          haldexHealthSupported = false;
+          received_long_lock_state = 0;
+        }
+        break;
+
+      case GEN_VOLVO_SPC_GEN5:
+        // Volvo Gen5 "SPC" 31380867 (V11.00.0). Reply 0x126, 8 bytes, high byte
+        // first, no checksum or counter (OEM code: spec_ppc_volvo_spc_bmw.md section 6):
+        //   bytes 0-1 (15 bits) = clutch torque the unit is really delivering
+        //                         (forced to 0 when the unit is in a fault / off state)
+        //   byte 3 bits 3-4      = status: 0 normal, 1 fault / torque inhibited,
+        //                         2 special state (strategy state 4, meaning unknown)
+        // No warning-lamp bit is sent on 0x126.
+        if (rx_message_hdx.identifier == VOLVO_SPC_HALDEX_ID && rx_message_hdx.data_length_code >= 4)
+        {
+          uint16_t torqueCount = (uint16_t)(rx_message_hdx.data[0] & 0x7F); // byte 0 bits 0-6 = top 7 bits
+          torqueCount = (uint16_t)((torqueCount << 8) | rx_message_hdx.data[1]); // byte 1 = bottom 8 bits
+
+          // engagement % = delivered torque against full scale, worked out in a
+          // whole number first and clamped so it can never wrap past 100
+          int engagementPercent = (int)((uint32_t)torqueCount * 100 / VOLVO_SPC_FEEDBACK_FULL_SCALE);
+          if (engagementPercent > 100)
+          {
+            engagementPercent = 100;
+          }
+          if (engagementPercent < 0)
+          {
+            engagementPercent = 0;
+          }
+          // V11 TODO (bench): full scale is the OEM code's largest possible count,
+          // not a measured full lock - set VOLVO_SPC_FEEDBACK_FULL_SCALE on the bench.
+          received_haldex_engagement = (uint8_t)engagementPercent;
+
+          uint16_t rawScaled = torqueCount >> 5; // 15-bit torque / 32 so it fits one byte (6710 -> 209)
+          if (rawScaled > 255)
+          {
+            rawScaled = 255;
+          }
+          received_haldex_engagement_raw = (uint8_t)rawScaled;
+          received_haldex_state = rx_message_hdx.data[3]; // byte 3 kept raw (status in bits 3-4)
+
+          const uint8_t unitStatus = (rx_message_hdx.data[3] >> 3) & 0x03; // byte 3 bits 3-4
+          clearHaldexHealth();
+          if (unitStatus == 1)
+          {
+            received_report_clutch1 = true; // status 1: fault - the unit has withdrawn clutch torque
+            received_limp_mode = true;      // ... and is running its fault reaction (clutch held open)
+          }
+          if (torqueCount == 0)
+          {
+            received_coupling_open = true; // delivering no torque: clutch fully open (status, not a fault)
+          }
+          haldexHealthSupported = true;
+          received_long_lock_state = 0;
+          hdxFbCapture(rx_message_hdx);
+        }
+        break;
+
+      case GEN_VOLVO_P1:
+        // Volvo P1 AWD module (V11.00.1), 0x1960000A every 20 ms - its only frame.
+        // From Adam's V50 T5 AWD logs (P1_V50_T5_AWD_DECODE.md):
+        //   bytes 0-3   always 00          byte 4   always 05
+        //   byte 5      status: 2E ignition on / engine off, 2C or 3C running
+        //   byte 6      bits 2-7 always 111000, bits 0-1 = top 2 bits of engagement
+        //   byte 7      bottom 8 bits of engagement (10-bit: 0 open .. 540 full lock)
+        if (rx_message_hdx.identifier == VOLVO_P1_HALDEX_ID && rx_message_hdx.extd &&
+            rx_message_hdx.data_length_code >= 8)
+        {
+          uint16_t engagementCount = (rx_message_hdx.data[6] & 0x03) << 8; // byte 6 bits 0-1 = top 2 bits
+          engagementCount = engagementCount | rx_message_hdx.data[7];      // byte 7 = bottom 8 bits
+          volvoP1EngagementCount = engagementCount;                        // kept for the Volvo P1 card's live readout
+
+          // engagement % = count against full lock, worked out in a whole number and clamped
+          uint32_t engagementPercent = (uint32_t)engagementCount * 100 / VOLVO_P1_ENGAGEMENT_FULL_SCALE;
+          if (engagementPercent > 100)
+          {
+            engagementPercent = 100;
+          }
+          received_haldex_engagement = (uint8_t)engagementPercent;
+
+          // raw value for the dashboard / logs: the 10-bit count / 4 so it fits one byte (540 -> 135)
+          received_haldex_engagement_raw = (uint8_t)(engagementCount >> 2);
+          received_haldex_state = rx_message_hdx.data[5]; // byte 5 = status (2C / 3C / 2E)
+          hdxFbCapture(rx_message_hdx);
+          clearHaldexHealth(); // no fault bits found in the logs yet
+          haldexHealthSupported = false;
+          received_long_lock_state = 0;
         }
         break;
 
@@ -1297,6 +1763,9 @@ void parseCAN_hdx(void *arg)
           received_haldex_temp_c = (int16_t)rx_message_hdx.data[2] - 40; // byte 2 = temperature + 40 degC (GM style)
           received_haldex_state = rx_message_hdx.data[0];                // byte 0 kept raw for the logs (not decoded)
           hdxFbCapture(rx_message_hdx);
+          clearHaldexHealth(); // no OEM code held for the 9-3 unit: only the temperature is known
+          haldexHealthSupported = false;
+          received_long_lock_state = 0;
         }
         break;
 
@@ -1304,62 +1773,9 @@ void parseCAN_hdx(void *arg)
         break;
       }
 
-      // Decode the state byte. Bit positions per vw_pq.dbc Allrad_1 byte 0 (Gen1/2/4):
-      //   bit 0 = Fehler_Allrad_Kupplung           (clutch fault)            -> clutch1Report
-      //   bit 1 = Ubertemperaturschutz__Allrad_1_  (over-temp protection)    -> tempProtection
-      //   bit 2 = Fehlerstatus_Kupplungssteifigke  (clutch stiffness fault)  -> clutch2Report
-      //   bit 3 = Kupplung_komplett_offen          (coupling fully open)     -> couplingOpen
-      //   bit 4 = Notlauf                          (limp mode)               -> limpMode
-      //   bit 5 = Allrad_Warnlampe                 (4WD warning lamp)        -> awdWarning
-      //   bit 6 = Geschwindigkeitsbegrenzung       (speed limit)             -> speedLimit
-      // Gen5 byte 3 holds Charisma_FahrPr/Status, not fault flags - skip for Gen5.
-      // Gen41 uses dedicated state vars decoded above - skip for Gen41.
-      if (isVolvoOrSaabGeneration(haldexGeneration))
-      {
-        // Volvo / SAAB: no fault-bit layout known yet - report nothing rather than
-        // misread the raw byte with the VW bit names.
-        received_report_clutch1 = false;
-        received_report_clutch2 = false;
-        received_temp_protection = false;
-        received_coupling_open = false;
-        received_limp_mode = false;
-        received_awd_warning = false;
-        received_speed_limit = false;
-        received_long_lock_state = 0;
-      }
-      else if (haldexGeneration != 50 && haldexGeneration != 52 && haldexGeneration != 41) // PQ (Gen1/2/4/0AY 5)
-      {
-        received_report_clutch1 = (received_haldex_state & (1 << 0));
-        received_temp_protection = (received_haldex_state & (1 << 1));
-        received_report_clutch2 = (received_haldex_state & (1 << 2));
-        received_coupling_open = (received_haldex_state & (1 << 3));
-        received_limp_mode = (received_haldex_state & (1 << 4));
-        received_awd_warning = (received_haldex_state & (1 << 5));
-        received_speed_limit = (received_haldex_state & (1 << 6));
-        received_long_lock_state = 0; // not present on PQ Allrad_1
-      }
-      else if (haldexGeneration == 50 || haldexGeneration == 52) // 0CQ / VAQ
-      {
-        received_report_clutch1 = false;
-        received_report_clutch2 = false;
-        received_temp_protection = false;
-        received_coupling_open = false;
-        received_limp_mode = false;
-        received_awd_warning = false;
-        received_speed_limit = false;
-        // Gen5 (MQB Allrad_03): ALR_Sta_Laengssperre at start bit 12, length 2 little-endian
-        // -> byte 1 bits 4..5. 0=open, 1=partial, 2=closed, 3=undefined.
-        if (rx_message_hdx.identifier == HALDEX_ID_GEN5)
-        {
-          received_long_lock_state = (rx_message_hdx.data[1] >> 4) & 0x03;
-        }
-        else if (haldexGeneration == 52 && rx_message_hdx.identifier == QUERSPERRE_03)
-        {
-          // Same slot for the VAQ: QUER_Sta_Quersperre shares the first four
-          // meanings with ALR_Sta_Laengssperre (0 rule, 1 driver, 2/3 error).
-          received_long_lock_state = received_quer_state;
-        }
-      }
+      // Haldex health flags (fault / over-temp / limp / lamp ...) are decoded
+      // inside each generation's case above since V11.00.0 - the bit layout is
+      // different on every unit (OEM code findings, CONTROL_AND_DTC_SPEC.md).
 
       // UDS MQB: mirror 0x779 response frames into the UDS task queue when polling is active.
       // While our poller owns the diagnostic channel and no external tool is on

@@ -57,7 +57,10 @@
 #define updateTriggersRefresh 500 // change IO refresh rate in ms
 
 // debugging macros
-#ifdef enableDebug
+// "#if", not "#ifdef": enableDebug is always defined (as 0 or 1), so "#ifdef" was
+// always true and every DEBUG() message was built in and printed even with it at 0
+// (fixed in V11.00.1 - saves flash and stops the constant serial output)
+#if enableDebug
 #define DEBUG(x, ...) Serial.printf(x "\n", ##__VA_ARGS__)
 #define DEBUG_(x, ...) Serial.printf(x, ##__VA_ARGS__)
 #else
@@ -262,6 +265,23 @@ extern bool received_awd_warning;
 extern uint8_t received_long_lock_state;
 extern bool received_kickdown;
 
+// ===== Haldex health (V11.00.0) =====
+// What the Haldex itself says about its own health, decoded per generation in
+// parseCAN_hdx() from the OEM code findings (documents/haldex-binaries/
+// CONTROL_AND_DTC_SPEC.md). These are the unit's GENUINE protections - we
+// report them to the driver, we never hide them. Each generation only sets
+// the ones its feedback frame really carries; the rest stay false.
+//   received_report_clutch1   = the unit has a fault present (clutch / pump / valve)
+//   received_report_clutch2   = signal plausibility fault (clutch / sensor)
+//   received_temp_protection  = over-temperature protection active (clutch pulled back)
+//   received_limp_mode        = limp / fault reaction active
+//   received_awd_warning      = AWD warning lamp requested on the cluster
+//   received_coupling_open    = clutch commanded fully open (status only, not a fault)
+extern bool received_temp_sensor_fault; // the unit's own temperature sensor has failed
+extern bool received_fault_stored;      // the unit has stored a fault in its memory (scan it with VCDS / ODIS)
+extern bool haldexHealthSupported;      // true when this generation's feedback carries health bits we decode
+extern bool received_lever_request_valid; // Gen5 0CQ: Allrad_03 (0x118) b1 bit 6 - the unit accepts our ESP_14 request (false = it is running its own strategy)
+
 // values received from Chassis CAN
 extern float received_pedal_value;
 extern uint16_t received_vehicle_speed;
@@ -278,7 +298,27 @@ extern uint8_t haldexGeneration;
 #define GEN_VOLVO_P2_GEN3 3  // Volvo P2 facelift (S60/S60R/V70/XC70/XC90 2005+), Haldex Gen3, CAN at 500 kbit/s
 #define GEN_VOLVO_GEN4 43    // Volvo Gen4 (P3 XC60/V70/S80, likely also Freelander 2), 11-bit IDs
 #define GEN_SAAB_93_XWD 44   // SAAB 9-3 XWD (GM family), Haldex Gen4
-bool isVolvoOrSaabGeneration(uint8_t generation); // true for any of the four above
+#define GEN_VOLVO_SPC_GEN5 53 // Volvo Haldex Gen5 "SPC" unit 31380867 (PowerPC, 11-bit IDs, 500 kbit/s assumed) - added V11.00.0 from its OEM code
+#define GEN_VOLVO_P1 31       // Volvo P1 (S40 / V50 AWD 2004-2012), Haldex Gen3, 500 kbit/s, 29-bit IDs - added V11.00.1 from Adam's 2005 V50 T5 AWD logs
+bool isVolvoOrSaabGeneration(uint8_t generation); // true for any of the six above
+
+// ===== Volvo P1 standalone lock (V11.00.1) =====
+// How the lock % is shown to the P1 AWD module in standalone. Set from the
+// Settings page (Volvo P1 Standalone card), saved, and in backups.
+#define VOLVO_P1_SOURCE_TORQUE 0 // engine torque + pedal + rpm rise with the lock (like a full-throttle pull - what the module follows in the logs)
+#define VOLVO_P1_SOURCE_SLIP 1   // front wheels run faster than the rears as the lock rises (like wheelspin)
+#define VOLVO_P1_SOURCE_BOTH 2   // both at once
+extern uint8_t volvoP1LockSource;   // setting: one of the three above (default torque)
+extern uint8_t volvoP1RoadSpeedKmh; // setting: road / rear wheel speed sent in standalone, km/h (default 30; the module never locked while stopped)
+extern uint16_t volvoP1TorqueFull;  // setting: engine torque counts above zero sent at 100 % lock (default 600)
+extern uint8_t volvoP1SlipFullKmh;  // setting: how much faster the front wheels run at 100 % lock, km/h (default 10)
+// What standalone sent last and what came back - shown live on the settings card
+extern uint16_t volvoP1SentTorque;      // engine torque counts above zero
+extern uint8_t volvoP1SentPedal;        // pedal byte, 0-255
+extern uint16_t volvoP1SentRpm;         // rpm
+extern uint16_t volvoP1SentFrontRaw;    // front wheel speed, 0.01 km/h
+extern uint16_t volvoP1SentRearRaw;     // rear wheel / road speed, 0.01 km/h
+extern uint16_t volvoP1EngagementCount; // last engagement from 0x1960000A, 0-1023 (540 = full)
 
 // CAN bus speed. Both controllers run at the same speed, picked from the Haldex
 // generation at boot (setupCAN). Changing to/from a generation with a different
@@ -321,6 +361,7 @@ extern bool followBrake;
 extern bool invertBrake;
 extern bool followHandbrake;
 extern bool invertHandbrake;
+extern bool followABS; // setting: open the clutch while the ABS is braking (default on); off = our lock overrules the ABS
 extern bool tcForceMode;
 extern bool asrForceModeFlag;
 extern bool tcForceModeFlag;
@@ -441,7 +482,8 @@ extern volatile uint16_t bpkLastSolfNm;   // slewed MO_Mom_Soll_gefiltert sent (
 // selected passthrough frames. Each editable frame ("block") can be enabled or
 // disabled at runtime so users can bisect which edited frame upsets the learn
 // procedure. A disabled block leaves the car's real frame untouched (clean
-// passthrough). Only gens 1/2/4/50/51 are gated (gen41/42 are dual-bus and are
+// passthrough). Only gens 1/2/4/50/51 and the Volvo P1 (31, standalone frames
+// only) are gated (gen41/42 are dual-bus and are
 // not handled in normal mode).
 enum
 {
@@ -450,6 +492,8 @@ enum
     FE_GEN_4,
     FE_GEN_50,
     FE_GEN_51,
+    FE_GEN_SPARE_60, // V11.00.1: kept free - V12 puts Gen6 (Magma) here, so saved masks line up when moving to V12
+    FE_GEN_VOLVO_P1, // V11.00.1: Volvo P1 (generation 31) standalone frames
     FE_GEN_COUNT
 };
 
@@ -457,7 +501,7 @@ struct FrameEditBlock
 {
     uint8_t genIdx;   // FE_GEN_*
     uint8_t bit;      // bit position within that generation's mask
-    uint16_t canId;   // CAN identifier of the frame
+    uint32_t canId;   // CAN identifier of the frame (32-bit since V11.00.1 so Volvo's 29-bit IDs fit)
     const char *name; // human-readable frame name (shown in UI)
 };
 
@@ -511,6 +555,7 @@ extern bool handbrakeSignalActive;
 
 extern bool brakeFromCAN;
 extern bool handbrakeFromCAN;
+extern bool absBrakingFromCAN; // the ABS module says it is braking (PQ Bremse_1 b0.2 / MQB ESP_21 b7.0) - the Haldex opens the clutch for this
 
 extern bool otaUpdate;
 
@@ -696,6 +741,15 @@ extern uint8_t disableThrottle;
 extern uint16_t disengageUnderSpeed;
 extern uint16_t disengageAboveSpeed;
 
+// Which speed / throttle setting is holding lock at 0% (bits, can be several at
+// once). Sent on the dashboard so the web page can say why, instead of a bare
+// "Target: 0%". See lock_gate_blocking() in OpenHaldexC6_Calculations.cpp.
+#define LOCK_GATE_THROTTLE 0x01    // bit 0: throttle below "Minimum Throttle Before Lock"
+#define LOCK_GATE_UNDER_SPEED 0x02 // bit 1: speed below "Disengage Under Speed"
+#define LOCK_GATE_ABOVE_SPEED 0x04 // bit 2: speed above "Disengage Above Speed"
+#define LOCK_GATE_HANDBRAKE 0x08   // bit 3: handbrake pulled with "Follow Handbrake" on (V11.00.0)
+#define LOCK_GATE_ABS 0x10         // bit 4: ABS is braking with "Follow ABS" on - the Haldex's own safety release (V11.00.0)
+
 extern uint32_t rxtxcount; // frame counter
 extern uint32_t stackCHS;
 extern uint32_t stackHDX;
@@ -811,7 +865,7 @@ extern uint8_t saab140Counter;      // SAAB 0x140 byte 0 bits 0-1: 2-bit rolling
 extern uint8_t saab160Step;         // SAAB 0x160 bytes 2/3: which of the 4 counter/protection pairs is next
 
 // Volvo / SAAB Haldex feedback (V10.00.0, provisional until logs confirm the scaling)
-extern int16_t received_haldex_temp_c; // SAAB 0x210 byte 2 - 40 (degC); -128 = not received
+extern int16_t received_haldex_temp_c; // Haldex temperature in degC (SAAB 0x210 b2 - 40, VAG Gen4/0AY 0x2C0 b4 - 60); -128 = not received
 
 // Secondary Axle Torque Request to encode into 0x1CE (Nm, 0 = no request).
 // 4 Nm/LSB empirical scaling; set via API or mode handler.

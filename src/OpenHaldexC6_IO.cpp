@@ -369,6 +369,9 @@ void updateTriggers(void *arg)
       tcForceModeFlag = false;
       hazardForceModeFlag = false;
       isABSValid = false;
+      absBrakingFromCAN = false;  // no ABS frames = no ABS braking release latched on
+      brakeFromCAN = false;       // same for the brake pedal...
+      handbrakeFromCAN = false;   // ...and the handbrake
     }
     if (!hasCANHaldex && lastCANHaldexTick > 0)
     {
