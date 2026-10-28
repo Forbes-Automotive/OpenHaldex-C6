@@ -53,6 +53,7 @@
 // refresh rates
 #define eepRefresh 2000           // EEPROM save in ms
 #define broadcastRefresh 200      // broadcast data over CAN refresh rate in ms
+#define BROADCAST_HALDEX_QUIET_MS 5000 // stop the 0x6B0 broadcast once the Haldex side has been silent this long
 #define serialMonitorRefresh 1000 // Serial Monitor refresh rate in ms
 #define updateTriggersRefresh 500 // change IO refresh rate in ms
 
