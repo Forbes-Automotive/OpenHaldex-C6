@@ -157,6 +157,12 @@ static bool fsSuperblockLooksValid(const esp_partition_t *p) {
   return false;
 }
 
+// A web UI file counts as present plain or gzipped: the build packs the UI as
+// "<file>.gz" (tools/gzip_webui.py) and the web server serves either form.
+static bool fsHasUiFile(const char *path) {
+  return LittleFS.exists(path) || LittleFS.exists(String(path) + ".gz");
+}
+
 bool fsMountSafe() {
   const esp_partition_t *p = fsPartition();
   if (!p) {
@@ -170,8 +176,8 @@ bool fsMountSafe() {
   }
   bool ok = LittleFS.begin(false);
   OTA_DEBUG("[FS] LittleFS.begin -> %s; index.html %s, app.js %s, version.json %s", ok ? "mounted" : "FAILED",
-        ok && LittleFS.exists("/index.html") ? "present" : "missing",
-        ok && LittleFS.exists("/app.js") ? "present" : "missing",
+        ok && fsHasUiFile("/index.html") ? "present" : "missing",
+        ok && fsHasUiFile("/app.js") ? "present" : "missing",
         ok && LittleFS.exists("/version.json") ? "present" : "missing");
   return ok;
 }
@@ -181,7 +187,7 @@ bool fsMounted() {
 }
 
 bool fsUiAvailable() {
-  return fsMounted() && LittleFS.exists("/index.html") && LittleFS.exists("/app.js");
+  return fsMounted() && fsHasUiFile("/index.html") && fsHasUiFile("/app.js");
 }
 
 void fsInvalidate() {
