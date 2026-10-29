@@ -49,7 +49,15 @@ void broadcastOpenHaldex(void *arg)
 #endif
 
     // Analyzer mode keeps the CAN bridge alive but suppresses OpenHaldex broadcast frames.
-    if (analyzerMode)
+    // The "Broadcast OpenHaldex over CAN" setting was never checked here, so
+    // 0x6B0 went out on the chassis bus every 200 ms on every unit, forever -
+    // including with the car locked: the drivetrain ECUs saw traffic and never
+    // slept, so the bus stayed above the low-power threshold and the controller
+    // never slept either. Only transmit when the setting is on AND the Haldex
+    // side is talking (it goes quiet within seconds of terminal 15 dropping).
+    const bool haldexAwake = lastCANHaldexTick > 0 &&
+                             (millis() - (uint32_t)lastCANHaldexTick) < BROADCAST_HALDEX_QUIET_MS;
+    if (analyzerMode || !broadcastOpenHaldexOverCAN || !haldexAwake)
     {
       vTaskDelay(broadcastRefresh / portTICK_PERIOD_MS);
       continue;
