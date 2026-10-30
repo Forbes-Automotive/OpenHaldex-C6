@@ -3,6 +3,74 @@
   "latest": "9.00.6",
   "releases": [
     {
+      "version": "11.00.3",
+      "channel": "beta",
+      "date": "2026-10-30",
+      "ota": true,
+      "notes": "Web UI stored gzipped (smaller, faster to load), OTA release source for forks, can_capture tool; plus 11.00.2: 0x6B0 broadcast no longer keeps the car awake, OTA safety check once per upload, Volvo P1 Gear setting and frame bisect.",
+      "firmware": {
+        "path": "V11.00.3/firmware.bin",
+        "size": 1527360,
+        "sha256": "eaaa74c38dc8a117970c10aed2cd908d28f49638b50e21d58cd62612f12d3928"
+      },
+      "filesystem": {
+        "path": "V11.00.3/littlefs.bin",
+        "size": 458752,
+        "sha256": "fd298c7f38551abe91fb48da7739ee6c6bc045262784077504d14eaba35abed2"
+      }
+    },
+    {
+      "version": "11.00.2",
+      "channel": "beta",
+      "date": "2026-10-29",
+      "ota": true,
+      "notes": "0x6B0 broadcast no longer keeps the car awake, OTA safety check once per upload, Volvo P1 Gear setting and frame bisect, smaller Espressif libraries (firmware 79.5% of its slot).",
+      "firmware": {
+        "path": "V11.00.2/firmware.bin",
+        "size": 1527040,
+        "sha256": "4f9ebdfc6e1369322b88c965ee8696226e91f77f5d052e419462f30882deb769"
+      },
+      "filesystem": {
+        "path": "V11.00.2/littlefs.bin",
+        "size": 458752,
+        "sha256": "cec8fc4596b77fef38a2b69d2e766a7cb3a18b4334af56bd3299483a3c4a8e7a"
+      }
+    },
+    {
+      "version": "11.00.1",
+      "channel": "beta",
+      "date": "2026-10-24",
+      "ota": true,
+      "notes": "Volvo P1 (S40 / V50 AWD) as generation 31, from real V50 T5 AWD logs: standalone sends the whole car (22 frames, steering sensor check byte decoded), Haldex engagement shown as 0-100 %, chassis decode (speed, rpm, pedal, brake, handbrake), DSTC off drives Use TC to Force Mode, new Volvo P1 Standalone card (lock source torque / slip, road speed, live readout) and Learn on the P1. OEM-mode frame editing for the P1 comes later.",
+      "firmware": {
+        "path": "V11.00.1/firmware.bin",
+        "size": 1788944,
+        "sha256": "a14a954ef8cdcf8b08b79660fa5a45d046356049337aec8c0a10354e4bc32ac4"
+      },
+      "filesystem": {
+        "path": "V11.00.1/littlefs.bin",
+        "size": 458752,
+        "sha256": "beb161e17128e4637ca6056048c43dd196b78c65c4673fe64598cbf2b2edcac6"
+      }
+    },
+    {
+      "version": "11.00.0",
+      "channel": "beta",
+      "date": "2026-10-23",
+      "ota": true,
+      "notes": "Every generation brought in line with the Haldex units' own code: correct lock bytes in OEM and Standalone, the unit's own fault / limp / over-temp warnings on a new Haldex Warning card, Follow ABS (on by default), Volvo P2 facelift reply decode and the Volvo Gen5 SPC unit. Run Learn Haldex again after updating.",
+      "firmware": {
+        "path": "V11.00.0/firmware.bin",
+        "size": 1782176,
+        "sha256": "a3fe76675aa09d021f4396247414f5f8e8d4e6952916f19932e8489a7088f1a6"
+      },
+      "filesystem": {
+        "path": "V11.00.0/littlefs.bin",
+        "size": 458752,
+        "sha256": "f1f244fcdaba603a0e0bd3e1f7db4d6167c7220252ac3a295a84adb0ab729c33"
+      }
+    },
+    {
       "version": "10.00.1",
       "channel": "beta",
       "date": "2026-10-19",
