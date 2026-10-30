@@ -2390,13 +2390,29 @@ function initWifi() {
 // networks that block or mangle raw.githubusercontent. Whichever answers
 // first is used for the .bin downloads too.
 // ---------------------------------------------------------------------------
-const UPD_REPO = "Forbes-Automotive/OpenHaldex-C6";
+// Release sources. The official Forbes Automotive releases are always listed.
+// A fork that publishes its own releases sets UPD_FORK to its repo: the OTA tab
+// then shows a "Release source" choice, and picking the official source lists
+// the official releases as a way back to the official firmware. With UPD_FORK
+// left null (as here) there is a single source and the selector stays hidden,
+// so nothing changes on screen. The choice is kept in this browser only.
+const UPD_OFFICIAL = { repo: "Forbes-Automotive/OpenHaldex-C6", label: "Forbes Automotive (official)" };
+// e.g. { repo: "someone/OpenHaldex-C6", label: "someone's fork", site: "someone.github.io/OpenHaldex-C6" }
+const UPD_FORK = null;
+const UPD_SOURCE_KEY = "otaUpdateSource";
+let updSource = UPD_FORK ? "fork" : "official";
 const UPD_BRANCH = "main";
-const UPD_MIRRORS = [
-  { name: "GitHub", base: "https://raw.githubusercontent.com/" + UPD_REPO + "/" + UPD_BRANCH + "/Releases/" },
-  { name: "jsDelivr", base: "https://cdn.jsdelivr.net/gh/" + UPD_REPO + "@" + UPD_BRANCH + "/Releases/" },
-];
-const UPD_DIR_API = "https://api.github.com/repos/" + UPD_REPO + "/contents/Releases?ref=" + UPD_BRANCH;
+function updRepo() { return (updSource === "fork" && UPD_FORK ? UPD_FORK : UPD_OFFICIAL).repo; }
+// True only on a fork build with the official source picked: installing from
+// there switches back to the official firmware rather than updating the fork.
+function updSwitchingToOfficial() { return !!UPD_FORK && updSource === "official"; }
+function updMirrors() {
+  return [
+    { name: "GitHub", base: "https://raw.githubusercontent.com/" + updRepo() + "/" + UPD_BRANCH + "/Releases/" },
+    { name: "jsDelivr", base: "https://cdn.jsdelivr.net/gh/" + updRepo() + "@" + UPD_BRANCH + "/Releases/" },
+  ];
+}
+function updDirApi() { return "https://api.github.com/repos/" + updRepo() + "/contents/Releases?ref=" + UPD_BRANCH; }
 // Update channel. Everything is published on one branch - main is the live
 // development branch and Releases/ holds the stable-ish cut - so the channel
 // changes which builds are *offered*, not where they are fetched from.
@@ -2407,7 +2423,7 @@ const UPD_CHANNEL_KEY = "otaUpdateChannel";
 let updChannel = "stable";
 const UPD_FOLDER_RE = /^V(\d+(?:\.\d+)*)$/i;
 // Mirror that last answered - the .bin downloads follow the index.
-let UPD_RELEASES_BASE = UPD_MIRRORS[0].base;
+let UPD_RELEASES_BASE = updMirrors()[0].base;
 
 // This build's partition sizes (src/partitions_4mb.csv). A partition table
 // can't change over the air, so a release whose images are bigger than these
@@ -2488,10 +2504,21 @@ function initUpdateCheck() {
     return index.releases.filter((r) => r && r.ota && r.firmware && r.filesystem && updFitsThisLayout(r));
   }
 
+  // Switching back to the official firmware: the newest stable official
+  // release that fits this unit's partitions (the index's "latest" may not).
+  function officialTarget() {
+    const c = otaCandidates().filter((r) => r.channel !== "beta").sort((a, b) => updCompareVersions(b.version, a.version));
+    return c.length ? c[0].version : "";
+  }
+
   function renderPicker() {
     const cur = installed();
     const all = showAll && showAll.checked;
-    const list = otaCandidates().filter((r) => all || (r.channel !== "beta" && updCompareVersions(r.version, cur) >= 0));
+    // Switching back to the official firmware, the newest compatible official
+    // release is the target; older ones stay behind "Show beta / older".
+    const target = updSwitchingToOfficial() ? officialTarget() : "";
+    const list = otaCandidates().filter((r) => all || (r.channel !== "beta" &&
+      (updSwitchingToOfficial() ? r.version === target : updCompareVersions(r.version, cur) >= 0)));
     // Nothing extra to add on "latest": the >= 0 compare above already keeps
     // the installed version in the list, which is what makes a rebuild of it
     // installable. The channel only changes the wording and the rebuild check.
@@ -2505,7 +2532,8 @@ function initUpdateCheck() {
       if (r.channel === "beta") tags.push("beta");
       if (r.unindexed) tags.push("not in index");
       const c = updCompareVersions(r.version, cur);
-      if (c === 0) tags.push("installed");
+      if (updSwitchingToOfficial()) tags.push("official");
+      else if (c === 0) tags.push("installed");
       else if (c < 0) tags.push("rollback");
       o.textContent = "v" + r.version + (tags.length ? " (" + tags.join(", ") + ")" : "");
       sel.appendChild(o);
@@ -2531,7 +2559,8 @@ function initUpdateCheck() {
   function renderNotes() {
     const r = selected();
     notes.textContent = r ? ((r.date ? r.date + " — " : "") + (r.notes || "")) : "";
-    if (installBtn) installBtn.textContent = r && updCompareVersions(r.version, installed()) < 0 ? "Roll back to v" + r.version : "Install v" + (r ? r.version : "");
+    if (installBtn) installBtn.textContent = r && updSwitchingToOfficial() ? "Switch to official v" + r.version
+      : r && updCompareVersions(r.version, installed()) < 0 ? "Roll back to v" + r.version : "Install v" + (r ? r.version : "");
   }
 
   // Fold the folder listing into the index. The folders are what actually
@@ -2563,7 +2592,7 @@ function initUpdateCheck() {
   // {netErr} (transport failure: no route to the internet at all).
   async function fetchIndex() {
     let reached = "", netErr = "";
-    for (const m of UPD_MIRRORS) {
+    for (const m of updMirrors()) {
       let res = null;
       try {
         res = await updFetch(m.base + "releases.json", 12000, { mode: "cors" });
@@ -2588,7 +2617,7 @@ function initUpdateCheck() {
   // here is not fatal - the index alone still works.
   async function fetchFolders() {
     try {
-      const res = await updFetch(UPD_DIR_API, 12000, { mode: "cors", headers: { Accept: "application/vnd.github+json" } });
+      const res = await updFetch(updDirApi(), 12000, { mode: "cors", headers: { Accept: "application/vnd.github+json" } });
       if (!res.ok) return { reached: "GitHub API answered HTTP " + res.status };
       const arr = await res.json();
       if (!Array.isArray(arr)) return { reached: "GitHub API returned an unexpected listing" };
@@ -2688,12 +2717,29 @@ function initUpdateCheck() {
     const c = updCompareVersions(latest, cur);
     const srcNote = !ir.index ? " (release index unavailable - folder listing only, no release notes)"
       : !fr.dirs ? " (folder listing unavailable - " + (fr.reached || fr.netErr || "no answer") + "; showing the index only)" : "";
-    const via = " Release list from " + UPD_MIRRORS.filter((m) => m.base === UPD_RELEASES_BASE).map((m) => m.name).join("") + " in " + secs() + ".";
+    const via = " Release list from " + (updSwitchingToOfficial() ? "Forbes Automotive via " : "") + updMirrors().filter((m) => m.base === UPD_RELEASES_BASE).map((m) => m.name).join("") + " in " + secs() + ".";
+    if (updSwitchingToOfficial()) {
+      const target = officialTarget();
+      set("updLatest", target ? "v" + target : "--");
+      if (!target) {
+        setState("Needs a USB flash", "upd-bad");
+        setStatus("No official release fits this unit's partition layout, so switching back can't be done over the air. " +
+          "Use the official web installer from a computer." + srcNote + via, "error");
+      } else {
+        setState("Official release available", "upd-available");
+        setStatus("Official Forbes Automotive v" + target + " fits this unit. Installing it switches this controller back to the " +
+          "official firmware (installed: v" + cur + ")." + (target !== latest ? " Newer official releases need a USB flash." : "") +
+          srcNote + via);
+      }
+      renderPicker();
+      finish();
+      return;
+    }
     if (c > 0) { setState("Update available", "upd-available"); setStatus("v" + latest + " is available (installed v" + cur + ")." + srcNote + via); }
     else if (c === 0) { setState("Up to date", "upd-current"); setStatus("You are on the latest release." + srcNote + via); }
     else { setState("Ahead of release", "upd-current"); setStatus("Installed v" + cur + " is newer than the published v" + latest + "." + srcNote + via); }
     renderPicker();
-    if (updChannel === "latest" && index.releases && index.releases.length) {
+    if (!updSwitchingToOfficial() && updChannel === "latest" && index.releases && index.releases.length) {
       const newest = otaCandidates().find((r) => r.version === index.latest);
       if (newest) {
         const rb = await rebuiltSinceIndexed(newest);
@@ -2890,9 +2936,62 @@ function initUpdateCheck() {
     let msg = "This will " + what + " (currently v" + cur + "). Keep this page open until it reboots.";
     if (dir < 0) msg += "\n\nOlder releases may lack this update page, so updating again could need USB. Export a backup first.";
     if (dir === 0) msg += "\n\nRe-downloads whatever is published as v" + rel.version + " now. Export a backup first.";
+    if (updSwitchingToOfficial()) {
+      const back = UPD_FORK.site ? "open " + UPD_FORK.site + " on your phone" : "install it again with Update from Files";
+      msg = "This switches the controller back to the official Forbes Automotive firmware, v" + rel.version +
+        " (currently v" + cur + " from " + UPD_FORK.label + ").\n\nThe web UI is replaced first, then the firmware, then " +
+        "the device reboots. Keep this page open.\n\nAfterwards the update page follows the official releases only. To go " +
+        "back to " + UPD_FORK.label + " later, " + back + ". Settings normally carry over, but export a backup first.";
+    }
     if (!confirm(msg + "\n\nContinue?")) return;
     rel._blobs = {};
     runInstall(rel);
+  }
+
+  // --- release source -----------------------------------------------------
+  // Only shown on a fork build (UPD_FORK set); with the official repo alone
+  // there is nothing to choose and the group stays hidden.
+  const srcGroup = $("updSourceGroup"), srcSel = $("updSource"), srcHint = $("updSourceHint"), chanGroup = $("updChannelGroup");
+  function renderSource() {
+    if (srcSel) srcSel.value = updSource;
+    // The update channel describes the source's own in-place rebuilds; it does
+    // not apply while switching back to the official releases.
+    if (chanGroup) chanGroup.hidden = updSwitchingToOfficial();
+    if (!srcHint) return;
+    srcHint.textContent = updSwitchingToOfficial()
+      ? "Showing the official Forbes Automotive releases. Installing one switches this controller back to the official firmware."
+      : "";
+    srcHint.hidden = !updSwitchingToOfficial();
+  }
+  if (UPD_FORK && srcGroup && srcSel) {
+    srcSel.innerHTML = "";
+    [["fork", UPD_FORK.label + " (this firmware)"], ["official", UPD_OFFICIAL.label]].forEach(([v, t]) => {
+      const o = document.createElement("option");
+      o.value = v;
+      o.textContent = t;
+      srcSel.appendChild(o);
+    });
+    try {
+      const saved = localStorage.getItem(UPD_SOURCE_KEY);
+      if (saved === "official" || saved === "fork") updSource = saved;
+    } catch (e) { /* private mode - stay on the fork */ }
+    UPD_RELEASES_BASE = updMirrors()[0].base;
+    srcGroup.hidden = false;
+    renderSource();
+    srcSel.addEventListener("change", () => {
+      updSource = srcSel.value === "official" ? "official" : "fork";
+      try { localStorage.setItem(UPD_SOURCE_KEY, updSource); } catch (e) { /* not fatal */ }
+      UPD_RELEASES_BASE = updMirrors()[0].base;
+      renderSource();
+      index = null;
+      picker.hidden = true;
+      resetSteps();
+      setState("Not checked");
+      setStatus(updSwitchingToOfficial() ? "Official Forbes Automotive releases selected. Press Check for updates."
+        : UPD_FORK.label + " releases selected. Press Check for updates.");
+      checkBtn.textContent = "Check for updates";
+      if (bridgeBtn) bridgeBtn.hidden = true;
+    });
   }
 
   // --- update channel -----------------------------------------------------
