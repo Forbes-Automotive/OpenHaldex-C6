@@ -1229,6 +1229,40 @@ uint8_t gen1_loss_torque_byte(uint8_t oemValue)
   }
 }
 
+// ===== Gen1 / Gen2 engine speed in Motor_1 (bytes 2-3) - V11.00.4 fix =====
+// The 02D / 7H0 work out the gear the car is in from engine rpm against the
+// front wheel speed, and multiply the engine torque by it to get their own
+// clutch request (spec_gen1_02d §2 step 3, spec_gen2_7h0 same "ratio").
+// V11.00.0 passed the car's REAL rpm through, but the Bremse_3 edit still
+// fakes the wheel speeds at ~13 km/h: idle rpm against 13 km/h reads as a
+// tall gear, the request halves, and the Bremse_4 ceiling can't add lock
+// above it. (A parked Gen1 stopped at ~42 % on V11 - the main cause turned out
+// to be the car's Bremse_1 reaching the 02D, see the Gen1 BRAKES1_ID edit.)
+// So whenever lock is wanted, send the fixed rpm standalone Gen1 already uses
+// (bench-proven full lock, as V10 sent at 100 %) - engine running or not, the
+// same as V10 and standalone. Not lock-scaled like V10 was: that went below
+// 400 rpm at low lock and the unit turned its pump off (spec_gen1_02d D5).
+// No lock wanted (FWD, a lock gate closed, Learn at 0 %): rpm 0x0021 = 8 rpm,
+// what V10 sent at 0 % - below 400 rpm the unit turns its pump OFF, so FWD
+// really is FWD (Adam: "FWD turns the pump off"). Stock never gets here: its
+// frames pass through untouched (can.cpp).
+#define PQ_LOCK_RPM_LOW 0x21     // Motordrehzahl low byte  (0x4E21 x 0.25 = 4872 rpm, same as standalone Gen1)
+#define PQ_LOCK_RPM_HIGH 0x4E    // Motordrehzahl high byte
+#define PQ_PUMP_OFF_RPM_LOW 0x21 // Motordrehzahl low byte  (0x0021 x 0.25 = 8 rpm, as V10 at 0 % - pump off)
+#define PQ_PUMP_OFF_RPM_HIGH 0x00 // Motordrehzahl high byte
+
+// Gen1 / Gen2: is any lock wanted right now? Picks the Motor_1 rpm:
+// true = fixed lock rpm, false = pump-off rpm.
+// static = only this file uses it
+static bool pq_use_lock_rpm()
+{
+  if (lever_lock_percent() == 0)
+  {
+    return false; // no lock wanted (FWD, gates closed, learn at 0 %) - pump off
+  }
+  return true; // lock wanted: fixed lock rpm
+}
+
 void getLockData(twai_message_t &rx_message_chs)
 {
   // Calculate raw lock target then (optionally) apply rate-limited release decay.
@@ -1293,36 +1327,52 @@ void getLockData(twai_message_t &rx_message_chs)
     {
     case MOTOR1_ID:
       // PQ Motor_1 (0x280). What the 02D reads (OEM code: spec_gen1_02d §3):
-      // b0 bit 3, b1 torque, b2-3 rpm, b5 pedal, b6 loss torque. b4 and b7 are never read.
+      // b0 bit 3, b1 torque, b2-3 rpm, b5 pedal, b6 loss torque. The spec says b4 and b7 are never read.
       rx_message_chs.data[0] = 0x00;                       // b0 status bits: 0 stops the clutch-switch (Kupplungsschalter, bit 3) wheel-pattern release from arming (spec §4: harmless)
       rx_message_chs.data[1] = gen1_demand_value(0xFE);    // b1 inneres_Motor_Moment (engine torque) - the demand
-      // b2-3 Motordrehzahl (rpm): the car's REAL rpm is passed through (V11). It used to be
-      // scaled with the lock, which dropped it below 400 rpm at low targets and the 02D
-      // switches its pump off below 400 rpm = no lock at all (spec_gen1_02d D5).
-      // b4 inneres_Motor_Moment_ohne_extern: not read by the 02D - left as the car sent it (D10)
+      // b2-3 Motordrehzahl (rpm): fixed lock rpm whenever lock is wanted, pump-off rpm
+      // when not (V11.00.4 fix, as V10 - see pq_use_lock_rpm above). V11.00.0 passed the
+      // real (idle) rpm all the time, which lowers the 02D's own request.
+      if (pq_use_lock_rpm())
+      {
+        rx_message_chs.data[2] = PQ_LOCK_RPM_LOW;  // b2 Motordrehzahl low byte
+        rx_message_chs.data[3] = PQ_LOCK_RPM_HIGH; // b3 Motordrehzahl high byte (4872 rpm)
+      }
+      else
+      {
+        rx_message_chs.data[2] = PQ_PUMP_OFF_RPM_LOW;  // b2 Motordrehzahl low byte
+        rx_message_chs.data[3] = PQ_PUMP_OFF_RPM_HIGH; // b3 Motordrehzahl high byte (8 rpm - pump off)
+      }
+      // b4 inneres_Motor_Moment_ohne_extern: the spec says the 02D never reads it (D10), but
+      // that's not bench-proven - V11.00.4 sends it as V10 did (with the demand) so nothing the
+      // 02D might read differs from V10.
+      rx_message_chs.data[4] = gen1_demand_value(0xFE);    // b4 inneres_Motor_Moment_ohne_extern - as V10
       rx_message_chs.data[5] = gen1_demand_value(0xFE);    // b5 Fahrpedalwert (accelerator pedal) - the demand
       appliedTorque = gen1_loss_torque_byte(rx_message_chs.data[6]); // b6 mechanisches_Motor_Verlustmoment (subtracted from b1 by the unit)
       rx_message_chs.data[6] = appliedTorque;
-      // b7 Fahrerwunschmoment (driver-wish torque): not read by the 02D - left as the car sent it (D10)
+      rx_message_chs.data[7] = 0x00;                       // b7 Fahrerwunschmoment (driver-wish torque) - 0 as V10 (spec: not read, D10 - not bench-proven)
       break;
     case MOTOR3_ID:
-      // Motor_3 (0x380): the 02D has NO receive slot for this ID (OEM code: spec_gen1_02d §1),
-      // so this edit does nothing. Block is off by default since V11 (D8).
+      // Motor_3 (0x380): the spec says the 02D has NO receive slot for this ID (spec_gen1_02d §1).
+      // Not bench-proven, so V11.00.4 turns the block back ON by default, as V10 had it.
       rx_message_chs.data[2] = get_lock_target_adjusted_value(0xFE, false);
       rx_message_chs.data[7] = get_lock_target_adjusted_value(0xFE, false);
       break;
     case BRAKES1_ID:
-    {
-      // PQ Bremse_1 (0x1A0). Off by default since V11 (spec_gen1_02d D6). The old edit
-      // zeroed bytes 1-2, which cleared the brake-light / ABS bits the 02D reads - most
-      // importantly b1 bit 7, which makes the 02D OPEN the clutch and stop its pump.
-      // Now every bit the 02D reads is kept exactly as the car sent it; only the
-      // lamp / other bits it never reads are cleared.
-      uint8_t carByte1 = rx_message_chs.data[1]; // car's byte 1
-      rx_message_chs.data[1] = carByte1 & 0x98;  // b1: keep bit 3 (BR1_Lichtschalt, brake light), bit 4 (BR1_StaDruckschw), bit 7 (clutch release + pump off); clear the lamp bits
-      // b0 (bit 2 BR1_ABS_Brems), b2 (bit 0 brake-source select + speed) and b3 are passed through untouched
+      // PQ Bremse_1 (0x1A0). V11.00.4 fix: back to the V10 edit, the same bytes standalone
+      // sends (standalone = 100 % lock). V11.00.0 switched this block off on the spec's
+      // word (spec_gen1_02d D6), so the car's own Bremse_1 reached the 02D: a parked Gen1
+      // then stopped at ~42 %, dropped to ~11 % on the brake pedal and only came back to
+      // ~20 % after it (Adam, 2026-11-03) - V10 never did. The car's brake bits switch the
+      // 02D to its braking request; its real 0 km/h may also be read (spec says not).
+      // Safety: ABS braking still opens the clutch - the car's b0 (bit 2 BR1_ABS_Brems)
+      // passes untouched, and Follow ABS / Follow Handbrake read the car's ORIGINAL frame
+      // (can.cpp) and drop our lever to 0x7F.
+      rx_message_chs.data[1] = 0x00; // b1: brake light (bit 3), pressure switch (bit 4), clutch release + pump off (bit 7) all clear - as standalone / V10
+      rx_message_chs.data[2] = 0x00; // b2: brake-source select (bit 0) clear, speed low bits 0 - as standalone / V10
+      rx_message_chs.data[3] = 0x0A; // b3: BR1_Rad_kmh high - 0x0A00 >> 1 = 12.8 km/h, same as the Bremse_3 wheel speeds (standalone / V10 at 100 %)
+      // b0 and b4-b7 (counter) are passed through as the car sent them
       break;
-    }
     case BRAKES3_ID:
       // PQ Bremse_3 (0x4A0) wheel speeds. ON by default in every non-Stock mode
       // alongside the lever (V11.00.0, Adam - the bench-proven method). Replaces the
@@ -1386,36 +1436,44 @@ void getLockData(twai_message_t &rx_message_chs)
       // Motor_1 bytes the unit reads (spec_gen2_7h0 §2.2): b1 inner torque (ADDS to the
       // estimate), b6 loss torque (is SUBTRACTED from b1), b5 pedal, b2-3 rpm, b0 bit 3.
       // Before V11 b1 and b6 were both set to the same value, so they cancelled out, and
-      // b2-3 (rpm) were overwritten. Now: rpm and b0 pass through from the car.
+      // b2-3 (rpm) were overwritten. b0 passes through from the car. rpm: fixed lock rpm while
+      // lock is wanted, pump-off rpm when not (V11.00.4 fix, as V10, same as Gen1 - see
+      // pq_use_lock_rpm; the 7H0 uses the same rpm / wheel-speed ratio and 400 rpm pump-on).
+      if (pq_use_lock_rpm())
+      {
+        rx_message_chs.data[2] = PQ_LOCK_RPM_LOW;  // Motordrehzahl low byte
+        rx_message_chs.data[3] = PQ_LOCK_RPM_HIGH; // Motordrehzahl high byte (4872 rpm)
+      }
+      else
+      {
+        rx_message_chs.data[2] = PQ_PUMP_OFF_RPM_LOW;  // Motordrehzahl low byte
+        rx_message_chs.data[3] = PQ_PUMP_OFF_RPM_HIGH; // Motordrehzahl high byte (8 rpm - pump off)
+      }
       rx_message_chs.data[1] = gen2DemandValue(0xFE); // inneres_Motor_Moment (inner torque) - full demand when lock wanted
       rx_message_chs.data[5] = gen2DemandValue(0xFE); // Fahrpedalwert (pedal) - full when lock wanted
       rx_message_chs.data[6] = 0x00;                  // mechanisches_Motor_Verlustmoment (loss torque) - 0, never 0xFF (0xFF = invalid -> 30 Nm default)
       break;
     case MOTOR3_ID:
-      // Not received by the 7H0 / 1K0 (OEM code: no receive object for 0x380) - this edit does
-      // nothing to the Haldex. Block is off by default.
+      // The spec says the 7H0 / 1K0 doesn't receive 0x380 (no receive object). Not bench-proven,
+      // so ON by default again as V10 (V11.00.4).
       rx_message_chs.data[2] = get_lock_target_adjusted_value(0xFE, false);
       rx_message_chs.data[7] = get_lock_target_adjusted_value(0x01, false);
       break;
     case BRAKES1_ID:
-      // Safety (V11): the unit reads these Bremse_1 bits to open the clutch for ABS / ESP
-      // braking (spec_gen2_7h0 §3): b0 bit2 BR1_ABS_Brems, b0 bit4 BR1_ESP_Ongr, b1 bits 0/3/4/7
-      // (ABS lamp, light switch, pressure-switch status, diagnosis), b2 bit0 BR1_BKV_active.
-      // Those are always the car's own; we only edit the other bits. Block is off by default.
-      editedByte = get_lock_target_adjusted_value(0x80, false); // pre-V11 edit value
-      editedByte = editedByte & 0xEB;                            // drop our bits 2 and 4
-      rx_message_chs.data[0] = (rx_message_chs.data[0] & 0x14) | editedByte; // car's b0 bit2 + bit4 kept
-      editedByte = get_lock_target_adjusted_value(0x41, false);  // pre-V11 edit value
-      editedByte = editedByte & 0x66;                            // drop our bits 0, 3, 4, 7
-      rx_message_chs.data[1] = (rx_message_chs.data[1] & 0x99) | editedByte; // car's b1 bits 0/3/4/7 kept
-      editedByte = get_lock_target_adjusted_value(0xFE, false);  // pre-V11 edit value
-      editedByte = editedByte & 0xFE;                            // drop our bit 0
-      rx_message_chs.data[2] = (rx_message_chs.data[2] & 0x01) | editedByte; // car's b2 bit0 kept
-      rx_message_chs.data[3] = 0x0A;                             // BR1_Rad_kmh high (not read by the unit)
-      break;                                                     // b6 / b7 (alive counter) untouched
+      // V11.00.4 fix: back to the V10 edit, ON by default again. V11.00.0 kept the car's
+      // brake / ABS / ESP bits here and switched the block off on the spec's word
+      // (spec_gen2_7h0 §3); on a Gen1 (same ceiling lever, same Bremse_1 brake vote) the
+      // car's brake bits cut the lock to ~42 % and ~11 % on the pedal - V10 never did.
+      // Safety: Follow ABS / Follow Handbrake read the car's ORIGINAL frame (can.cpp)
+      // and drop our lever to 0x7F while the ABS is braking.
+      rx_message_chs.data[0] = get_lock_target_adjusted_value(0x80, false); // b0: as V10 (ABS / ESP bits 2 and 4 clear)
+      rx_message_chs.data[1] = get_lock_target_adjusted_value(0x41, false); // b1: as V10 (brake light bit 3, pressure switch bit 4, bit 7 clear)
+      rx_message_chs.data[2] = get_lock_target_adjusted_value(0xFE, false); // b2: as V10 (BKV bit 0 clear)
+      rx_message_chs.data[3] = 0x0A;                                        // b3: BR1_Rad_kmh high, as V10
+      break;                                                                // b4 - b7 (alive counter) untouched
     case BRAKES2_ID:
-      // The unit reads Bremse_2 b0, b1 bit0 and b7 bit7 only - this edit writes b4/b5, which it
-      // ignores (spec_gen2_7h0 D8). Harmless; block is off by default (pass the car's frame).
+      // The spec says the unit reads Bremse_2 b0, b1 bit0 and b7 bit7 only, not the b4/b5 written
+      // here (spec_gen2_7h0 D8). Not bench-proven, so ON by default again as V10 (V11.00.4).
       rx_message_chs.data[4] = get_lock_target_adjusted_value(0x7F, false);
       rx_message_chs.data[5] = get_lock_target_adjusted_value(0xFE, false);
       break;
@@ -1576,7 +1634,8 @@ void getLockData(twai_message_t &rx_message_chs)
     {
     case mLW_1:
       // LW_1 replay: replaces the real steering angle with a 16-step capture.
-      // Not needed for control (spec_gen4_0br §7 #10) - block OFF by default.
+      // The spec says it isn't needed for control (spec_gen4_0br §7 #10) - not
+      // bench-proven, so ON by default again as V10 (V11.00.4).
       rx_message_chs.data[0] = lws_2[mLW_1_counter][0];
       rx_message_chs.data[1] = lws_2[mLW_1_counter][1];
       rx_message_chs.data[2] = lws_2[mLW_1_counter][2];
@@ -1605,20 +1664,20 @@ void getLockData(twai_message_t &rx_message_chs)
       rx_message_chs.data[7] = get_lock_target_adjusted_value(0xFE, false); // Fahrerwunschmoment (driver demand)
       break;
     case BRAKES1_ID:
-    {
-      // Bremse_1: the 0BR reads b0.0 ASR request, b0.2 ABS braking, b0.3 EDS,
-      // b0.4 ESP and b1.3 / b1.4 (spec_gen4_0br §3). V11: keep those exactly as
-      // the car sent them so the unit still sees real ABS braking (§7 #8).
-      // b4-5 used to be lock-scaled here, but the unit never reads them - dropped.
-      uint8_t carByte0 = rx_message_chs.data[0];                 // car's real ABS / ESP / EDS / ASR flags
-      uint8_t carByte1 = rx_message_chs.data[1];                 // car's real b1 flags
-      rx_message_chs.data[0] = 0x20 | (carByte0 & 0x1D);         // 0x20 as before + real bits 0, 2, 3, 4
-      rx_message_chs.data[1] = 0x40 | (carByte1 & 0x18);         // 0x40 as before + real bits 3, 4
+      // Bremse_1. V11.00.4 fix: back to the V10 edit, ON by default again. V11.00.0 kept
+      // the car's ASR / ABS / EDS / ESP bits and brake light / pressure switch (b1.3 / b1.4)
+      // and switched the block off on the spec's word (spec_gen4_0br §3 / §7 #8). On a Gen1
+      // the car's brake bits reaching the unit cut the lock (~42 %, ~11 % on the pedal) -
+      // V10 never did. Safety: Follow ABS / Follow Handbrake read the car's ORIGINAL frame
+      // (can.cpp) and drop the Bremse_4 lever to 0x7F while the ABS is braking.
+      rx_message_chs.data[0] = 0x20;                                        // b0: as V10 (ASR / ABS / EDS / ESP bits clear)
+      rx_message_chs.data[1] = 0x40;                                        // b1: as V10 (brake light b1.3, pressure switch b1.4 clear)
+      rx_message_chs.data[4] = get_lock_target_adjusted_value(0xFE, false); // b4: as V10 (spec: not read - not bench-proven)
+      rx_message_chs.data[5] = get_lock_target_adjusted_value(0xFE, false); // b5: as V10 (spec: not read - not bench-proven)
       break;
-    }
     case BRAKES2_ID:
-      // Bremse_2 byte 4 (lateral acceleration) is not read by the 0BR - no
-      // effect on Gen4 (spec_gen4_0br §7 #11). Block OFF by default.
+      // Bremse_2 byte 4 (lateral acceleration). The spec says the 0BR doesn't read it
+      // (spec_gen4_0br §7 #11) - not bench-proven, so ON by default again as V10 (V11.00.4).
       rx_message_chs.data[4] = get_lock_target_adjusted_value(0x7F, false);
       break;
     case BRAKES3_ID:
@@ -1744,9 +1803,10 @@ void getLockData(twai_message_t &rx_message_chs)
   // edit the frames if configured as Gen5 (0AY, 0AY907554F).
   // V11.00.0: the 0AY is a PQ unit (PQ frame set, feedback Allrad_1 0x2C0) and
   // its lock lever is Bremse_4 (0x2A0) byte 0 - OEM code: spec_gen5_0ay §2.
-  // OEM default 0x06 (V11.00.0, Adam: achieve the lock) = Bremse_4 (the lever) +
-  // Bremse_3 (lock-scaled wheel speeds, the bench-proven method). Every other
-  // block is OFF by default; if switched on it sends steady values and still keeps
+  // OEM default 0x0F (V11.00.4, back to V10's blocks) = Motor_1 (lock-scaled demand),
+  // Bremse_3 (lock-scaled wheel speeds, the bench-proven method), Bremse_4 (the
+  // lever) and LW_1. V11.00.0 had cut it to 0x06 on the spec's word. The other
+  // blocks are OFF by default; if switched on they send steady values and keep
   // the car's real ABS / brake-light / handbrake bits.
   if (haldexGeneration == 51)
   {
@@ -1767,22 +1827,23 @@ void getLockData(twai_message_t &rx_message_chs)
       rx_message_chs.data[0] = vag_lever_byte(0xFD); // ABS_Vorgabewert (lever)
       break;
 
-    // ---- Optional edits (OFF by default) ----------------------------------
     case MOTOR1_ID:
-      // PQ Motor_1 (0x280) - engine ECU broadcast. Only feeds the unit's own
-      // strategy, which a valid Bremse_4 overrides, so it is no longer a lever
-      // (was lock-scaled before V11: rpm 0 at FWD). Steady plausible values
-      // from spec_gen5_0ay §5. Byte names from vw_pq.dbc / spec §3.
-      rx_message_chs.data[0] = 0x00; // flags: b0.3 Kupplungsschalter (clutch pedal) = 0 released
-      rx_message_chs.data[1] = 0x20; // inneres_Motor_Moment (inner torque) small, not 0xFF
-      rx_message_chs.data[2] = 0x80; // Motordrehzahl low  (0x0C80 x 0.25 = 800 rpm idle)
-      rx_message_chs.data[3] = 0x0C; // Motordrehzahl high
-      rx_message_chs.data[4] = 0x20; // inneres_Motor_Moment_ohne_extern - never read by the 0AY
-      rx_message_chs.data[5] = 0x00; // Fahrpedalwert (accelerator pedal) 0 %
-      rx_message_chs.data[6] = 0x10; // mechanisches_Motor_Verlustmoment (loss torque), not 0xFF
-      rx_message_chs.data[7] = 0x00; // Fahrerwunschmoment (driver-wish torque)
+      // PQ Motor_1 (0x280) - engine ECU broadcast. V11.00.4 fix: back to the V10
+      // lock-scaled edit, ON by default again - in V10 this (with Bremse_3) WAS the
+      // 0AY's lock. V11.00.0 switched it off and sent steady idle values on the
+      // spec's word that a valid Bremse_4 overrides the unit's own strategy
+      // (spec_gen5_0ay §5) - not bench-proven. Now both: the lever AND full demand.
+      rx_message_chs.data[0] = 0x00;                                        // flags: b0.3 Kupplungsschalter (clutch pedal) = 0 released
+      rx_message_chs.data[1] = get_lock_target_adjusted_value(0xFE, false); // as V10
+      rx_message_chs.data[2] = get_lock_target_adjusted_value(0x20, false); // Motordrehzahl low, as V10
+      rx_message_chs.data[3] = get_lock_target_adjusted_value(0x4E, false); // Motordrehzahl high, as V10 (0x4E20 = 5000 rpm at 100 %, pump off at FWD)
+      rx_message_chs.data[4] = get_lock_target_adjusted_value(0xFE, false); // as V10
+      rx_message_chs.data[5] = get_lock_target_adjusted_value(0xFE, false); // as V10
+      rx_message_chs.data[6] = get_lock_target_adjusted_value(0x16, false); // mechanisches_Motor_Verlustmoment, as V10
+      rx_message_chs.data[7] = get_lock_target_adjusted_value(0xFE, false); // as V10
       break;
 
+    // ---- Wheel speeds (ON by default) and LW_1 (ON again as V10) ----------
     case BRAKES3_ID:
       // PQ Bremse_3 (0x4A0) - per-wheel speeds (Radgeschw_VL/VR/HL/HR), lock-scaled.
       // The bench-proven wheel-speed method, kept ON by default in every non-Stock
@@ -2054,10 +2115,10 @@ void getLockData(twai_message_t &rx_message_chs)
       rx_message_chs.data[4] = 0x00;                // Actual gear/range selected (5=P, 6=R, 7=N, 8=D, 9=S, 10=E, 13/14=T)
       rx_message_chs.data[5] = 0x00;                // Shift sequence state (0=idle, 1=shift in progress, etc.) - does not affect (>0x00)
       rx_message_chs.data[6] = 0x00;                // Power transmission status / clutch lock-up state - does not affect (>0x00)
-      // b7 bits 4-7 = target gear (GE_Zielgang), the only part the 0CQ reads (OEM code:
-      // spec_gen5_0cq §3). V11.00.0: the car's real gear is kept - it used to be forced
-      // to 0 here (spec D8). Bits 0-3 are not read and stay 0.
-      rx_message_chs.data[7] = rx_message_chs.data[7] & 0xF0; // keep the car's target gear (b7 bits 4-7)
+      // b7 bits 4-7 = target gear (GE_Zielgang) (spec_gen5_0cq §3). V11.00.4 fix: back to
+      // V10's 0, block ON by default again. V11.00.0 kept the car's real gear and switched
+      // the block off on the spec's word (spec D8) - not bench-proven.
+      rx_message_chs.data[7] = 0x00; // target gear 0, as V10
 
       rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_0AD); // for 0x0AD
 
@@ -2228,7 +2289,7 @@ void getLockData(twai_message_t &rx_message_chs)
       rx_message_chs.data[4] = 0x00;                                          // no effect sometimes 0x3A, somtimes 0x39
       rx_message_chs.data[5] = 0x40;                                          // no effect
       rx_message_chs.data[6] = 0x00;                                          // no effect
-      rx_message_chs.data[7] = 0xFF;                                          // old bench note said "affects a good 40%" - but the 0CQ does not receive ESP_10 at all (OEM code: spec_gen5_0cq D9), so that was something else changing
+      rx_message_chs.data[7] = 0xFF;                                          // V10 bench note: "this affects(!) - a good 40%". The spec says the 0CQ doesn't receive ESP_10 (D9) - not bench-proven, so block 5 is ON by default again as V10 (V11.00.4)
       rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_116); // for 0x116
 
       ESP_10_counter++;
@@ -2240,19 +2301,23 @@ void getLockData(twai_message_t &rx_message_chs)
 
     case ESP_05: // ESP_05 0x106
       // The 0CQ reads the brake pressure here (bits 16-25 = b2 + b3 bits 0-1, OEM
-      // code: spec_gen5_0cq §3). V11.00.0: the car's real brake pressure, the
-      // driver-braking bit (b3.2) and b7 are kept as the car sent them - this edit
-      // used to overwrite them with a fixed "not braking" value (spec D7,
-      // protective). Block 6 is OFF by default since V11. Follow Brake / Invert
-      // Brake still rewrite b3.2 afterwards (applyBrakeHandbrakeCANOverride).
+      // code: spec_gen5_0cq §3). V11.00.4 fix: back to V10's fixed "not braking"
+      // bytes, block 6 ON by default again. V10's bench notes say b3 and b7 both
+      // "affect" the lock; V11.00.0 passed the car's real brake pressure / driver-
+      // braking bit through and switched the block off (spec D7) - on a Gen1 the
+      // car's brake bits reaching the unit cut the lock (~42 %, ~11 % on the pedal).
+      // Safety: Follow ABS reads the car's ESP_21 and drops the ESP_14 lever while
+      // the ABS is braking. Follow Brake / Invert Brake still rewrite b3.2 afterwards
+      // (applyBrakeHandbrakeCANOverride).
       rx_message_chs.data_length_code = 8;     // DLC 8
       rx_message_chs.data[0] = 0x00;           // checksum
       rx_message_chs.data[1] = ESP_05_counter; // rolling - 0x80>0x8F
-      // data[2] and data[3] left as the car sent them: brake pressure + ESP_Fahrer_bremst
-      rx_message_chs.data[4] = 0x00; // not read by the 0CQ
-      rx_message_chs.data[5] = 0x00; // not read by the 0CQ
-      rx_message_chs.data[6] = 0xFD; // not read by the 0CQ
-      // data[7] left as the car sent it (ESP_Verz_EPB_aktiv b7.2 etc.)
+      rx_message_chs.data[2] = 0x64;           // brake pressure low, as V10 (bench: no effect)
+      rx_message_chs.data[3] = 0xC0;           // as V10 (bench: "this affects(!)")
+      rx_message_chs.data[4] = 0x00;           // as V10
+      rx_message_chs.data[5] = 0x00;           // as V10
+      rx_message_chs.data[6] = 0xFD;           // as V10
+      rx_message_chs.data[7] = 0x00;           // as V10 (bench: "this affects(!) - on/off. Was 0x10. 0x00 doesn't hurt")
       rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_106); // for 0x106
 
       ESP_05_counter++;

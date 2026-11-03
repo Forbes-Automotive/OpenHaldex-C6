@@ -582,6 +582,33 @@ V11.00.4 - (unreleased) engine temperatures and a faster Live Data refresh.
         - Live Data Refresh (Display Options): the Live Data tiles, engagement gauge and
           lock graph can update 4, 5 or 10 times a second from a new small /api/live
           reply. The rest of the dashboard stays at twice a second. Default unchanged.
+        - Fix (Gen1 / Gen2, OEM mode): lock capped at ~41 % on a parked Gen1 since V11.00.0
+          (worse than V10). V11 passed the car's real (idle) rpm in Motor_1 while Bremse_3
+          still fakes ~13 km/h wheel speeds, so the unit read a tall gear and halved its own
+          clutch request - the Bremse_4 ceiling can't add lock above that. Now Motor_1 rpm =
+          fixed 0x4E21 (4872 rpm, as standalone and V10) whenever lock is wanted, engine
+          running or not; 0x0021 (8 rpm, pump off - as V10 at 0 %) when no lock is wanted (FWD). RUN LEARN AGAIN on Gen1 / Gen2.
+        - Fix (Gen1, OEM mode): the rpm fix alone left 50:50 at ~42 %, ~11 % on the brake and
+          ~20 % after it (standalone 100 %). V11.00.0 had switched the Bremse_1 and Motor_3
+          edits off on the spec's word, so the car's Bremse_1 (brake bits, 0 km/h) reached
+          the 02D. Bremse_1 edit back to V10 / standalone (b1 = 0, b2 = 0, b3 = 0x0A), Motor_1
+          b4 / b7 as V10, Gen1 OEM default 0x19 -> 0x1F, one-off "v1104G1" upgrade turns both
+          blocks on in saved masks and clears a Gen1 learn table. ABS braking still opens the
+          clutch: car's b0 bit 2 passes, Follow ABS / Handbrake read the car's original frame.
+        - Fix (Gen2 / Gen4 / 0CQ / 0AY, OEM mode): same cause as Gen1 - V11.00.0 switched
+          off frame edits V10 had on, on the spec's word (not bench-proven), and let the
+          car's brake bits / brake pressure reach the unit. V10's blocks are back on with
+          V10's bytes; V11's lever bytes stay. Defaults: Gen2 0x31 -> 0x3F (Motor_3,
+          Bremse_1 V10 edit, Bremse_2), Gen4 0x32 -> 0x3F (LW_1, Bremse_1 b0 0x20 / b1 0x40,
+          Bremse_2), 0CQ 0x1D -> 0xFF (Getriebe_11 gear 0, ESP_10, ESP_05 V10 'not braking',
+          EPB_01), 0AY 0x06 -> 0x0F (Motor_1 V10 lock-scaled demand, LW_1). One-off
+          'v1104Gx' upgrade turns them on in saved masks (a VAQ keeps its mask) and clears
+          those generations' learn table. Bremse_1 / ESP_05 are now always-sent (core) blocks.
+          Not car-tested on these generations yet - Gen1 was the test car.
+        - Fix (OTA from V11.00.2 or older): index.html and app.js are back to plain (not
+          gzipped) in littlefs.bin. Old firmware checks for those exact names and flashes the
+          web UI first, so the gzipped image was rejected (500), wiped, and the unit fell to
+          the recovery page.
 
 */
 

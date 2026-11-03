@@ -27,7 +27,7 @@ static void migrateSettingsToV11()
   // ----- Gen1 02D (FE_GEN_1): old OEM 0x0F, old standalone 0x0F -----
   if (frameEditMask[FE_GEN_1] == 0x0FULL)
   {
-    frameEditMask[FE_GEN_1] = frameEditMaskDefaults[FE_GEN_1]; // -> Motor_1 + Bremse_3 + Bremse_4 (Motor_3 / Bremse_1 off)
+    frameEditMask[FE_GEN_1] = frameEditMaskDefaults[FE_GEN_1]; // -> the current default (V11.00.4: Motor_1, Motor_3, Bremse_1, Bremse_3, Bremse_4)
   }
   frameEditMask[FE_GEN_1] = frameEditMask[FE_GEN_1] | frameEditLockDriven[FE_GEN_1]; // lock-driving blocks on
   if (frameEditMaskSA[FE_GEN_1] == 0x0FULL)
@@ -43,7 +43,7 @@ static void migrateSettingsToV11()
   // ----- Gen2 7H0 / 1K0 (FE_GEN_2): old OEM 0x1F, old standalone 0x1FFF -----
   if (frameEditMask[FE_GEN_2] == 0x1FULL)
   {
-    frameEditMask[FE_GEN_2] = frameEditMaskDefaults[FE_GEN_2]; // -> Motor_1 + Bremse_3 + Bremse_4
+    frameEditMask[FE_GEN_2] = frameEditMaskDefaults[FE_GEN_2]; // -> the current default (V11.00.4: V10's blocks back on)
   }
   frameEditMask[FE_GEN_2] = frameEditMask[FE_GEN_2] | frameEditLockDriven[FE_GEN_2]; // lock-driving blocks on
   if (frameEditMaskSA[FE_GEN_2] == 0x1FFFULL)
@@ -58,7 +58,7 @@ static void migrateSettingsToV11()
   // ----- Gen4 0BR (FE_GEN_4): old OEM 0x3F, old standalone 0xFFF -----
   if (frameEditMask[FE_GEN_4] == 0x3FULL)
   {
-    frameEditMask[FE_GEN_4] = frameEditMaskDefaults[FE_GEN_4]; // -> Motor_1 + Bremse_3 + Bremse_4
+    frameEditMask[FE_GEN_4] = frameEditMaskDefaults[FE_GEN_4]; // -> the current default (V11.00.4: V10's blocks back on)
   }
   frameEditMask[FE_GEN_4] = frameEditMask[FE_GEN_4] | frameEditLockDriven[FE_GEN_4]; // lock-driving blocks on
   frameEditMaskSA[FE_GEN_4] = frameEditMaskSA[FE_GEN_4] | 0x1F000ULL;  // bits 12-16 on: Motor_2, Motor_5, Bremse_5, Bremse_8, Getriebe_1
@@ -73,7 +73,7 @@ static void migrateSettingsToV11()
   {
     if (frameEditMask[FE_GEN_50] == 0xFFULL || frameEditMask[FE_GEN_50] == 0x3FFULL)
     {
-      frameEditMask[FE_GEN_50] = frameEditMaskDefaults[FE_GEN_50]; // -> ESP_19 + Motor_12 + Motor_11 + ESP_14
+      frameEditMask[FE_GEN_50] = frameEditMaskDefaults[FE_GEN_50]; // -> the current default (V11.00.4: V10's blocks back on)
     }
   }
   frameEditMask[FE_GEN_50] = frameEditMask[FE_GEN_50] | frameEditLockDriven[FE_GEN_50]; // lock-driving blocks on
@@ -83,7 +83,7 @@ static void migrateSettingsToV11()
   // ----- Gen5 0AY (FE_GEN_51): old OEM 0x0F, old standalone 0x3FFFF -----
   if (frameEditMask[FE_GEN_51] == 0x0FULL)
   {
-    frameEditMask[FE_GEN_51] = frameEditMaskDefaults[FE_GEN_51]; // -> Bremse_3 + Bremse_4
+    frameEditMask[FE_GEN_51] = frameEditMaskDefaults[FE_GEN_51]; // -> the current default (V11.00.4: V10's blocks back on)
   }
   frameEditMask[FE_GEN_51] = frameEditMask[FE_GEN_51] | frameEditLockDriven[FE_GEN_51]; // lock-driving blocks on
   if (frameEditMaskSA[FE_GEN_51] == 0x3FFFFULL)
@@ -384,6 +384,60 @@ void readEEP() // function to read stored preferences into runtime variables
       frameEditMasksChanged = true;
       pref.putBool("v11Mig", true);                         // done - don't run again
       pref.putBool("learnOK", haldexLearnTableValid);       // save the learn table state after the upgrade
+    }
+
+    // V11.00.4 one-off fix (Gen1 02D, OEM mode). The V11.00.0 upgrade above switched
+    // Motor_3 and Bremse_1 off, and with the car's own Bremse_1 reaching the 02D a parked
+    // Gen1 stopped at ~42 % and dropped on the brake pedal. Switch both back on, as V10
+    // had them. A Gen1 learn table was recorded against that cap, so it's cleared too.
+    // Runs once, then "v1104G1" is saved so it never runs again.
+    if (!pref.getBool("v1104G1", false))
+    {
+      frameEditMask[FE_GEN_1] = frameEditMask[FE_GEN_1] | (1ULL << 1); // bit 1 Motor_3 on (as V10)
+      frameEditMask[FE_GEN_1] = frameEditMask[FE_GEN_1] | (1ULL << 2); // bit 2 Bremse_1 on (as V10)
+      frameEditMasksChanged = true;
+      if (haldexGeneration == 1 && haldexLearnTableValid)
+      {
+        haldexLearnTableValid = false;                  // learned under the ~42 % cap - run Learn again
+        pref.putBool("learnOK", haldexLearnTableValid); // save the cleared state
+        DEBUG("EEPROM - V11.00.4 Gen1 fix: old learn table cleared, run Learn again");
+      }
+      pref.putBool("v1104G1", true); // done - don't run again
+    }
+
+    // V11.00.4 one-off fix for the other generations (OEM mode), same reason as Gen1:
+    // V11.00.0 switched off frame edits V10 had on - on the spec's word, not a bench test -
+    // and let the car's brake bits / brake pressure reach the unit. Switch V10's blocks
+    // back on. A learn table for these generations is cleared (recorded with the old
+    // frames). A VAQ (gen 52) keeps its saved mask, as the V11.00.0 upgrade did.
+    // Runs once, then "v1104Gx" is saved so it never runs again. Separate from "v1104G1"
+    // so a Gen1 that already ran that one doesn't lose its new learn table.
+    if (!pref.getBool("v1104Gx", false))
+    {
+      frameEditMask[FE_GEN_2] = frameEditMask[FE_GEN_2] | (1ULL << 1); // Gen2 bit 1 Motor_3 on (as V10)
+      frameEditMask[FE_GEN_2] = frameEditMask[FE_GEN_2] | (1ULL << 2); // Gen2 bit 2 Bremse_1 on (as V10)
+      frameEditMask[FE_GEN_2] = frameEditMask[FE_GEN_2] | (1ULL << 3); // Gen2 bit 3 Bremse_2 on (as V10)
+      frameEditMask[FE_GEN_4] = frameEditMask[FE_GEN_4] | (1ULL << 0); // Gen4 bit 0 LW_1 on (as V10)
+      frameEditMask[FE_GEN_4] = frameEditMask[FE_GEN_4] | (1ULL << 2); // Gen4 bit 2 Bremse_1 on (as V10)
+      frameEditMask[FE_GEN_4] = frameEditMask[FE_GEN_4] | (1ULL << 3); // Gen4 bit 3 Bremse_2 on (as V10)
+      if (haldexGeneration != 52)
+      {
+        frameEditMask[FE_GEN_50] = frameEditMask[FE_GEN_50] | (1ULL << 1); // 0CQ bit 1 Getriebe_11 on (as V10)
+        frameEditMask[FE_GEN_50] = frameEditMask[FE_GEN_50] | (1ULL << 5); // 0CQ bit 5 ESP_10 on (as V10)
+        frameEditMask[FE_GEN_50] = frameEditMask[FE_GEN_50] | (1ULL << 6); // 0CQ bit 6 ESP_05 on (as V10)
+        frameEditMask[FE_GEN_50] = frameEditMask[FE_GEN_50] | (1ULL << 7); // 0CQ bit 7 EPB_01 on (as V10)
+      }
+      frameEditMask[FE_GEN_51] = frameEditMask[FE_GEN_51] | (1ULL << 0); // 0AY bit 0 Motor_1 on (as V10)
+      frameEditMask[FE_GEN_51] = frameEditMask[FE_GEN_51] | (1ULL << 3); // 0AY bit 3 LW_1 on (as V10)
+      frameEditMasksChanged = true;
+      if ((haldexGeneration == 2 || haldexGeneration == 4 || haldexGeneration == 50 || haldexGeneration == 51) &&
+          haldexLearnTableValid)
+      {
+        haldexLearnTableValid = false;                  // learned with the old frames - run Learn again
+        pref.putBool("learnOK", haldexLearnTableValid); // save the cleared state
+        DEBUG("EEPROM - V11.00.4 fix: old learn table cleared, run Learn again");
+      }
+      pref.putBool("v1104Gx", true); // done - don't run again
     }
 
     if (frameEditMasksChanged)
