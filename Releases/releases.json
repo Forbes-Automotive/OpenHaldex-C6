@@ -7,16 +7,16 @@
       "channel": "beta",
       "date": "2026-11-03",
       "ota": true,
-      "notes": "Coolant and oil temperature on the Live Data card (PQ Kombi_2, Gen1/2/4/0AY), and a Live Data Refresh option in Display Options to update the live tiles, engagement gauge and lock graph up to 10 times a second.",
+      "notes": "Coolant and oil temperature on the Live Data card (PQ Kombi_2, Gen1/2/4/0AY), and a Live Data Refresh option in Display Options to update the live tiles, engagement gauge and lock graph up to 10 times a second. Fixes: OEM-mode lock back to V10 behaviour on Gen1/2/4/0CQ/0AY (the car's brake bits no longer cut the lock; Gen1 parked lock no longer stops at ~42 %), FWD turns the Gen1/2 pump off, OTA from 11.00.2 and older no longer drops to the recovery page. Run Learn Haldex again after updating.",
       "firmware": {
         "path": "V11.00.4/firmware.bin",
-        "size": 1528400,
-        "sha256": "f17d343409f8171cf21212dd8781f2c9a0dca3467b7fc6a678d18f8eb091e2f5"
+        "size": 1528784,
+        "sha256": "264bc3ec95facd459e57487038685937726b95501d0514347ba49f2c8801e12e"
       },
       "filesystem": {
         "path": "V11.00.4/littlefs.bin",
         "size": 458752,
-        "sha256": "20a408e6f0a8b896cbf68609b97293147e634197f5cd84e15177218869a2f518"
+        "sha256": "649ad917e8c5041322708a855bf689a6b24ba8c240b4917bd410b5d88cb7fc05"
       }
     },
     {
@@ -24,16 +24,16 @@
       "channel": "beta",
       "date": "2026-10-30",
       "ota": true,
-      "notes": "Web UI stored gzipped (smaller, faster to load), OTA release source for forks, can_capture tool; plus 11.00.2: 0x6B0 broadcast no longer keeps the car awake, OTA safety check once per upload, Volvo P1 Gear setting and frame bisect.",
+      "notes": "Web UI stored gzipped (smaller, faster to load), OTA release source for forks, can_capture tool; plus 11.00.2: 0x6B0 broadcast no longer keeps the car awake, OTA safety check once per upload, Volvo P1 Gear setting and frame bisect. Re-released 2026-11-03 with the V11.00.4 fixes: OEM-mode frame edits back to V10 on Gen1/2/4/0CQ/0AY (the car's brake bits no longer cut the lock), FWD turns the Gen1/2 pump off, OTA from 11.00.2 and older no longer drops to the recovery page.",
       "firmware": {
         "path": "V11.00.3/firmware.bin",
-        "size": 1527360,
-        "sha256": "eaaa74c38dc8a117970c10aed2cd908d28f49638b50e21d58cd62612f12d3928"
+        "size": 1527760,
+        "sha256": "6925c38386b31778c7d335c9f58cae0fdc54f7ebded9c28581f5f968ab567e65"
       },
       "filesystem": {
         "path": "V11.00.3/littlefs.bin",
         "size": 458752,
-        "sha256": "fd298c7f38551abe91fb48da7739ee6c6bc045262784077504d14eaba35abed2"
+        "sha256": "8c78a0fab14253b51664272108dd44f4ccf8e4b33a066bcd74f9792aa1979061"
       }
     },
     {
@@ -41,16 +41,16 @@
       "channel": "beta",
       "date": "2026-10-29",
       "ota": true,
-      "notes": "0x6B0 broadcast no longer keeps the car awake, OTA safety check once per upload, Volvo P1 Gear setting and frame bisect, smaller Espressif libraries (firmware 79.5% of its slot).",
+      "notes": "0x6B0 broadcast no longer keeps the car awake, OTA safety check once per upload, Volvo P1 Gear setting and frame bisect, smaller Espressif libraries (firmware 79.5% of its slot). Re-released 2026-11-03 with the V11.00.4 lock fixes: OEM-mode frame edits back to V10 on Gen1/2/4/0CQ/0AY (the car's brake bits no longer cut the lock), FWD turns the Gen1/2 pump off.",
       "firmware": {
         "path": "V11.00.2/firmware.bin",
-        "size": 1527040,
-        "sha256": "4f9ebdfc6e1369322b88c965ee8696226e91f77f5d052e419462f30882deb769"
+        "size": 1527552,
+        "sha256": "d04edf1104a858b980cfa9e91b779078178557f21f9478cb4b3cac12a81f3484"
       },
       "filesystem": {
         "path": "V11.00.2/littlefs.bin",
         "size": 458752,
-        "sha256": "cec8fc4596b77fef38a2b69d2e766a7cb3a18b4334af56bd3299483a3c4a8e7a"
+        "sha256": "b709ee3cf4aa7058f8c002d8006394b69ac0a351ecfe57d541d7c9a28889195d"
       }
     },
     {
@@ -75,11 +75,11 @@
       "channel": "beta",
       "date": "2026-10-23",
       "ota": true,
-      "notes": "Every generation brought in line with the Haldex units' own code: correct lock bytes in OEM and Standalone, the unit's own fault / limp / over-temp warnings on a new Haldex Warning card, Follow ABS (on by default), Volvo P2 facelift reply decode and the Volvo Gen5 SPC unit. Run Learn Haldex again after updating.",
+      "notes": "Every generation brought in line with the Haldex units' own code: correct lock bytes in OEM and Standalone, the unit's own fault / limp / over-temp warnings on a new Haldex Warning card, Follow ABS (on by default), Volvo P2 facelift reply decode and the Volvo Gen5 SPC unit. Run Learn Haldex again after updating. Re-released 2026-11-03 with the V11.00.4 lock fixes: OEM-mode frame edits back to V10 on Gen1/2/4/0CQ/0AY (the car's brake bits no longer cut the lock), FWD turns the Gen1/2 pump off.",
       "firmware": {
         "path": "V11.00.0/firmware.bin",
-        "size": 1782176,
-        "sha256": "a3fe76675aa09d021f4396247414f5f8e8d4e6952916f19932e8489a7088f1a6"
+        "size": 1782272,
+        "sha256": "dafd64d75d13c3e2b90d01a9a88cec52ac1f265c0e4c67ab071f928abb125942"
       },
       "filesystem": {
         "path": "V11.00.0/littlefs.bin",
