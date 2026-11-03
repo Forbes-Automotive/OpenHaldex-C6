@@ -3,6 +3,23 @@
   "latest": "9.00.6",
   "releases": [
     {
+      "version": "11.00.4",
+      "channel": "beta",
+      "date": "2026-11-03",
+      "ota": true,
+      "notes": "Coolant and oil temperature on the Live Data card (PQ Kombi_2, Gen1/2/4/0AY), and a Live Data Refresh option in Display Options to update the live tiles, engagement gauge and lock graph up to 10 times a second.",
+      "firmware": {
+        "path": "V11.00.4/firmware.bin",
+        "size": 1528400,
+        "sha256": "f17d343409f8171cf21212dd8781f2c9a0dca3467b7fc6a678d18f8eb091e2f5"
+      },
+      "filesystem": {
+        "path": "V11.00.4/littlefs.bin",
+        "size": 458752,
+        "sha256": "20a408e6f0a8b896cbf68609b97293147e634197f5cd84e15177218869a2f518"
+      }
+    },
+    {
       "version": "11.00.3",
       "channel": "beta",
       "date": "2026-10-30",
