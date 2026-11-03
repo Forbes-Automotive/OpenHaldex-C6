@@ -4967,7 +4967,10 @@ void Saab93_frames1000()
 // Built from Adam's 2005 V50 T5 AWD logs (documents/vehicle-logs/gen3/
 // P1_V50_T5_AWD_DECODE.md). Standalone sends EVERY frame the car puts on its
 // high-speed bus (22 of them), so the AWD module sees a whole car. Each one is a
-// frame-edit block, so the ones it turns out not to need can be switched off.
+// frame-edit block. A block switched off doesn't go quiet: the CAR's own frame
+// with that ID is passed through to the module instead (parseCAN_chs). So with
+// every block off the module sees the real car, and switching our frames on one
+// at a time on a drive shows which of ours it won't accept.
 //
 // What goes in them:
 //   - Steady bytes: a real frame of each, taken from Drive.csv at 56.9 s
@@ -4975,7 +4978,7 @@ void Saab93_frames1000()
 //   - Counters / toggles: copied from the full C30 PCAN trace (idle.trc), which
 //     caught every frame, so the patterns are exact.
 //   - The lock: chosen on the Settings page (Volvo P1 Standalone card, saved):
-//       Engine Torque - torque + pedal + rpm rise with the lock. In the logs the
+//       Engine Torque - torque + pedal rise with the lock. In the logs the
 //                       module follows torque almost 1:1, so this is the default.
 //       Wheel Slip    - the front wheels run faster than the rears (wheelspin).
 //       Both          - the two together.
@@ -4983,6 +4986,8 @@ void Saab93_frames1000()
 //     lock gate already applied), exactly as on the other direct-lever units.
 //   - Speed: the Road Speed setting on the rear wheels and the road speed frame;
 //     the fronts the same unless Wheel Slip is in use.
+//   - Engine rpm: Road Speed x the Gear setting's ratio (1st-3rd, from the logs),
+//     so rpm and speed always match a real gear.
 //   - Steering: straight ahead and still, with the sensor's own check byte.
 //   - Brake / handbrake: from Follow Brake / Follow Handbrake.
 // The AWD module answers on 0x1960000A, decoded in parseCAN_hdx.
@@ -5108,6 +5113,29 @@ static uint8_t volvoP1SlipLockPercent(uint8_t lockPercent)
 static uint16_t volvoP1RearSpeedRaw()
 {
   return (uint16_t)volvoP1RoadSpeedKmh * 100;
+}
+
+// Engine rpm to send: Road Speed x the Gear setting's ratio (rpm per km/h, from
+// the V50 logs), so the rpm and the road speed always match a real gear. A pair
+// that matches no gear (4500 rpm at 30 km/h, as before) looks like a slipping
+// clutch, and the module may not pass torque to the rear with the clutch slipping.
+static uint16_t volvoP1GearRpm()
+{
+  uint16_t rpmPerKmh = VOLVO_P1_RPM_PER_KMH_GEAR2; // 2nd gear (the default)
+  if (volvoP1Gear == 1)
+  {
+    rpmPerKmh = VOLVO_P1_RPM_PER_KMH_GEAR1; // 1st gear
+  }
+  else if (volvoP1Gear == 3)
+  {
+    rpmPerKmh = VOLVO_P1_RPM_PER_KMH_GEAR3; // 3rd gear
+  }
+  uint32_t rpm = (uint32_t)volvoP1RoadSpeedKmh * rpmPerKmh;
+  if (rpm > VOLVO_P1_RPM_MAX)
+  {
+    rpm = VOLVO_P1_RPM_MAX; // e.g. 120 km/h in 1st: hold at the limit rather than send a silly number
+  }
+  return (uint16_t)rpm;
 }
 
 // Front wheel speed to send, 0.01 km/h: the rears plus the Wheel Slip share of the lock
@@ -5411,11 +5439,11 @@ void VolvoP1_frames13()
 void VolvoP1_frames20()
 {
   uint8_t data[8];
-  const uint8_t lockPercent = lever_lock_percent();
 
-  // 0x0090411E - engine rpm follows the lock (Engine Torque / Both); byte 0 bit 7 on every 10th send
+  // 0x0090411E - engine rpm from Road Speed and Gear (not the lock, so it always
+  // matches a real gear); byte 0 bit 7 on every 10th send
   volvoP1Copy(data, VOLVO_P1_0090411E_DATA);
-  uint16_t rpm = volvoP1Scale(VOLVO_P1_RPM_AT_ZERO, VOLVO_P1_RPM_FULL, volvoP1EngineLockPercent(lockPercent));
+  uint16_t rpm = volvoP1GearRpm();
   volvoP1SentRpm = rpm; // for the live readout
   data[2] = 0xE0 | ((rpm >> 8) & 0x1F); // top 3 bits steady, bottom 5 = rpm top bits
   data[3] = rpm & 0xFF;                 // rpm bottom 8 bits

@@ -174,6 +174,7 @@ void readEEP() // function to read stored preferences into runtime variables
     pref.putBool("followABS", followABS);                      // save follow ABS
     pref.putUChar("p1Source", volvoP1LockSource);              // save Volvo P1 lock source
     pref.putUChar("p1SpeedKmh", volvoP1RoadSpeedKmh);          // save Volvo P1 road speed
+    pref.putUChar("p1Gear", volvoP1Gear);                      // save Volvo P1 gear
     pref.putUShort("p1TorqueFull", volvoP1TorqueFull);         // save Volvo P1 torque at 100 %
     pref.putUChar("p1SlipKmh", volvoP1SlipFullKmh);            // save Volvo P1 slip at 100 %
     pref.putBool("tcForceMode", tcForceMode);                  // save tc force mode
@@ -244,6 +245,7 @@ void readEEP() // function to read stored preferences into runtime variables
     followABS = pref.getBool("followABS", true);                            // load follow ABS (default on - the Haldex's own safety)
     volvoP1LockSource = pref.getUChar("p1Source", VOLVO_P1_SOURCE_TORQUE);  // load Volvo P1 lock source (default engine torque)
     volvoP1RoadSpeedKmh = pref.getUChar("p1SpeedKmh", 30);                  // load Volvo P1 road speed (default 30 km/h)
+    volvoP1Gear = pref.getUChar("p1Gear", 2);                               // load Volvo P1 gear (default 2nd)
     volvoP1TorqueFull = pref.getUShort("p1TorqueFull", 600);                // load Volvo P1 torque at 100 % (default 600)
     volvoP1SlipFullKmh = pref.getUChar("p1SlipKmh", 10);                    // load Volvo P1 slip at 100 % (default 10 km/h)
     if (volvoP1LockSource > VOLVO_P1_SOURCE_BOTH)
@@ -253,6 +255,10 @@ void readEEP() // function to read stored preferences into runtime variables
     if (volvoP1RoadSpeedKmh < 5 || volvoP1RoadSpeedKmh > 120)
     {
       volvoP1RoadSpeedKmh = 30; // out of range: back to the default
+    }
+    if (volvoP1Gear < 1 || volvoP1Gear > 3)
+    {
+      volvoP1Gear = 2; // out of range: back to the default
     }
     if (volvoP1TorqueFull > 1000)
     {
@@ -457,6 +463,7 @@ void writeEEP(void *arg) // task function to periodically write preferences
     pref.putBool("followABS", followABS);                      // write follow ABS
     pref.putUChar("p1Source", volvoP1LockSource);              // write Volvo P1 lock source
     pref.putUChar("p1SpeedKmh", volvoP1RoadSpeedKmh);          // write Volvo P1 road speed
+    pref.putUChar("p1Gear", volvoP1Gear);                      // write Volvo P1 gear
     pref.putUShort("p1TorqueFull", volvoP1TorqueFull);         // write Volvo P1 torque at 100 %
     pref.putUChar("p1SlipKmh", volvoP1SlipFullKmh);            // write Volvo P1 slip at 100 %
     pref.putBool("tcForceMode", tcForceMode);                  // write tc force mode

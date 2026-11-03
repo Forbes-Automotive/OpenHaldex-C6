@@ -97,6 +97,9 @@ bool ignitionOn()
   return lastKl15Ms != 0 && (millis() - lastKl15Ms) < 2000UL && received_kl15;
 }
 uint16_t received_vehicle_boost;
+float receivedCoolantTemp = 0.0f; // engine coolant temperature (degC), from PQ Kombi_2
+float receivedOilTemp = 0.0f;     // engine oil temperature (degC), from PQ Kombi_2
+uint32_t lastKombi2Ms = 0;        // when the last Kombi_2 came in; 0 = never
 uint8_t haldexGeneration;
 uint8_t tcForceModeValue     = 2; // default 50:50
 uint8_t hazardForceModeValue = 2; // default 50:50
@@ -122,6 +125,7 @@ bool followABS = true; // V11.00.0: open the clutch while the ABS is braking (th
 // Volvo P1 standalone lock settings (V11.00.1) - see defs.h
 uint8_t volvoP1LockSource = VOLVO_P1_SOURCE_TORQUE; // lock shown as engine torque (what the module follows in the logs)
 uint8_t volvoP1RoadSpeedKmh = 30;                   // standalone road speed, km/h
+uint8_t volvoP1Gear = 2;                            // standalone gear for the rpm, 1-3 (2nd: 30 km/h = ~2000 rpm)
 uint16_t volvoP1TorqueFull = 600;                   // torque counts at 100 % lock (most seen on full-throttle launches)
 uint8_t volvoP1SlipFullKmh = 10;                    // front wheels this much faster at 100 % lock, km/h (the wheelspin log had ~10)
 uint16_t volvoP1SentTorque = 0;                     // last torque sent

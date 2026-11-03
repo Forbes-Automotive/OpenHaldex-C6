@@ -79,6 +79,7 @@ It can operate using OEM CAN signals or it is able to run in Standalone mode - w
 - Force mode via CAN using hazard lights or TC button
 - Force mode from the car's drive mode select on MQB (Comfort, Sport, Race, Individual ...), each profile set to any mode, with a **Drive Mode** card on Diagnostics (see [Drive Mode Select](#can--force-mode-drive-mode-select-mqb))
 - Adjustable LED brightness
+- Live Data on the dashboard: speed, throttle, RPM, boost, plus engine coolant and oil temperature on the PQ cars (Gen1 / Gen2 / Gen4 / 0AY, from the cluster's Kombi_2 frame), updating up to 10 times a second (**Live Data Refresh** under Display Options)
 - Live diagnostics: UDS (Gen5) and KWP2000‑over‑TP2.0 (Gen2/Gen4) with measurement scaling confirmed against VCDS
 - Selectable CAN frames — enable/disable CAN messages per Generation from the Web UI
 - CAN frame relay to can2gauge gauges over WiFi (ESP-NOW): a gauge with power only, no CAN wire, reads the car as if it were wired (**Relay CAN Frames to Gauges** under Controller Options, off by default)
@@ -192,19 +193,21 @@ New in V10, with the Volvo SPC unit and the P2 facelift Haldex reply decode adde
 - **Starting values, not finished decodes.** The frame list and lock bytes are a starting point. The meaning of most bytes still needs confirming on real cars, and the Haldex status is shown as raw 0–100 % until logs give its true scaling. SAAB also reports a Haldex temperature.
 - **Decoded from the Haldex's own code (V11).** On the P2 facelift, the reply's byte 6 is the measured clutch value and byte 7 carries the fault / limp and missing-input bits, so the Haldex Warning card works there. The SPC unit's reply gives the clutch torque it's delivering and a fault status. The full-lock value of both still needs a bench check.
 - **Volvo P1 (S40 / V50 AWD, V11.00.1).** Built from logs of a 2005 V50 T5 AWD. The P1 runs the same bus as the P2 facelift but uses none of its CAN IDs, so pick the P1 entry, not a P2 one.
-  - Standalone sends every frame the car puts on its high-speed bus (22 of them), each one listed under Frame Editing so the ones the Haldex doesn't need can be switched off.
+  - Standalone sends every frame the car puts on its high-speed bus (22 of them), each one listed under Frame Editing. Untick a frame and the **car's own** frame with that ID goes through to the Haldex instead. Untick them all and the Haldex sees the real car; tick them back one at a time on a drive to find any frame it won't accept.
   - The logs show the P1 module follows engine torque almost one-for-one, goes to full lock on big front wheelspin, and never locks while stopped. The **Volvo P1 Standalone** card (Settings, shown for the P1) sets how your lock request is shown to it:
-    - **Lock Source**: Engine torque (the default, which also raises the pedal and rpm), Wheel slip (front wheels faster than the rears), or both together.
-    - **Road Speed**, **Torque at 100 %** and **Front Wheel Slip at 100 %**, with a Reset to Defaults button.
+    - **Lock Source**: Engine torque (the default, which also raises the pedal), Wheel slip (front wheels faster than the rears), or both together.
+    - **Road Speed** and **Gear**: the rpm sent is the road speed in that gear (1st to 3rd, ratios measured from the V50 logs), so rpm and speed always match a real gear.
+    - **Torque at 100 %** and **Front Wheel Slip at 100 %**, with a Reset to Defaults button.
     - A live line shows the lock being asked for, what's being sent, and the module's engagement.
   - Switching DSTC off counts as the TC button, so **Use TC to Force Mode** (Mode Options) can force a mode while DSTC is off. This works in OEM mode, and in Standalone with the car connected.
   - The mode buttons, Expert and **Learn Haldex** drive it just like the other generations. Learn waits a little longer at each step on the P1, because its engagement trails the torque by up to 0.4 s.
 
 <p align="center">
-  <img src="/Images/ui-volvo-p1.png" alt="Settings — Volvo P1 Standalone card: Lock Source, Road Speed, Torque at 100 %, Front Wheel Slip at 100 % and the live line" width="300">
+  <img src="/Images/ui-volvo-p1.png" alt="Settings — Volvo P1 Standalone card: Lock Source, Road Speed, Gear, Torque at 100 %, Front Wheel Slip at 100 % and the live line" width="300">
 </p>
 
-*Settings → **Volvo P1 Standalone**: here asking for 100 %, sent as 600 torque, full pedal and 4500 rpm at a steady 30 km/h, with the module answering 512 of its 540 full-lock count.*
+*Settings → **Volvo P1 Standalone**: here asking for 100 %, sent as 600 torque and full pedal at a steady 30 km/h in 2nd (1980 rpm). The live line is a mock-up: on the car the module hasn't answered our lock request yet (see below).*
+  - **Not working yet (first car test, 25 Oct 2026):** in Standalone the module stays awake but ignores the lock request. The frame bisect and the gear-matched rpm above are the tools for finding out why. Findings: `documents/VOLVO_P1_FINDINGS_2026-10-25.md`.
   - The Haldex's engagement (`0x1960000A`) is shown as 0–100 %, with full lock at the highest value seen in the logs.
   - OEM mode passes everything through untouched for now, so Stock and the engagement readout work. Editing the car's frames for 50:50, 60:40 and the other modes comes next; until then Learn needs Standalone on the P1.
   - The decode and the logs are in `documents/vehicle-logs/gen3/`.
@@ -228,10 +231,12 @@ The controller provides several preset modes along with a fully customisable 'Ex
 <p align="center">
   <img src="/Images/ui-dashboard.png" alt="Dashboard — mode selection and Haldex engagement gauge" width="300">
   &nbsp;&nbsp;
-  <img src="/Images/ui-live-data.png" alt="Dashboard — live speed, throttle, RPM, boost and per-wheel slip" width="300">
+  <img src="/Images/ui-live-data.png" alt="Dashboard — live speed, throttle, RPM, boost, coolant and oil temperature, and per-wheel slip" width="300">
 </p>
 
 *Dashboard: pick a mode, watch the engagement gauge follow the request (with the last 15 s of actual vs target underneath), and keep an eye on the live data and wheel slip further down the page.*
+
+The **Live Data** card shows speed, throttle, RPM and boost, and on the PQ cars (Gen1, Gen2, Gen4 and 0AY) the engine **Coolant Temp** and **Oil Temp** read from the instrument cluster's Kombi_2 frame; cars that don't send it show `--`. It normally updates twice a second like the rest of the page. **Live Data Refresh** (Display Options, saved in the browser) speeds up just the Live Data tiles, the engagement gauge and the lock graph to 4, 5 or 10 times a second; step back down if the page gets sluggish on a busy phone.
 
 The **Basic** tab holds the simple guards that apply to every mode — disengage below or above a speed, a minimum throttle before any lock is applied, and how quickly lock is released. They cut lock in **every** mode, force triggers included, so when one of them is holding lock at 0% the Haldex Engagement card says which one and what it's set to (e.g. *"Lock is being held at 0% because speed is below "Disengage Under Speed" (20 km/h)"*). Set that limit to 0 to turn the cut-off off:
 
@@ -457,7 +462,7 @@ If the Wi‑Fi interface becomes unresponsive:
 
 - Long‑press the `Mode` button to clear the WiFi password and restart the AP to an open state.
 
-> The Web UI is built on Forbes Automotive's shared dark theme (the same look used across the Can2Cluster, SpeedPulser, SpeedPulserPro, can2rpm, MQB Steering Wheel Controller and AirLift Controller firmware), so the interface and status conventions stay consistent across the whole product line. Current firmware version: **11.00.1** (beta: Volvo P1 support), shown in the UI footer and at `/ota/info`.
+> The Web UI is built on Forbes Automotive's shared dark theme (the same look used across the Can2Cluster, SpeedPulser, SpeedPulserPro, can2rpm, MQB Steering Wheel Controller and AirLift Controller firmware), so the interface and status conventions stay consistent across the whole product line. Current firmware version: **11.00.4** (unreleased: coolant and oil temperature on the Live Data card, faster Live Data refresh; 11.00.3 beta: bus sleep and OTA fixes, Volvo P1 frame bisect and gear-matched rpm, web UI stored gzipped), shown in the UI footer and at `/ota/info`.
 
 ---
 
@@ -782,7 +787,7 @@ This is the recommended method for most users.
 Once a controller is already running firmware **8.00.0 or later**, it can also be updated wirelessly over its own Wi‑Fi AP instead of by USB. This is a **two‑step process**, because the filesystem (web UI) and the firmware (application code) live on separate flash partitions and are updated independently:
 
 1. **Step 1 — Filesystem update** (`POST /ota/update/fs`, uploads `littlefs.bin`)  
-   Updates `index.html`, `app.js`, `style.css` and other web assets. The device does **not** reboot after this step — it's meant to be followed immediately by Step 2.
+   Updates `index.html`, `app.js`, `style.css` and other web assets. From 11.00.3 these are stored gzipped in `littlefs.bin` (packed at build time by `tools/gzip_webui.py`), so the image is smaller and the pages load faster; the browser unpacks them, nothing changes on screen. The device does **not** reboot after this step — it's meant to be followed immediately by Step 2.
 2. **Step 2 — Firmware update** (`POST /ota/update`, uploads `firmware.bin`)  
    Updates the application itself. The device reboots automatically once the upload finishes.
 

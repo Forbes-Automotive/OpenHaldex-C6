@@ -166,15 +166,26 @@ function updateVolvoSaabHint(gen) {
       p1Card.style.display = "none";
     }
   }
+  // Frame Editing card: what ticked / unticked means for the P1 in Standalone
+  const p1FrameHint = document.getElementById("frameEditP1Hint");
+  if (p1FrameHint) {
+    if (gen === 31) {
+      p1FrameHint.style.display = "";
+    } else {
+      p1FrameHint.style.display = "none";
+    }
+  }
 }
 
 // Volvo P1 Standalone card (V11.00.1): the defaults the Reset to Defaults button puts back
-const VOLVO_P1_DEFAULTS = { source: 0, roadSpeedKmh: 30, torqueFull: 600, slipFullKmh: 10 };
+const VOLVO_P1_DEFAULTS = { source: 0, roadSpeedKmh: 30, gear: 2, torqueFull: 600, slipFullKmh: 10 };
 
 // Put the saved Volvo P1 values into the card's controls
-function showVolvoP1Settings(source, roadSpeedKmh, torqueFull, slipFullKmh) {
+function showVolvoP1Settings(source, roadSpeedKmh, gear, torqueFull, slipFullKmh) {
   const sourceSelect = document.getElementById("volvoP1LockSource");
   if (sourceSelect) sourceSelect.value = String(source);
+  const gearSelect = document.getElementById("volvoP1Gear");
+  if (gearSelect && gear !== undefined) gearSelect.value = String(gear);
   const speedRange = document.getElementById("volvoP1RoadSpeedRange");
   const speedValue = document.getElementById("volvoP1RoadSpeedValue");
   if (speedRange) speedRange.value = roadSpeedKmh;
@@ -286,7 +297,7 @@ async function initStoredSettings() {
     }
 
     if (data.volvoP1LockSource !== undefined) {
-      showVolvoP1Settings(data.volvoP1LockSource, data.volvoP1RoadSpeedKmh, data.volvoP1TorqueFull, data.volvoP1SlipFullKmh);
+      showVolvoP1Settings(data.volvoP1LockSource, data.volvoP1RoadSpeedKmh, data.volvoP1Gear, data.volvoP1TorqueFull, data.volvoP1SlipFullKmh);
     }
 
     const llNotes = document.getElementById("longLearnNotes");
@@ -472,6 +483,8 @@ async function refreshStatus() {
     );
     document.getElementById("rpm").textContent = displayValue(data.rpm);
     document.getElementById("boost").textContent = displayValue(data.boost);
+    document.getElementById("coolantTemp").textContent = displayValue(data.coolantTemp); // PQ Kombi_2 (V11.00.4)
+    document.getElementById("oilTemp").textContent = displayValue(data.oilTemp);
 
     document.getElementById("lockTarget").textContent = displayValue(
       data.lockTarget,
@@ -1237,6 +1250,59 @@ function initNavigation() {
 function initDashboard() {
   refreshStatus(); //
   setInterval(refreshStatus, setIntervalDuration); // request for new data every xms
+  startLiveRefresh(); // faster Live Data poll, if picked in Display Options (V11.00.4)
+}
+
+// ---- Live Data Refresh (V11.00.4) ----------------------------------------
+// The full /api/dashboard poll above stays at twice a second. When a faster
+// rate is picked in Display Options, a second poll asks /api/live (only the
+// Live Data tiles and the lock, a much smaller reply) at that rate.
+let liveRefreshTimer = null;   // the running fast poll, or null when it's off
+let isLiveRequestBusy = false; // true while waiting for a reply, so slow replies never pile up
+
+function startLiveRefresh() {
+  if (liveRefreshTimer !== null) {
+    clearInterval(liveRefreshTimer); // stop the old rate first
+    liveRefreshTimer = null;
+  }
+  if (gaugePrefs.liveRefreshMs < setIntervalDuration) {
+    liveRefreshTimer = setInterval(refreshLiveData, gaugePrefs.liveRefreshMs);
+  }
+}
+
+async function refreshLiveData() {
+  if (isLiveRequestBusy) {
+    return; // the last request hasn't come back yet - skip this turn
+  }
+  isLiveRequestBusy = true;
+  try {
+    const data = await fetchJson("/api/live");
+    if (data) {
+      const displayValue = (value) => (value ?? "--");
+      document.getElementById("speed").textContent = displayValue(data.speed);
+      document.getElementById("throttle").textContent = displayValue(data.throttle);
+      document.getElementById("rpm").textContent = displayValue(data.rpm);
+      document.getElementById("boost").textContent = displayValue(data.boost);
+      document.getElementById("coolantTemp").textContent = displayValue(data.coolantTemp);
+      document.getElementById("oilTemp").textContent = displayValue(data.oilTemp);
+      document.getElementById("lockTarget").textContent = displayValue(data.lockTarget);
+      document.getElementById("lockActual").textContent = displayValue(data.lockActual);
+      document.getElementById("engagementFill").style.width = `${data.lockActual ?? 0}%`;
+
+      // Same drawing as the full poll; the intro sweep owns the dials while it runs.
+      if (!introSweep.active) {
+        updateEngagementGauge(data.lockTarget ?? null, data.lockActual ?? null);
+      }
+      const traceNow = Date.now();
+      pushLockSample(data.lockTarget, data.lockActual, traceNow);
+      if (gaugePrefs.trace) renderLockTrace(traceNow);
+      if (!introSweep.active) updateTileGauges();
+      refreshTrace(data); // move the Expert map highlight too
+    }
+  } catch (error) {
+    console.log("Live data failed: " + error.message);
+  }
+  isLiveRequestBusy = false;
 }
 
 // initialise mode buttons
@@ -1366,6 +1432,10 @@ function initSettings() {
   if (p1Source) {
     p1Source.addEventListener("change", () => { saveSetting("volvoP1LockSource", parseInt(p1Source.value)); });
   }
+  const p1Gear = document.getElementById("volvoP1Gear");
+  if (p1Gear) {
+    p1Gear.addEventListener("change", () => { saveSetting("volvoP1Gear", parseInt(p1Gear.value)); });
+  }
   const p1Sliders = [
     { range: "volvoP1RoadSpeedRange", value: "volvoP1RoadSpeedValue", key: "volvoP1RoadSpeedKmh" },
     { range: "volvoP1TorqueFullRange", value: "volvoP1TorqueFullValue", key: "volvoP1TorqueFull" },
@@ -1382,9 +1452,10 @@ function initSettings() {
   const p1Reset = document.getElementById("volvoP1ResetBtn");
   if (p1Reset) {
     p1Reset.addEventListener("click", () => {
-      showVolvoP1Settings(VOLVO_P1_DEFAULTS.source, VOLVO_P1_DEFAULTS.roadSpeedKmh, VOLVO_P1_DEFAULTS.torqueFull, VOLVO_P1_DEFAULTS.slipFullKmh);
+      showVolvoP1Settings(VOLVO_P1_DEFAULTS.source, VOLVO_P1_DEFAULTS.roadSpeedKmh, VOLVO_P1_DEFAULTS.gear, VOLVO_P1_DEFAULTS.torqueFull, VOLVO_P1_DEFAULTS.slipFullKmh);
       saveSetting("volvoP1LockSource", VOLVO_P1_DEFAULTS.source);
       saveSetting("volvoP1RoadSpeedKmh", VOLVO_P1_DEFAULTS.roadSpeedKmh);
+      saveSetting("volvoP1Gear", VOLVO_P1_DEFAULTS.gear);
       saveSetting("volvoP1TorqueFull", VOLVO_P1_DEFAULTS.torqueFull);
       saveSetting("volvoP1SlipFullKmh", VOLVO_P1_DEFAULTS.slipFullKmh);
     });
@@ -3328,7 +3399,7 @@ const BACKUP_GENERAL_KEYS = [
   "extButtonForceMode", "extBtnForceModeValue", "forceModesPriority", "driveModeForce", "driveModeForceValues",
   "disableOnboardButton", "disableExternalButton",
   "followBrake", "invertBrake", "followHandbrake", "invertHandbrake", "followABS",
-  "volvoP1LockSource", "volvoP1RoadSpeedKmh", "volvoP1TorqueFull", "volvoP1SlipFullKmh",
+  "volvoP1LockSource", "volvoP1RoadSpeedKmh", "volvoP1Gear", "volvoP1TorqueFull", "volvoP1SlipFullKmh",
   "fixHunting", "dangerZoneEnabled", "esp14MinFloorPct", "bpkCeilingNm",
   "steeringScaleEnabled", "lockReleaseEnabled", "lockReleaseRatePerSec", "liveDiagEnabled", "ledBrightness",
   "slipWheelbaseMm", "slipTrackFrontMm", "slipTrackRearMm", "slipSteeringRatio",
@@ -3537,6 +3608,8 @@ const GAUGE_TILES = [
   { id: "throttle",         label: "Throttle",     min: 0, max: 100,  unit: "%" },
   { id: "rpm",              label: "RPM",          min: 0, max: 8000, unit: "rpm" },
   { id: "boost",            label: "Boost",        min: 0, max: 2500, unit: "mbar" },
+  { id: "coolantTemp",      label: "Coolant Temp", min: 0, max: 150,  unit: "°C" },
+  { id: "oilTemp",          label: "Oil Temp",     min: 0, max: 160,  unit: "°C" },
   { id: "haldexEngagement", label: "Engagement",   min: 0, max: 100,  unit: "%" },
   { id: "clutch1Report",    label: "Clutch 1",     min: 0, max: 255,  unit: "" },
   { id: "clutch2Report",    label: "Clutch 2",     min: 0, max: 255,  unit: "" },
@@ -3566,7 +3639,10 @@ const GAUGE_DEFAULTS = {
   tiles: ["speed", "throttle", "rpm", "boost"],
   engagement: true,
   trace: true,
+  liveRefreshMs: 500, // Live Data Refresh: 500 = same as the rest of the page (V11.00.4)
 };
+
+const LIVE_REFRESH_CHOICES = [500, 250, 200, 100]; // the rates offered in Display Options, in ms
 
 let gaugePrefs = loadGaugePrefs();
 
@@ -3579,6 +3655,7 @@ function loadGaugePrefs() {
         tiles: Array.isArray(p.tiles) ? p.tiles : GAUGE_DEFAULTS.tiles.slice(),
         engagement: p.engagement !== undefined ? !!p.engagement : GAUGE_DEFAULTS.engagement,
         trace: p.trace !== undefined ? !!p.trace : GAUGE_DEFAULTS.trace,
+        liveRefreshMs: LIVE_REFRESH_CHOICES.includes(p.liveRefreshMs) ? p.liveRefreshMs : GAUGE_DEFAULTS.liveRefreshMs,
       };
     }
   } catch (e) {
@@ -3588,6 +3665,7 @@ function loadGaugePrefs() {
     tiles: GAUGE_DEFAULTS.tiles.slice(),
     engagement: GAUGE_DEFAULTS.engagement,
     trace: GAUGE_DEFAULTS.trace,
+    liveRefreshMs: GAUGE_DEFAULTS.liveRefreshMs,
   };
 }
 
@@ -4254,6 +4332,15 @@ function initGaugeUI() {
       gaugePrefs.trace = traceCb.checked;
       saveGaugePrefs();
       applyGaugePrefs();
+    });
+  }
+  const liveRefreshSelect = document.getElementById("optLiveRefresh");
+  if (liveRefreshSelect) {
+    liveRefreshSelect.value = String(gaugePrefs.liveRefreshMs);
+    liveRefreshSelect.addEventListener("change", () => {
+      gaugePrefs.liveRefreshMs = Number(liveRefreshSelect.value);
+      saveGaugePrefs();
+      startLiveRefresh(); // switch to the new rate straight away
     });
   }
 

@@ -9,7 +9,7 @@
     <meta http-equiv="Expires" content="0">
 
     <title>OpenHaldex-C6</title>
-    <link rel="stylesheet" href="style.css?v=20261021">
+    <link rel="stylesheet" href="style.css?v=20261103">
 
     <!-- Favicons -->
     <link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png">
@@ -126,6 +126,17 @@
                         <div class="gauge-label">Boost</div>
                         <div class="gauge-value" id="boost">--</div>
                         <div class="gauge-unit">mbar</div>
+                    </div>
+                    <!-- V11.00.4: from PQ Kombi_2 (Gen1/2/4/0AY); "--" on cars that don't send it -->
+                    <div class="gauge">
+                        <div class="gauge-label">Coolant Temp</div>
+                        <div class="gauge-value" id="coolantTemp">--</div>
+                        <div class="gauge-unit">&deg;C</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Oil Temp</div>
+                        <div class="gauge-value" id="oilTemp">--</div>
+                        <div class="gauge-unit">&deg;C</div>
                     </div>
                 </div>
             </section>
@@ -360,6 +371,18 @@
                         <span class="toggle-label">Show lock-response graph</span>
                     </label>
                 </div>
+                <div class="cal-row" style="margin-top:12px;">
+                    <div class="cal-row-head">
+                        <span class="toggle-label">Live Data Refresh</span>
+                    </div>
+                    <select id="optLiveRefresh" class="input-select">
+                        <option value="500">Normal - twice a second</option>
+                        <option value="250">Fast - 4 times a second</option>
+                        <option value="200">Faster - 5 times a second</option>
+                        <option value="100">Fastest - 10 times a second</option>
+                    </select>
+                </div>
+                <p class="hint">How often the Live Data tiles, engagement gauge and lock graph update. The rest of the page stays at twice a second. Faster uses more of the controller's WiFi time, so step back down if the page gets sluggish.</p>
             </section>
         </div>
 
@@ -401,7 +424,7 @@
                         <option value="2">Both together</option>
                     </select>
                 </div>
-                <p class="hint">Engine torque: torque, pedal and rpm rise with the lock, like a full-throttle pull - in
+                <p class="hint">Engine torque: torque and pedal rise with the lock, like a full-throttle pull - in
                     the logs the module follows torque almost one-for-one. Wheel slip: the front wheels run faster than
                     the rears, like wheelspin, which sent it to full lock in the logs.</p>
 
@@ -413,6 +436,19 @@
                     <input type="range" id="volvoP1RoadSpeedRange" min="5" max="120" step="5" value="30" class="slider cal-slider">
                 </div>
                 <p class="hint">The speed sent on the rear wheels and the road speed. The module doesn't lock while stopped.</p>
+
+                <div class="cal-row">
+                    <div class="cal-row-head">
+                        <span class="toggle-label">Gear</span>
+                    </div>
+                    <select id="volvoP1Gear" class="input-select">
+                        <option value="1">1st (117 rpm per km/h)</option>
+                        <option value="2">2nd (66 rpm per km/h, recommended)</option>
+                        <option value="3">3rd (44 rpm per km/h)</option>
+                    </select>
+                </div>
+                <p class="hint">The engine rpm sent is the road speed in this gear, so the two always match a real gear
+                    (ratios measured from the V50 logs). 30 km/h in 2nd is about 2,000 rpm.</p>
 
                 <div class="cal-row">
                     <div class="cal-row-head">
@@ -1056,6 +1092,10 @@
             <section class="card">
                 <h2>Frame Editing (Advanced)</h2>
                 <p class="hint">Choose which frames are edited in normal mode. Unticked frames pass through untouched. Saved immediately, current generation only.</p>
+                <p class="hint" id="frameEditP1Hint" style="display:none;">Volvo P1 in Standalone: a ticked frame is
+                    made up by the controller, an unticked one is the car's own frame passed through. Untick them all and
+                    the module sees the real car; then tick them back one at a time on a drive to find the one it won't
+                    accept. Follow Brake / Follow Handbrake only reach the module through the controller's own frames.</p>
                 <div id="frameEditList" class="frame-edit-list">
                     <p class="hint">Not available for this generation.</p>
                 </div>
@@ -1287,7 +1327,7 @@
             </section>
         </div>
 
-        <script src="./app.js?v=20261021" type="text/javascript"></script>
+        <script src="./app.js?v=20261103" type="text/javascript"></script>
         <!-- The device now serves app.js/style.css with Cache-Control: no-cache
              (ETag revalidation), so this ?v= no longer needs bumping. It was
              changed once to escape the year-long cache older builds handed out. -->

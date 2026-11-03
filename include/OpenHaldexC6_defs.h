@@ -291,6 +291,10 @@ extern bool received_kl15;          // MQB ZAS_Kl_15 (ignition on), from Klemmen
 extern uint32_t lastKl15Ms;         // millis() of the last Klemmen_Status_01; 0 = never seen
 bool ignitionOn();                  // KL15 on and fresh; false when unknown
 extern uint16_t received_vehicle_boost;
+extern float receivedCoolantTemp;   // engine coolant temperature in degC, from PQ Kombi_2 (0x420) byte 4 (V11.00.4)
+extern float receivedOilTemp;       // engine oil temperature in degC, from PQ Kombi_2 (0x420) byte 3 (V11.00.4)
+extern uint32_t lastKombi2Ms;       // millis() of the last Kombi_2 frame; 0 = never seen
+#define KOMBI2_TIMEOUT_MS 2000      // no Kombi_2 for this long = temperatures unknown, shown as "--"
 extern uint8_t haldexGeneration;
 
 // ===== Volvo / SAAB Haldex generations (added V10.00.0) =====
@@ -306,11 +310,12 @@ bool isVolvoOrSaabGeneration(uint8_t generation); // true for any of the six abo
 // ===== Volvo P1 standalone lock (V11.00.1) =====
 // How the lock % is shown to the P1 AWD module in standalone. Set from the
 // Settings page (Volvo P1 Standalone card), saved, and in backups.
-#define VOLVO_P1_SOURCE_TORQUE 0 // engine torque + pedal + rpm rise with the lock (like a full-throttle pull - what the module follows in the logs)
+#define VOLVO_P1_SOURCE_TORQUE 0 // engine torque + pedal rise with the lock (like a full-throttle pull - what the module follows in the logs)
 #define VOLVO_P1_SOURCE_SLIP 1   // front wheels run faster than the rears as the lock rises (like wheelspin)
 #define VOLVO_P1_SOURCE_BOTH 2   // both at once
 extern uint8_t volvoP1LockSource;   // setting: one of the three above (default torque)
 extern uint8_t volvoP1RoadSpeedKmh; // setting: road / rear wheel speed sent in standalone, km/h (default 30; the module never locked while stopped)
+extern uint8_t volvoP1Gear;         // setting: gear the engine rpm is worked out for, 1-3 (default 2: 30 km/h = ~2000 rpm)
 extern uint16_t volvoP1TorqueFull;  // setting: engine torque counts above zero sent at 100 % lock (default 600)
 extern uint8_t volvoP1SlipFullKmh;  // setting: how much faster the front wheels run at 100 % lock, km/h (default 10)
 // What standalone sent last and what came back - shown live on the settings card

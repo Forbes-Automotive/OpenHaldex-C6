@@ -195,6 +195,36 @@ static void applyBrakeHandbrakeCANOverride(twai_message_t &m)
   }
 }
 
+// Volvo P1 standalone (V11.00.1): should this car frame be passed through to the
+// AWD module? Yes when it's one of the 22 P1 frames and its frame-edit block is
+// switched OFF - then standalone isn't sending its own copy, so the car's real
+// one goes instead. Lets the frames be swapped one at a time between "ours" and
+// "the car's" on a drive, to find which of ours the module won't accept.
+// Every other car frame (block on, or not one of the 22) is not passed.
+static bool volvoP1PassCarFrame(const twai_message_t &frame)
+{
+  if (haldexGeneration != GEN_VOLVO_P1)
+  {
+    return false; // only the P1 works this way
+  }
+  if (!frame.extd)
+  {
+    return false; // every P1 frame has a 29-bit ID
+  }
+  for (uint16_t i = 0; i < frameEditBlockCount; i++)
+  {
+    if (frameEditBlocks[i].genIdx == FE_GEN_VOLVO_P1 && frameEditBlocks[i].canId == frame.identifier)
+    {
+      if (frameEditEnabled(FE_GEN_VOLVO_P1, frameEditBlocks[i].bit))
+      {
+        return false; // block on: standalone sends its own, so the car's is held back
+      }
+      return true; // block off: the car's own frame goes through
+    }
+  }
+  return false; // not one of the 22 P1 frames
+}
+
 // Which CAN bus speed a Haldex generation needs. Volvo P2 cars before the 2005
 // facelift run their fast CAN bus at 250 kbit/s; everything else is 500 kbit/s.
 uint16_t canSpeedForGeneration(uint8_t generation)
@@ -714,6 +744,21 @@ void parseCAN_chs(void *arg)
           }
           break;
 
+        case mKombi_2:
+          // PQ Kombi_2 (0x420) - instrument cluster broadcast (vw_pq.dbc):
+          //   SG_ Oeltemperatur_4_1                 : 24|8@1+ (1,-60)    -> byte 3, oil temp = raw - 60 degC
+          //   SG_ Kuehlmitteltemp__4_1__Kombi_2_    : 32|8@1+ (0.75,-48) -> byte 4, coolant = raw x 0.75 - 48 degC
+          // Shown on the dashboard's Live Data card (V11.00.4). Gated to the PQ
+          // generations like Kombi_1 below: other platforms use 0x420 for other things.
+          if ((haldexGeneration == 1 || haldexGeneration == 2 || haldexGeneration == 4 || haldexGeneration == 51) &&
+              rx_message_chs.data_length_code >= 5)
+          {
+            receivedOilTemp = rx_message_chs.data[3] - 60.0f;             // byte 3: oil temp
+            receivedCoolantTemp = rx_message_chs.data[4] * 0.75f - 48.0f; // byte 4: coolant temp
+            lastKombi2Ms = millis();                                      // remember when, so old values go to "--"
+          }
+          break;
+
         case mKombi_1:
           // PQ Kombi_1 (0x320) - instrument cluster broadcast.
           // PQ35/46 K-matrix (V5.20.6F), message mKombi_1 0x320:
@@ -1030,6 +1075,13 @@ void parseCAN_chs(void *arg)
           tx_message_hdx.data_length_code = rx_message_chs.data_length_code;
           canTransmit(twai_bus_1, &tx_message_hdx);
           break;
+        }
+
+        // Volvo P1: a frame whose block is switched off goes through from the car
+        if (volvoP1PassCarFrame(rx_message_chs))
+        {
+          tx_message_hdx = rx_message_chs; // the car's frame exactly as it came in
+          canTransmit(twai_bus_1, &tx_message_hdx);
         }
         continue;
       }

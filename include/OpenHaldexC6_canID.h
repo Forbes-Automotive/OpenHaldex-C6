@@ -316,14 +316,20 @@
 #define VOLVO_P1_HALDEX_ID        0x1960000A // 20 ms, from the AWD module: b6 bits 0-1 + b7 = engagement (10-bit), b5 = status
 #define VOLVO_P1_ENGAGEMENT_FULL_SCALE 540   // ** CAN CHANGE THIS ** engagement count shown as 100 % (the ceiling in the full pull and the wheelspin logs)
 // Standalone: how the lock % is shown to the module is chosen on the Settings page
-// (Volvo P1 Standalone card: Lock Source, Road Speed, Torque at 100 %, Front Wheel
-// Slip at 100 % - saved settings, see volvoP1* in defs.h). In the logs the module
+// (Volvo P1 Standalone card: Lock Source, Road Speed, Gear, Torque at 100 %, Front
+// Wheel Slip at 100 % - saved settings, see volvoP1* in defs.h). In the logs the module
 // follows engine torque almost 1:1 (about 1 count of engagement per count of
 // torque, 100-400 ms behind) and goes to full on big front wheelspin. It never
 // locked while stopped, so the road speed is never 0.
 #define VOLVO_P1_PEDAL_FULL 231       // ** CAN CHANGE THIS ** pedal byte at 100 % lock (full throttle in the pull log; 0 at 0 %)
-#define VOLVO_P1_RPM_AT_ZERO 2000     // ** CAN CHANGE THIS ** rpm at 0 % lock (the drive log at 30 km/h)
-#define VOLVO_P1_RPM_FULL 4500        // ** CAN CHANGE THIS ** rpm at 100 % lock
+// Engine rpm = Road Speed x the Gear setting's ratio, so rpm and road speed always
+// match a real gear (a made-up pair looks like a slipping clutch). Ratios are rpm
+// per km/h, measured from the V50 logs under load (25 Oct 2026 histogram of every
+// frame above 8 km/h): three clean peaks. 4th and up were never logged (87 km/h max).
+#define VOLVO_P1_RPM_PER_KMH_GEAR1 117 // ** CAN CHANGE THIS ** 1st gear, rpm per km/h (logs: 116-118)
+#define VOLVO_P1_RPM_PER_KMH_GEAR2 66  // ** CAN CHANGE THIS ** 2nd gear, rpm per km/h (logs: 65-66; 30 km/h = ~2000 rpm, as in Drive.csv at 56.9 s)
+#define VOLVO_P1_RPM_PER_KMH_GEAR3 44  // ** CAN CHANGE THIS ** 3rd gear, rpm per km/h (logs: 43-44)
+#define VOLVO_P1_RPM_MAX 6500          // ** CAN CHANGE THIS ** rpm never sent higher than this (the pull log topped out at ~5,600)
 #define VOLVO_P1_STEER_CHECK_BASE 0x02 // 0x0340412E byte 3 = this - (byte 0 nibbles swapped + byte 1 bit 7 + bytes 4-7), with byte 0 bit 6 clear (0x04 when set). Fits all 26,820 logged frames
 #define VOLVO_P1_LEARN_SETTLE_MS 600  // ** CAN CHANGE THIS ** Learn: wait this long at each step (engagement trails torque by 100-400 ms in the logs; other generations use 400)
 

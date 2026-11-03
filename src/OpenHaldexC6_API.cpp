@@ -103,6 +103,66 @@ static void parseJSON(AsyncWebServerRequest *request, uint8_t *data, size_t len,
     }
 }
 
+// Add the engine coolant and oil temperatures (PQ Kombi_2) to a reply, in whole degC.
+// null (shown as "--") when no Kombi_2 has come in for 2 s, or never - so MQB and
+// the other makes, which don't send it, show "--".
+static void addEngineTemps(JsonDocument &data)
+{
+    uint32_t lastSeenMs = lastKombi2Ms; // copy first, then read the clock (the CAN task can change it)
+    bool isKombi2Fresh = false;
+    if (lastSeenMs != 0 && (millis() - lastSeenMs) <= KOMBI2_TIMEOUT_MS)
+    {
+        isKombi2Fresh = true;
+    }
+
+    if (isKombi2Fresh)
+    {
+        data["coolantTemp"] = (int)lroundf(receivedCoolantTemp); // lroundf = round to the nearest whole number (works below zero too)
+        data["oilTemp"] = (int)lroundf(receivedOilTemp);
+    }
+    else
+    {
+        data["coolantTemp"] = nullptr;
+        data["oilTemp"] = nullptr;
+    }
+}
+
+// GET /api/live (V11.00.4) - only the dashboard's Live Data tiles and the lock.
+// Much smaller than /api/dashboard, so the page can ask for it up to 10 times a
+// second (Display Options > Live Data Refresh) without loading the controller.
+static void liveOutgoing(AsyncWebServerRequest *request)
+{
+    JsonDocument data;
+
+    if (hasCANChassis) // chassis CAN ok: send the car's values
+    {
+        data["speed"] = received_vehicle_speed;
+        data["throttle"] = int(received_pedal_value);
+        data["rpm"] = received_vehicle_rpm;
+        data["boost"] = received_vehicle_boost;
+    }
+    else // chassis CAN not ok: null (shown as "--")
+    {
+        data["speed"] = nullptr;
+        data["throttle"] = nullptr;
+        data["rpm"] = nullptr;
+        data["boost"] = nullptr;
+    }
+    addEngineTemps(data);
+
+    data["lockTarget"] = int(lock_target);
+    if (hasCANHaldex) // Haldex CAN ok: what the Haldex reports back
+    {
+        data["lockActual"] = received_haldex_engagement;
+    }
+    else
+    {
+        data["lockActual"] = nullptr;
+    }
+
+    sendJSON(request, 200, data);
+}
+
 // parse the current INCOMING request for status: WebServer asks, this delivers
 static void statusOutgoing(AsyncWebServerRequest *request)
 {
@@ -162,6 +222,7 @@ static void statusOutgoing(AsyncWebServerRequest *request)
         data["rpm"] = nullptr;
         data["boost"] = nullptr;
     }
+    addEngineTemps(data); // coolant / oil temp from PQ Kombi_2 (V11.00.4)
 
     data["brakeIn"] = brakeSignalActive;
     data["brakeOut"] = brakeActive;
@@ -558,6 +619,7 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
     // Volvo P1 standalone lock (V11.00.1) - the Volvo P1 Standalone card
     data["volvoP1LockSource"] = volvoP1LockSource;     // 0 engine torque, 1 wheel slip, 2 both
     data["volvoP1RoadSpeedKmh"] = volvoP1RoadSpeedKmh; // km/h
+    data["volvoP1Gear"] = volvoP1Gear;                 // 1-3, the gear the rpm is worked out for
     data["volvoP1TorqueFull"] = volvoP1TorqueFull;     // torque counts at 100 %
     data["volvoP1SlipFullKmh"] = volvoP1SlipFullKmh;   // km/h at 100 %
 
@@ -856,6 +918,10 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
     {
         volvoP1RoadSpeedKmh = (uint8_t)constrain((int)data["volvoP1RoadSpeedKmh"], 5, 120); // never 0: the module won't lock while stopped
     }
+    if (data["volvoP1Gear"].is<int>())
+    {
+        volvoP1Gear = (uint8_t)constrain((int)data["volvoP1Gear"], 1, 3); // only 1st-3rd were in the logs
+    }
     if (data["volvoP1TorqueFull"].is<int>())
     {
         volvoP1TorqueFull = (uint16_t)constrain((int)data["volvoP1TorqueFull"], 0, 1000); // 12-bit field, 2048 = 0, so up to +1000 is safe
@@ -1148,6 +1214,9 @@ void setupAPI()
                  {
                      otaNoteWebActivity(); // a browser is on the UI - hold WiFi up even if it came in via the home router
                      statusOutgoing(request); });
+
+    // GET /api/live - just the Live Data tiles and the lock, for the faster refresh (V11.00.4)
+    webServer.on("/api/live", HTTP_GET, liveOutgoing);
 
     // GET /api/uds/read - UDS read-by-identifier helper
     webServer.on("/api/uds/read", HTTP_GET, [](AsyncWebServerRequest *request)

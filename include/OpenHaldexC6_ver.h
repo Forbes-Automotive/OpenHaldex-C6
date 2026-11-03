@@ -2,7 +2,7 @@
 #include <OpenHaldexC6_defs.h>
 
 // Current firmware version
-#define FW_VERSION "11.00.1" // also bump data/version.json ("fs")
+#define FW_VERSION "11.00.4" // also bump data/version.json ("fs")
 
 /*
 Version Control:
@@ -529,6 +529,59 @@ V11.00.1 - (beta, 2026-10-24) Volvo P1 (S40 / V50 AWD), generation 31 - "Generat
           6, so saved settings line up with V12. Older saves keep their choices -
           the loader now reads saves with fewer generations. Block CAN IDs are
           32-bit now (Volvo's 29-bit IDs didn't fit).
+
+V11.00.2 - (beta, 2026-10-29) bus sleep + OTA fixes (PR #56 / #57, Luca C), and the
+          Volvo P1 work from after the first car test (2026-10-25 - not in the
+          published V11.00.1).
+        - 0x6B0 broadcast no longer keeps the car awake (PR #56): it went out every
+          200 ms on every unit, whatever "Broadcast over CAN" was set to, so with
+          the car locked the drivetrain ECUs kept seeing traffic and never slept
+          (seen on an Audi S1 gen 51 for hours). Now it only goes out with the
+          setting on AND the Haldex heard from in the last 5 s
+          (BROADCAST_HALDEX_QUIET_MS). The MQB steering wheel controller already
+          needs the setting on for 0x6A0, so it's unaffected.
+        - OTA safety check once per upload, not on every chunk (PR #57): one flicker
+          of speed / bus fault / temp in the car aborted the firmware upload, and
+          wiped the web UI on a filesystem upload (unit left on the recovery
+          page). The restart at the end is still checked: if the car isn't safe
+          then, the new firmware is kept and starts at the next power-on. (Known:
+          the OTA page then says "Rolled back" - the message is wrong, the
+          firmware is fine.)
+        - Volvo P1 frame bisect: in Standalone, a P1 frame-edit block switched OFF now passes
+          the CAR's own frame with that ID to the module, instead of sending nothing.
+          All off = the module sees the real car; tick ours back one at a time on a
+          drive to find the one it won't accept (the module ignored our lock request).
+        - Gear: the rpm sent is now Road Speed x a real gear ratio (new Gear setting,
+          1st 117 / 2nd 66 / 3rd 44 rpm per km/h from the V50 logs, default 2nd) and
+          no longer rises with the lock. 4500 rpm at 30 km/h matched no gear - like a
+          slipping clutch. VOLVO_P1_RPM_AT_ZERO / _FULL replaced by the ratios.
+        - Smaller Espressif libraries (custom_sdkconfig, see V11.00.1) are really in
+          use from this release: the published V11.00.1 was built with the stock
+          libraries, and the smaller build stopped in esp-modbus because
+          CONFIG_LWIP_MAX_SOCKETS / CONFIG_BT_NIMBLE_MAX_CONNECTIONS were -D build
+          flags as well. Both moved into custom_sdkconfig, so the libraries now
+          really get 8 sockets (stock 16) and 2 BLE links (stock 3) - before, only
+          our own code saw those numbers. Bench-test WiFi, OTA from GitHub, BLE.
+
+V11.00.3 - (beta, 2026-10-30) contributor merges from main (PR #58 / #60 / #61, Luca C).
+        - Web UI stored gzipped (PR #58): tools/gzip_webui.py runs before the build and
+          packs a gzipped copy of data/ (in the build folder - data/ itself is never
+          changed) into littlefs.bin. The web server sends "index.html.gz" whenever
+          "index.html" isn't there, so the UI works the same, takes less flash and
+          loads faster over WiFi. version.json stays plain (the firmware reads it).
+          fsUiAvailable() now accepts either form, so the recovery page doesn't
+          show by mistake.
+        - OTA "Release source" (PR #61): lets a fork's build offer a way back to the
+          official releases. UPD_FORK is null here, so nothing changes on screen.
+        - tools/can_capture.py (PR #60) now on main as well (already in this folder).
+
+V11.00.4 - (unreleased) engine temperatures and a faster Live Data refresh.
+        - Coolant Temp and Oil Temp tiles on the dashboard's Live Data card, read from
+          PQ Kombi_2 (0x420): oil = byte 3 - 60 degC, coolant = byte 4 x 0.75 - 48 degC.
+          Gen1 / Gen2 / Gen4 / 0AY only (the PQ cars); "--" after 2 s without the frame.
+        - Live Data Refresh (Display Options): the Live Data tiles, engagement gauge and
+          lock graph can update 4, 5 or 10 times a second from a new small /api/live
+          reply. The rest of the dashboard stays at twice a second. Default unchanged.
 
 */
 
