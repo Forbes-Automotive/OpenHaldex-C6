@@ -39,12 +39,16 @@ DEFAULT_HOST = "192.168.1.1"  # the controller's own access point
 # Keep in sync with BACKUP_GENERAL_KEYS in data/app.js (the web UI's restore list).
 BACKUP_GENERAL_KEYS = [
     "haldexGeneration", "isStandalone", "useCANifAvailable", "broadcastOpenHaldexOverCAN", "disableController",
+    "espNowEnabled", "espNowControl", "canRelay",
     "disengageUnderSpeed", "disengageAboveSpeed", "disableThrottle",
     "tcForceMode", "tcForceModeValue", "hazardForceMode", "hazardForceModeValue",
-    "extButtonForceMode", "extBtnForceModeValue", "disableOnboardButton", "disableExternalButton",
-    "followBrake", "invertBrake", "followHandbrake", "invertHandbrake",
+    "extButtonForceMode", "extBtnForceModeValue", "forceModesPriority", "driveModeForce", "driveModeForceValues",
+    "disableOnboardButton", "disableExternalButton",
+    "followBrake", "invertBrake", "followHandbrake", "invertHandbrake", "followABS",
+    "volvoP1LockSource", "volvoP1RoadSpeedKmh", "volvoP1Gear", "volvoP1TorqueFull", "volvoP1SlipFullKmh",
     "fixHunting", "dangerZoneEnabled", "esp14MinFloorPct", "bpkCeilingNm",
     "steeringScaleEnabled", "lockReleaseEnabled", "lockReleaseRatePerSec", "liveDiagEnabled", "ledBrightness",
+    "slipWheelbaseMm", "slipTrackFrontMm", "slipTrackRearMm", "slipSteeringRatio",
     "canSleepEnabled", "canSleepAggressive", "benchMode", "lpWakeThresholdFps",
     "longLearnNotes", "bleEnabled",
 ]

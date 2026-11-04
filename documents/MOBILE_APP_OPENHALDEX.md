@@ -65,11 +65,17 @@ Info `haldexGeneration` values:
 | Value | Platform |
 |---|---|
 | `1`, `2`, `4` | VW PQ |
-| `41` | GM/SAAB Gen4 |
+| `3` | Volvo P2 Gen3 (facelift), from V10.00.0 |
+| `21` | Volvo P2 Gen2 (pre-facelift, CAN at 250 kbit/s), from V10.00.0 |
+| `31` | Volvo P1 (S40 / V50 AWD), from V11.00.1 |
+| `41` | GM Gen4 (Vauxhall / Opel) |
 | `42` | Ford |
+| `43` | Volvo Gen4 (P3), from V10.00.0 |
+| `44` | SAAB 9-3 XWD Gen4, from V10.00.0 |
 | `50` | Gen5 MQB 0CQ |
 | `51` | Gen5 PQ 0AY |
 | `52` | Gen5 MQB 0CQ VAQ |
+| `53` | Volvo Gen5 SPC 31380867, from V11.00.0 |
 
 Device Information Service `0x180A` (read):
 

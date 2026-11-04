@@ -8,6 +8,11 @@
 # JavaScript can break - and data/ itself is never touched.
 #
 # version.json stays plain: the firmware reads it directly (readFsVersion).
+# index.html and app.js stay plain too (V11.00.4 fix): firmware V11.00.2 and
+# older checks the uploaded web UI for exactly "/index.html" and "/app.js"
+# (no .gz), and the guided OTA flashes the web UI BEFORE the firmware - so a
+# gzipped image was rejected and wiped, and the unit fell to the recovery
+# page (500 on OTA from V11.00.1). Costs ~200 KB of flash; still fits.
 # Images are already compressed, so they are copied as they are.
 import gzip
 import os
@@ -16,7 +21,7 @@ import shutil
 Import("env")  # noqa: F821  (provided by PlatformIO/SCons)
 
 COMPRESS = (".html", ".js", ".css", ".json", ".svg", ".webmanifest", ".txt")
-KEEP_PLAIN = {"version.json"}
+KEEP_PLAIN = {"version.json", "index.html", "app.js"}  # files the firmware (old or new) looks for by name
 
 src = env.subst("$PROJECT_DATA_DIR")  # noqa: F821
 out = os.path.join(env.subst("$BUILD_DIR"), "data_gz")  # noqa: F821
