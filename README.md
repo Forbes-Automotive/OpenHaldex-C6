@@ -116,7 +116,7 @@ This is the original source of Generation 2, 4 (including GM) and 5 logic - any 
 > The Volvo and SAAB generations are new in V10 and standalone only for now. See [Volvo & SAAB](#volvo--saab-early-support).
 
 > [!WARNING]
-> V11 changes the bytes that set the lock on Gen1, Gen2, Gen4, Gen5 0CQ and Gen5 0AY, so the saved learned table is cleared when you update. **Run Learn Haldex again after updating to V11.** Frame-editing masks still on the old defaults move to the new ones by themselves.
+> V11 changes the bytes that set the lock on Gen1, Gen2, Gen4, Gen5 0CQ and Gen5 0AY, so the saved learned table is cleared when you update. **Run Learn Haldex again after updating to V11.** Frame-editing masks still on the old defaults move to the new ones by themselves. 11.00.4 switches the frame edits V10 had on back on in OEM mode (Gen1, Gen2, Gen4, 0CQ and 0AY; a VAQ keeps its saved choice) and clears the learn table once more on those generations: run Learn again after updating to 11.00.4.
 
 ---
 
@@ -462,7 +462,7 @@ If the Wi‑Fi interface becomes unresponsive:
 
 - Long‑press the `Mode` button to clear the WiFi password and restart the AP to an open state.
 
-> The Web UI is built on Forbes Automotive's shared dark theme (the same look used across the Can2Cluster, SpeedPulser, SpeedPulserPro, can2rpm, MQB Steering Wheel Controller and AirLift Controller firmware), so the interface and status conventions stay consistent across the whole product line. Current firmware version: **11.00.4** (unreleased: coolant and oil temperature on the Live Data card, faster Live Data refresh; 11.00.3 beta: bus sleep and OTA fixes, Volvo P1 frame bisect and gear-matched rpm, web UI stored gzipped), shown in the UI footer and at `/ota/info`.
+> The Web UI is built on Forbes Automotive's shared dark theme (the same look used across the Can2Cluster, SpeedPulser, SpeedPulserPro, can2rpm, MQB Steering Wheel Controller and AirLift Controller firmware), so the interface and status conventions stay consistent across the whole product line. Current firmware version: **11.00.4** (unreleased: coolant and oil temperature on the Live Data card, faster Live Data refresh, OEM-mode lock back to V10 behaviour on Gen1, Gen2, Gen4, 0CQ and 0AY (the car's brake bits no longer cut the lock), OTA from 11.00.2 and older fixed; 11.00.3 beta: bus sleep and OTA fixes, Volvo P1 frame bisect and gear-matched rpm, web UI stored gzipped), shown in the UI footer and at `/ota/info`.
 
 ---
 
@@ -787,7 +787,7 @@ This is the recommended method for most users.
 Once a controller is already running firmware **8.00.0 or later**, it can also be updated wirelessly over its own Wi‑Fi AP instead of by USB. This is a **two‑step process**, because the filesystem (web UI) and the firmware (application code) live on separate flash partitions and are updated independently:
 
 1. **Step 1 — Filesystem update** (`POST /ota/update/fs`, uploads `littlefs.bin`)  
-   Updates `index.html`, `app.js`, `style.css` and other web assets. From 11.00.3 these are stored gzipped in `littlefs.bin` (packed at build time by `tools/gzip_webui.py`), so the image is smaller and the pages load faster; the browser unpacks them, nothing changes on screen. The device does **not** reboot after this step — it's meant to be followed immediately by Step 2.
+   Updates `index.html`, `app.js`, `style.css` and other web assets. From 11.00.3 most of these are stored gzipped in `littlefs.bin` (packed at build time by `tools/gzip_webui.py`), so the image is smaller and the pages load faster; the browser unpacks them, nothing changes on screen. From 11.00.4, `index.html` and `app.js` stay uncompressed so that units still on 11.00.2 or older (which look for those exact files) accept the update. The device does **not** reboot after this step — it's meant to be followed immediately by Step 2.
 2. **Step 2 — Firmware update** (`POST /ota/update`, uploads `firmware.bin`)  
    Updates the application itself. The device reboots automatically once the upload finishes.
 
@@ -992,9 +992,13 @@ This is useful for **understanding** which edited frame upsets a Haldex learn pr
 
 ## PCB & Enclosure
 
-Gerber files and enclosure designs are available in the **PCB** folder.  You can use these to get your own units if you wish.
+Gerber files are in the **PCB** folder and enclosure designs are in the **Enclosure** folder.  You can use these to get your own units if you wish.
 
 Pinout and functionality remain consistent across supported enclosure versions.
+
+The V3 enclosure is a shell and base, held together by 4 × M3 × 10 button head screws that go up through the base and PCB into M3 heat-set inserts in the shell. The mount clip is optional: the finished box snaps into it, and the clip fixes to the car through two 5.5 mm (M5) holes.
+
+![OpenHaldex-C6 V3 enclosure assembly: button pin, shell, PCB, base, screws and the optional mount clip coming together](/Images/enclosure-assembly.gif)
 
 ![OpenHaldex-C6](/Images/BoardTop.png)
 ![OpenHaldex-C6](/Images/BoardBottom.png)
