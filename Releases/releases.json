@@ -3,6 +3,23 @@
   "latest": "9.00.6",
   "releases": [
     {
+      "version": "11.00.5",
+      "channel": "beta",
+      "date": "2026-11-07",
+      "ota": true,
+      "notes": "Volvo Gen4 (P3) rewritten from a real Haldex on the bench: 29-bit frames, the CEM configuration page that stops fault 0x0015 / limp, proportional lock from wheel speed and engine rpm, Standalone and OEM mode (mode buttons, Expert and Learn as on the VAG units), road speed, ABS and brake decoded from the car. New Fault Codes card on Diagnostics: read and clear the Haldex module's own codes over UDS (Gen5), KWP2000 / TP2.0 (Gen2 / Gen4) and Volvo D2 (Volvo P2 / P3). Volvo P3 owners: run Learn Haldex once.",
+      "firmware": {
+        "path": "V11.00.5/firmware.bin",
+        "size": 1538496,
+        "sha256": "3739f7d4e8ab851916976b7ed028d7907b9a96a5f9c4d0eb1a116adefe8b5687"
+      },
+      "filesystem": {
+        "path": "V11.00.5/littlefs.bin",
+        "size": 458752,
+        "sha256": "b7afd84f289433bb93c125e6759fb9862b6c4a6fdfd3d361bbbb73e8c6601916"
+      }
+    },
+    {
       "version": "11.00.4",
       "channel": "beta",
       "date": "2026-11-03",

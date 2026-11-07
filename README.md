@@ -60,6 +60,7 @@ It can operate using OEM CAN signals or it is able to run in Standalone mode - w
 - [DashCAN App (Bluetooth)](#dashcan-app-bluetooth)
 - [CAN Sniffing](#can-sniffing-savvycan--gvret)
 - [Live Diagnostics](#live-diagnostics)
+- [Fault Codes](#fault-codes)
 - [Frame Editing](#frame-editing-addingremoving-can-signals)
 - [PCB & Enclosure](#pcb--enclosure)
 - [Acknowledgements](#acknowledgements)
@@ -81,10 +82,12 @@ It can operate using OEM CAN signals or it is able to run in Standalone mode - w
 - Adjustable LED brightness
 - Live Data on the dashboard: speed, throttle, RPM, boost, plus engine coolant and oil temperature on the PQ cars (Gen1 / Gen2 / Gen4 / 0AY, from the cluster's Kombi_2 frame), updating up to 10 times a second (**Live Data Refresh** under Display Options)
 - Live diagnostics: UDS (Gen5) and KWP2000‑over‑TP2.0 (Gen2/Gen4) with measurement scaling confirmed against VCDS
+- Read and clear the Haldex module's own fault codes from the Diagnostics page: UDS (Gen5), KWP2000 over TP2.0 (Gen2 / Gen4) and Volvo D2 (Volvo P2 / P3) (see [Fault Codes](#fault-codes))
 - Selectable CAN frames — enable/disable CAN messages per Generation from the Web UI
 - CAN frame relay to can2gauge gauges over WiFi (ESP-NOW): a gauge with power only, no CAN wire, reads the car as if it were wired (**Relay CAN Frames to Gauges** under Controller Options, off by default)
-- Speed, throttle, RPM, brake and handbrake read from the car on Vauxhall / Opel Insignia, Ford Focus RS and Volvo P3 too, so Expert mode works on them (see [Chassis Signals](#chassis-signals-non-vw-cars))
-- Early Volvo (P2 Gen2 / Gen3, P1 S40 / V50, Gen4, Gen5 SPC) and SAAB 9-3 XWD standalone support, with the CAN bus switched to 250 kbit/s automatically for the pre-facelift P2 (see [Volvo & SAAB](#volvo--saab-early-support))
+- Speed, throttle, RPM, brake and handbrake read from the car on Vauxhall / Opel Insignia, Ford Focus RS, Volvo P1 and Volvo P3 too, so Expert mode works on them (see [Chassis Signals](#chassis-signals-non-vw-cars))
+- Volvo Gen4 (P3) proven on a real Haldex on the bench (V11.00.5): no fault codes, proportional lock, Standalone and OEM mode, mode buttons and Learn (see [Volvo P3](#volvo-gen4-p3--bench-proven-v11005))
+- Early Volvo (P2 Gen2 / Gen3, P1 S40 / V50, Gen5 SPC) and SAAB 9-3 XWD standalone support, with the CAN bus switched to 250 kbit/s automatically for the pre-facelift P2 (see [Volvo & SAAB](#volvo--saab-early-support))
 - Every generation checked against the Haldex units' own code (V11): the bytes that really set the lock, what the unit reports back, and its own fault bits, in OEM and Standalone
 - The Haldex's own warnings (fault, limp, over-temperature, AWD lamp, temperature sensor, stored fault) on a red **Haldex Warning** card, plus Haldex Data tiles on the dashboard
 - **Follow ABS** (on by default): opens the clutch while the ABS is braking, as the Haldex itself would
@@ -148,7 +151,7 @@ These two high‑side drivers for brake/handbrake could be repurposed for other 
 - Generation 2 - Volvo P2, pre-facelift (early support)
 - Generation 3 - Volvo P2, facelift (early support)
 - Generation 3 - Volvo P1, S40 / V50 AWD (early support)
-- Generation 4 - Volvo P3 (early support)
+- Generation 4 - Volvo P3 (bench-proven on a real unit, Standalone + OEM)
 - Generation 4 - SAAB 9-3 XWD (early support)
 - Generation 5 - Volvo SPC 31380867 (early support)
 
@@ -160,13 +163,13 @@ Expert mode, the speed / throttle limits and brake / handbrake follow need speed
 |---|---|---|---|---|---|
 | Generation 4 - GM (Vauxhall / Opel) | Yes | Yes | Yes | Yes | Yes |
 | Generation 4 - Ford | Yes | Yes | Yes | Yes | Yes |
-| Generation 4 - Volvo (P3) | Yes | Yes | Yes | Yes | Not yet |
+| Generation 4 - Volvo (P3) | Yes | Yes (scale to confirm) | Yes | Yes | Not yet |
 | Generation 4 - SAAB 9-3 XWD | Yes | Not yet | Yes | Not yet | Yes |
 | Generation 2 - Volvo P2 (Pre-Facelift) | 2002 cars | 2002 cars | 2002 cars | 2002 cars | Not yet |
 | Generation 3 - Volvo P2 (Facelift) | Not yet | Not yet | Not yet | Not yet | Not yet |
 | Generation 3 - Volvo P1 (S40 / V50) | Yes | Yes | Yes | Yes | Yes |
 
-The Insignia, Focus RS, 2002 Volvo P2 and Volvo P1 decodes are checked against real logs from those cars (the P1's speed scale still needs a check against the speedo). The SAAB 9-3 decode comes from a published decode of a real car. The Volvo P3 decode isn't confirmed on a car yet.
+The Insignia, Focus RS, 2002 Volvo P2 and Volvo P1 decodes are checked against real logs from those cars (the P1's speed scale still needs a check against the speedo). The SAAB 9-3 decode comes from a published decode of a real car. The Volvo P3 decode (V11.00.5) is read from the 29-bit frames the P3 Haldex really uses: engine rpm and the brake switch from `0x0080401E`, the pedal from `0x0062401E`, road speed from the rear wheels of `0x10004002` (1/64 km/h, cross-checked three ways), ABS braking (for **Follow ABS**) from the same frame, and the steering angle from `0x11600002` (shown on Diagnostics; its scale is an estimate, so it doesn't change the lock yet).
 
 > [!NOTE]
 > Volvo moves the P2's CAN IDs between model years, so the pre-facelift P2 decode only covers 2002 cars for now. Logs from other years (and from a facelift P2) are what's needed to add them.
@@ -184,11 +187,11 @@ New in V10, with the Volvo SPC unit and the P2 facelift Haldex reply decode adde
 | Generation 2 - Volvo P2 (Pre-Facelift) | S60, V70, XC70, XC90 up to the 2005 facelift | **250 kbit/s**, 29-bit IDs | `0x0120000A` |
 | Generation 3 - Volvo P2 (Facelift) | S60, S60R, V70, XC70, XC90 from the facelift | 500 kbit/s, 29-bit IDs | `0x1020000A` |
 | Generation 3 - Volvo P1 (S40 / V50) | S40 and V50 AWD (T5 / D5), 2004–2012 | 500 kbit/s, 29-bit IDs | `0x1960000A` |
-| Generation 4 - Volvo (P3) | XC60, V70, XC70, S80 (P3), probably Freelander 2 | 500 kbit/s | `0x243` |
+| Generation 4 - Volvo (P3) | XC60, V70, XC70, S80 (P3) | 500 kbit/s, 29-bit IDs | `0x1020000A` |
 | Generation 4 - SAAB 9-3 XWD | 9-3 XWD | 500 kbit/s | `0x210` |
 | Generation 5 - Volvo (SPC 31380867) | Cars with the Volvo Gen5 SPC unit | 500 kbit/s, 11-bit IDs | `0x126` |
 
-- **Standalone only.** The controller sends the frames the Haldex needs, including Volvo's 100 ms network heartbeat and SAAB's rolling counters. It also puts your lock request into the bytes that carry it. In OEM (inline) mode, frames pass through untouched.
+- **Standalone only, except the P3.** The controller sends the frames the Haldex needs, including Volvo's 100 ms network heartbeat and SAAB's rolling counters. It also puts your lock request into the bytes that carry it. In OEM (inline) mode, frames pass through untouched - apart from the Volvo P3, which has full OEM support (below).
 - **The bus speed follows the generation.** Choosing Volvo P2 (Pre-Facelift), or moving away from it, saves the setting and restarts the controller a couple of seconds later, with both CAN buses at the new speed. Without 250 kbit/s a pre-facelift P2 Haldex never answers, so it shows no Haldex health at all.
 - **Starting values, not finished decodes.** The frame list and lock bytes are a starting point. The meaning of most bytes still needs confirming on real cars, and the Haldex status is shown as raw 0–100 % until logs give its true scaling. SAAB also reports a Haldex temperature.
 - **Decoded from the Haldex's own code (V11).** On the P2 facelift, the reply's byte 6 is the measured clutch value and byte 7 carries the fault / limp and missing-input bits, so the Haldex Warning card works there. The SPC unit's reply gives the clutch torque it's delivering and a fault status. The full-lock value of both still needs a bench check.
@@ -212,6 +215,29 @@ New in V10, with the Volvo SPC unit and the P2 facelift Haldex reply decode adde
   - OEM mode passes everything through untouched for now, so Stock and the engagement readout work. Editing the car's frames for 50:50, 60:40 and the other modes comes next; until then Learn needs Standalone on the P1.
   - The decode and the logs are in `documents/vehicle-logs/gen3/`.
 - **How to help.** Log the car with [SavvyCAN](#can-sniffing-savvycan--gvret), and nudge individual bytes live with the serial lab `OVR <id> <byte> <value>` command (it takes 29-bit Volvo IDs). Logs from a car with the Haldex fitted are what turn these into decoded frames.
+
+### Volvo Gen4 (P3) — bench-proven (V11.00.5)
+
+Worked out on a real P3 Haldex on the bench (hardware `31219215 AA`, software `31219186 AE`) on 7 Nov 2026. Full notes: `documents/VOLVO_GEN4_BENCH_2026-11-07.md`; every CAN frame is decoded, with its source, in `include/OpenHaldexC6_canID.h`.
+
+- **It speaks 29-bit, like the P2 facelift.** The P3 unit uses the same message set as the P2 facelift Haldex and replies on `0x1020000A`. The 11-bit frames earlier versions sent for generation 43 got no answer at all.
+- **No fault codes, no limp.** The one frame that matters most is the CEM's configuration page (`0x10A2407C`, page `0x14`). Without it the unit stores fault `0x0015` about 32 s after power-up and goes into limp. The controller sends it once a second.
+- **What moves the clutch.** Only three inputs, all measured on the bench:
+
+  | Frame | What it is | Effect on lock |
+  |---|---|---|
+  | `0x0080401E` | Engine rpm (+ brake switch) | Under ~300 rpm the pump stays off: **0 %** |
+  | `0x10004002` | The four wheel speeds (bytes 0-3 rear, 4-7 front) | All four at 0 = car stood still = full pull-away pre-lock: **100 %**. Fronts faster than rears = slip = **1-99 %** |
+  | `0x0062401E` | Engine torque and pedal (+ brake switch) | Positive torque / pedal *reduces* the lock, so it is held at fixed values |
+
+  The brake switch in `0x0080401E` cuts the lock to 0 while moving, so it is cleared while a lock is wanted (as on the VAG units); **Follow Brake** puts the real brake state back.
+- **Standalone** sends only those three, the network heartbeat and the configuration page - the other seven frames of the P2 set made no fault and no lock change when switched off, cold start included.
+- **OEM mode** passes every car frame through and edits only the three lock inputs, so the mode buttons (FWD / 50:50 / 60:40 / 75:25), Expert and **Learn Haldex** work just like on the VAG cars. Stock is untouched passthrough.
+- **Reply.** Byte 6 of `0x1020000A` is the measured clutch pressure (0 open, `0xFF` full lock), shown as engagement. Byte 7 bit 0 is the fault / limp flag, shown on the Haldex Warning card.
+- **Before Learn**, lock requests of 25 / 50 / 75 / 100 % give about 37 / 49 / 74 / 100 % - run **Learn Haldex** once to straighten the curve.
+- **Fault codes** can be read and cleared from the Diagnostics page (Volvo D2, module `0x1A`) - see [Fault Codes](#fault-codes).
+- **ABS:** the rear-left qualifier bits of `0x10004002` make the unit open its clutch (ABS / stability control braking). With **Follow ABS** on (the default) the car's flag reaches the Haldex in OEM mode; turn it off and the lock overrules the ABS.
+- **Not done yet:** the DSTC off button (the Haldex doesn't use it, so it needs a car log with the button pressed), confirming which ABS value is ABS and which is DSTC, the steering-angle scale, and a car test.
 
 ---
 
@@ -462,7 +488,7 @@ If the Wi‑Fi interface becomes unresponsive:
 
 - Long‑press the `Mode` button to clear the WiFi password and restart the AP to an open state.
 
-> The Web UI is built on Forbes Automotive's shared dark theme (the same look used across the Can2Cluster, SpeedPulser, SpeedPulserPro, can2rpm, MQB Steering Wheel Controller and AirLift Controller firmware), so the interface and status conventions stay consistent across the whole product line. Current firmware version: **11.00.4** (unreleased: coolant and oil temperature on the Live Data card, faster Live Data refresh, OEM-mode lock back to V10 behaviour on Gen1, Gen2, Gen4, 0CQ and 0AY (the car's brake bits no longer cut the lock), OTA from 11.00.2 and older fixed; 11.00.3 beta: bus sleep and OTA fixes, Volvo P1 frame bisect and gear-matched rpm, web UI stored gzipped), shown in the UI footer and at `/ota/info`.
+> The Web UI is built on Forbes Automotive's shared dark theme (the same look used across the Can2Cluster, SpeedPulser, SpeedPulserPro, can2rpm, MQB Steering Wheel Controller and AirLift Controller firmware), so the interface and status conventions stay consistent across the whole product line. Current firmware version: **11.00.5** (beta: Volvo Gen4 P3 rewritten from a real unit on the bench - Standalone and OEM mode, no fault codes, proportional lock - plus Read / Clear Fault Codes on the Diagnostics page for the UDS, KWP2000 / TP2.0 and Volvo D2 generations; 11.00.4: coolant and oil temperature on the Live Data card, faster Live Data refresh, OEM-mode lock back to V10 behaviour on Gen1, Gen2, Gen4, 0CQ and 0AY, OTA from 11.00.2 and older fixed), shown in the UI footer and at `/ota/info`.
 
 ---
 
@@ -957,6 +983,10 @@ The PQ‑platform controllers are diagnosed with **KWP2000 tunnelled over VW TP2
 
 Raw measuring‑block bytes are also exposed so any remaining values can be characterised.
 
+### Volvo P2 / P3 — Volvo D2
+
+The Volvo AWD module's CAN reply carries the clutch pressure and its fault / limp state, but not its temperature. With Live Diagnostics on, OpenHaldex reads the **oil temperature** from the module over Volvo's own diagnostic protocol every 2 seconds and shows it on the Haldex temperature tile.
+
 <p align="center">
   <img src="/Images/ui-live-diag-uds.png" alt="Dashboard — UDS Data (MQB) card for Gen5: terminal voltage, module / clutch / fin temperatures, clutch current, PWM, voltage and blockage" width="300">
   &nbsp;&nbsp;
@@ -967,6 +997,24 @@ Raw measuring‑block bytes are also exposed so any remaining values can be char
 
 > [!NOTE]
 > If VCDS or other scan tools will not connect, turn this setting off as it may not cleanly pick up the VCDS request so it does not block the tool.  Excessive CAN traffic can cause spurious dash errors.
+
+---
+
+## Fault Codes
+
+The **Fault Codes** card on the **Diagnostics** page reads and clears the Haldex module's own fault codes, the way a scan tool would. Press **Read Fault Codes** to list what's stored; **Clear Fault Codes** wipes them and reads again straight away, so anything that comes straight back shows up.
+
+| Generation | Protocol | Codes shown as |
+|---|---|---|
+| Generation 1 | K-line only - use VCDS | - |
+| Generation 2 (`7H0` / `1K0`), Generation 4 (`0BR`) | KWP2000 over VW TP2.0 | VAG 5-digit code + status |
+| Generation 5 (`0CQ`, `0AY`, VAQ) | UDS (ISO-TP) | SAE code + failure type, active / stored |
+| Volvo P2 (Gen2 / Gen3), Volvo P3 (Gen4) | Volvo D2 over CAN, module `0x1A` | `AWD-xxxx` |
+| GM, Ford, Volvo P1, SAAB, Volvo SPC | Not yet - diagnostic address still to find | - |
+
+- Live Diagnostics pauses itself while a read or clear runs, so the two never talk to the module at once. A connected scan tool (VCDS / ODIS) always has priority.
+- Bench-proven on the Volvo P3. The VAG generations use the same channels Live Diagnostics already uses, but haven't been read on a module yet - please report what yours shows.
+- From USB, the serial lab commands `FAULTS` and `FAULTSCLR` do the same.
 
 ---
 
