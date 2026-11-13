@@ -1,7 +1,24 @@
 {
   "product": "OpenHaldex-C6",
-  "latest": "9.00.6",
+  "latest": "11.00.6",
   "releases": [
+    {
+      "version": "11.00.6",
+      "channel": "stable",
+      "date": "2026-11-13",
+      "ota": true,
+      "notes": "Throttle Override for the Steering-Angle Lock Scale (off by default): above a set pedal % the steering reduction fades out so full lock holds under hard acceleration or counter-steer (Start % / Full % in the Steering-Angle Lock Scale card). CAN interrupt moved to IRAM so settings saves no longer drop bridged frames. Fix: steering angle now shows in the Status view on Gen1 and the other VW generations (it was only on dashCAN).",
+      "firmware": {
+        "path": "V11.00.6/firmware.bin",
+        "size": 1540000,
+        "sha256": "17ff1b152261a7209c554052b87f3ac35e26a734e6317f8415f4b39351c868eb"
+      },
+      "filesystem": {
+        "path": "V11.00.6/littlefs.bin",
+        "size": 458752,
+        "sha256": "78caeee024d08c219980c2d73180805199979d3624dcc7b985ab3fef1f8bb850"
+      }
+    },
     {
       "version": "11.00.5",
       "channel": "beta",
