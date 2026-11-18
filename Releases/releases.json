@@ -3,6 +3,23 @@
   "latest": "11.00.6",
   "releases": [
     {
+      "version": "11.00.8",
+      "channel": "beta",
+      "date": "2026-11-18",
+      "ota": true,
+      "notes": "Beta. Frame blocks now work the same in the car as on the bench: a block on sends OpenHaldex's whole frame for that ID, off passes the car's own. Long Learn rebuilt to find the frame (or unknown car ID) that holds the lock back in the field, with the car's bytes and state in the report. Fixes from a full code audit: external-button hold now releases, a cancelled Learn keeps the old table, Volvo Gen4 brake / ABS decode, web requests always answered, CAN health after 24.8 days uptime, libraries pinned.",
+      "firmware": {
+        "path": "V11.00.8/firmware.bin",
+        "size": 1544432,
+        "sha256": "3e2c612145e4f60dfdd90eb07372309997a56cc34fae3105f4a55f2a362397d6"
+      },
+      "filesystem": {
+        "path": "V11.00.8/littlefs.bin",
+        "size": 458752,
+        "sha256": "c3aa9ef38ae7bba19d6b0bcd04e020249c3146de4d77b1e3c4ebb37c1bd37b71"
+      }
+    },
+    {
       "version": "11.00.6",
       "channel": "stable",
       "date": "2026-11-13",

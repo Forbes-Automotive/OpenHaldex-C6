@@ -69,31 +69,16 @@ It can operate using OEM CAN signals or it is able to run in Standalone mode - w
 
 ## Features
 
-- Two TWAI (CAN) interfaces for reading and bridging CAN traffic
-- Built‑in Wi‑Fi for on‑device configuration and diagnostics
-- Multiple preset modes plus customisable mode profiles
-- Tune your Haldex system directly from your phone via Wi-Fi
-- Configurable inputs features onboard and external mode switching options 
-- Configurable outputs include two high-side drivers for handbrake and brake outputs (or PWM control for optional oil cooling!)
-- SavvyCAN support via Wi‑Fi or Serial
-- Wi‑Fi access point password protection, with long-press reset
-- Force mode via CAN using hazard lights or TC button
-- Force mode from the car's drive mode select on MQB (Comfort, Sport, Race, Individual ...), each profile set to any mode, with a **Drive Mode** card on Diagnostics (see [Drive Mode Select](#can--force-mode-drive-mode-select-mqb))
-- Adjustable LED brightness
-- Live Data on the dashboard: speed, throttle, RPM, boost, plus engine coolant and oil temperature on the PQ cars (Gen1 / Gen2 / Gen4 / 0AY, from the cluster's Kombi_2 frame), updating up to 10 times a second (**Live Data Refresh** under Display Options)
-- Live diagnostics: UDS (Gen5) and KWP2000‑over‑TP2.0 (Gen2/Gen4) with measurement scaling confirmed against VCDS
-- Read and clear the Haldex module's own fault codes from the Diagnostics page: UDS (Gen5), KWP2000 over TP2.0 (Gen2 / Gen4) and Volvo D2 (Volvo P2 / P3) (see [Fault Codes](#fault-codes))
-- Selectable CAN frames — enable/disable CAN messages per Generation from the Web UI
-- CAN frame relay to can2gauge gauges over WiFi (ESP-NOW): a gauge with power only, no CAN wire, reads the car as if it were wired (**Relay CAN Frames to Gauges** under Controller Options, off by default)
-- Speed, throttle, RPM, brake and handbrake read from the car on Vauxhall / Opel Insignia, Ford Focus RS, Volvo P1 and Volvo P3 too, so Expert mode works on them (see [Chassis Signals](#chassis-signals-non-vw-cars))
-- Volvo Gen4 (P3) proven on a real Haldex on the bench (V11.00.5): no fault codes, proportional lock, Standalone and OEM mode, mode buttons and Learn (see [Volvo P3](#volvo-gen4-p3--bench-proven-v11005))
-- Early Volvo (P2 Gen2 / Gen3, P1 S40 / V50, Gen5 SPC) and SAAB 9-3 XWD standalone support, with the CAN bus switched to 250 kbit/s automatically for the pre-facelift P2 (see [Volvo & SAAB](#volvo--saab-early-support))
-- Every generation checked against the Haldex units' own code (V11): the bytes that really set the lock, what the unit reports back, and its own fault bits, in OEM and Standalone
-- The Haldex's own warnings (fault, limp, over-temperature, AWD lamp, temperature sensor, stored fault) on a red **Haldex Warning** card, plus Haldex Data tiles on the dashboard
-- **Follow ABS** (on by default): opens the clutch while the ABS is braking, as the Haldex itself would
-- Wireless (OTA) firmware and web‑UI updates over Wi‑Fi
-- Bluetooth LE link to the DashCAN mobile app: live data, mode and controller on/off, driving settings and Haldex diagnostics from the phone (see [DashCAN App](#dashcan-app-bluetooth))
-- Colour‑coded status indicators throughout the Web UI (green / orange / red — see [Status Indicators](#status-indicators))
+- Two CAN interfaces, sitting inline between the car and the Haldex
+- Preset modes (Stock, FWD, 50:50, 60:40, 75:25) plus a fully custom **Expert** mode
+- Set up and tune everything from your phone over Wi‑Fi, or the DashCAN app over Bluetooth
+- Force a mode from the hazards, TC button, an external button or MQB drive mode select
+- Brake / handbrake outputs (or PWM for an oil cooler)
+- Live data, live Haldex diagnostics and fault code read / clear (UDS, KWP2000, Volvo D2)
+- Haldex warnings (fault, limp, over-temperature) shown on the dashboard
+- Selectable CAN frames per generation, SavvyCAN support, CAN relay to can2gauge gauges
+- VW / Audi / Seat / Skoda, Vauxhall / Opel, Ford, Volvo and SAAB (see [Supported Platforms](#supported-platforms))
+- OTA firmware updates over Wi‑Fi
 
 ![OpenHaldex-C6](/Images/BoardOverview.png)
 
@@ -169,75 +154,33 @@ Expert mode, the speed / throttle limits and brake / handbrake follow need speed
 | Generation 3 - Volvo P2 (Facelift) | Not yet | Not yet | Not yet | Not yet | Not yet |
 | Generation 3 - Volvo P1 (S40 / V50) | Yes | Yes | Yes | Yes | Yes |
 
-The Insignia, Focus RS, 2002 Volvo P2 and Volvo P1 decodes are checked against real logs from those cars (the P1's speed scale still needs a check against the speedo). The SAAB 9-3 decode comes from a published decode of a real car. The Volvo P3 decode (V11.00.5) is read from the 29-bit frames the P3 Haldex really uses: engine rpm and the brake switch from `0x0080401E`, the pedal from `0x0062401E`, road speed from the rear wheels of `0x10004002` (1/64 km/h, cross-checked three ways), ABS braking (for **Follow ABS**) from the same frame, and the steering angle from `0x11600002` (shown on Diagnostics; its scale is an estimate, so it doesn't change the lock yet).
-
-> [!NOTE]
-> Volvo moves the P2's CAN IDs between model years, so the pre-facelift P2 decode only covers 2002 cars for now. Logs from other years (and from a facelift P2) are what's needed to add them.
+The Insignia, Focus RS, 2002 Volvo P2 and Volvo P1 decodes are checked against real logs; the SAAB 9-3 decode comes from a published decode; the Volvo P3 decode was proven on the bench. The pre-facelift P2 decode only covers 2002 cars for now, as Volvo moves its CAN IDs between model years.
 
 ## Volvo & SAAB (Early Support)
 
-New in V10, with the Volvo SPC unit and the P2 facelift Haldex reply decode added in V11, and the Volvo P1 (S40 / V50) in V11.00.1. Pick the car under **Settings → Haldex Generation**:
+Pick the car under **Settings → Haldex Generation**.
+
+| Generation | Cars | CAN bus | Status |
+|---|---|---|---|
+| Generation 2 - Volvo P2 (Pre-Facelift) | S60, V70, XC70, XC90 up to 2005 | **250 kbit/s** | Standalone, early |
+| Generation 3 - Volvo P2 (Facelift) | S60, S60R, V70, XC70, XC90 from 2005 | 500 kbit/s | Standalone, early |
+| Generation 3 - Volvo P1 (S40 / V50) | S40 / V50 AWD, 2004–2012 | 500 kbit/s | Standalone, not locking yet |
+| Generation 4 - Volvo (P3) | XC60, V70, XC70, S80 | 500 kbit/s | **Standalone + OEM, bench-proven** |
+| Generation 4 - SAAB 9-3 XWD | 9-3 XWD | 500 kbit/s | Standalone, early |
+| Generation 5 - Volvo (SPC 31380867) | Cars with the Volvo Gen5 SPC unit | 500 kbit/s | Standalone, early |
+
+- **Standalone only, except the P3.** In OEM mode the other Volvo / SAAB generations pass the car's frames through untouched.
+- **The bus speed follows the generation.** Choosing (or leaving) the pre-facelift P2 switches both CAN buses to 250 kbit/s and restarts the controller.
+- **Early means unconfirmed.** The frames and lock bytes are a starting point that still needs checking on real cars.
+- **Volvo P3** works like the VAG cars: mode buttons, Expert, Learn, fault codes and the Haldex Warning card, with no fault codes or limp on the bench. Run **Learn Haldex** once after fitting. Still to do: a car test.
+- **Volvo P1** has its own **Volvo P1 Standalone** card under Settings (lock source, road speed, gear). On the first car test the module stayed awake but ignored the lock request; see `documents/VOLVO_P1_FINDINGS_2026-10-25.md`.
 
 <p align="center">
   <img src="/Images/ui-volvo-saab.png" alt="Settings — Haldex Generation set to Volvo P2 (Pre-Facelift), showing the 250 kbit/s CAN bus note" width="300">
-</p>
-
-| Generation | Cars | CAN bus | Haldex reply |
-|---|---|---|---|
-| Generation 2 - Volvo P2 (Pre-Facelift) | S60, V70, XC70, XC90 up to the 2005 facelift | **250 kbit/s**, 29-bit IDs | `0x0120000A` |
-| Generation 3 - Volvo P2 (Facelift) | S60, S60R, V70, XC70, XC90 from the facelift | 500 kbit/s, 29-bit IDs | `0x1020000A` |
-| Generation 3 - Volvo P1 (S40 / V50) | S40 and V50 AWD (T5 / D5), 2004–2012 | 500 kbit/s, 29-bit IDs | `0x1960000A` |
-| Generation 4 - Volvo (P3) | XC60, V70, XC70, S80 (P3) | 500 kbit/s, 29-bit IDs | `0x1020000A` |
-| Generation 4 - SAAB 9-3 XWD | 9-3 XWD | 500 kbit/s | `0x210` |
-| Generation 5 - Volvo (SPC 31380867) | Cars with the Volvo Gen5 SPC unit | 500 kbit/s, 11-bit IDs | `0x126` |
-
-- **Standalone only, except the P3.** The controller sends the frames the Haldex needs, including Volvo's 100 ms network heartbeat and SAAB's rolling counters. It also puts your lock request into the bytes that carry it. In OEM (inline) mode, frames pass through untouched - apart from the Volvo P3, which has full OEM support (below).
-- **The bus speed follows the generation.** Choosing Volvo P2 (Pre-Facelift), or moving away from it, saves the setting and restarts the controller a couple of seconds later, with both CAN buses at the new speed. Without 250 kbit/s a pre-facelift P2 Haldex never answers, so it shows no Haldex health at all.
-- **Starting values, not finished decodes.** The frame list and lock bytes are a starting point. The meaning of most bytes still needs confirming on real cars, and the Haldex status is shown as raw 0–100 % until logs give its true scaling. SAAB also reports a Haldex temperature.
-- **Decoded from the Haldex's own code (V11).** On the P2 facelift, the reply's byte 6 is the measured clutch value and byte 7 carries the fault / limp and missing-input bits, so the Haldex Warning card works there. The SPC unit's reply gives the clutch torque it's delivering and a fault status. The full-lock value of both still needs a bench check.
-- **Volvo P1 (S40 / V50 AWD, V11.00.1).** Built from logs of a 2005 V50 T5 AWD. The P1 runs the same bus as the P2 facelift but uses none of its CAN IDs, so pick the P1 entry, not a P2 one.
-  - Standalone sends every frame the car puts on its high-speed bus (22 of them), each one listed under Frame Editing. Untick a frame and the **car's own** frame with that ID goes through to the Haldex instead. Untick them all and the Haldex sees the real car; tick them back one at a time on a drive to find any frame it won't accept.
-  - The logs show the P1 module follows engine torque almost one-for-one, goes to full lock on big front wheelspin, and never locks while stopped. The **Volvo P1 Standalone** card (Settings, shown for the P1) sets how your lock request is shown to it:
-    - **Lock Source**: Engine torque (the default, which also raises the pedal), Wheel slip (front wheels faster than the rears), or both together.
-    - **Road Speed** and **Gear**: the rpm sent is the road speed in that gear (1st to 3rd, ratios measured from the V50 logs), so rpm and speed always match a real gear.
-    - **Torque at 100 %** and **Front Wheel Slip at 100 %**, with a Reset to Defaults button.
-    - A live line shows the lock being asked for, what's being sent, and the module's engagement.
-  - Switching DSTC off counts as the TC button, so **Use TC to Force Mode** (Mode Options) can force a mode while DSTC is off. This works in OEM mode, and in Standalone with the car connected.
-  - The mode buttons, Expert and **Learn Haldex** drive it just like the other generations. Learn waits a little longer at each step on the P1, because its engagement trails the torque by up to 0.4 s.
-
-<p align="center">
   <img src="/Images/ui-volvo-p1.png" alt="Settings — Volvo P1 Standalone card: Lock Source, Road Speed, Gear, Torque at 100 %, Front Wheel Slip at 100 % and the live line" width="300">
 </p>
 
-*Settings → **Volvo P1 Standalone**: here asking for 100 %, sent as 600 torque and full pedal at a steady 30 km/h in 2nd (1980 rpm). The live line is a mock-up: on the car the module hasn't answered our lock request yet (see below).*
-  - **Not working yet (first car test, 25 Oct 2026):** in Standalone the module stays awake but ignores the lock request. The frame bisect and the gear-matched rpm above are the tools for finding out why. Findings: `documents/VOLVO_P1_FINDINGS_2026-10-25.md`.
-  - The Haldex's engagement (`0x1960000A`) is shown as 0–100 %, with full lock at the highest value seen in the logs.
-  - OEM mode passes everything through untouched for now, so Stock and the engagement readout work. Editing the car's frames for 50:50, 60:40 and the other modes comes next; until then Learn needs Standalone on the P1.
-  - The decode and the logs are in `documents/vehicle-logs/gen3/`.
-- **How to help.** Log the car with [SavvyCAN](#can-sniffing-savvycan--gvret), and nudge individual bytes live with the serial lab `OVR <id> <byte> <value>` command (it takes 29-bit Volvo IDs). Logs from a car with the Haldex fitted are what turn these into decoded frames.
-
-### Volvo Gen4 (P3) — bench-proven (V11.00.5)
-
-Worked out on a real P3 Haldex on the bench (hardware `31219215 AA`, software `31219186 AE`) on 7 Nov 2026. Full notes: `documents/VOLVO_GEN4_BENCH_2026-11-07.md`; every CAN frame is decoded, with its source, in `include/OpenHaldexC6_canID.h`.
-
-- **It speaks 29-bit, like the P2 facelift.** The P3 unit uses the same message set as the P2 facelift Haldex and replies on `0x1020000A`. The 11-bit frames earlier versions sent for generation 43 got no answer at all.
-- **No fault codes, no limp.** The one frame that matters most is the CEM's configuration page (`0x10A2407C`, page `0x14`). Without it the unit stores fault `0x0015` about 32 s after power-up and goes into limp. The controller sends it once a second.
-- **What moves the clutch.** Only three inputs, all measured on the bench:
-
-  | Frame | What it is | Effect on lock |
-  |---|---|---|
-  | `0x0080401E` | Engine rpm (+ brake switch) | Under ~300 rpm the pump stays off: **0 %** |
-  | `0x10004002` | The four wheel speeds (bytes 0-3 rear, 4-7 front) | All four at 0 = car stood still = full pull-away pre-lock: **100 %**. Fronts faster than rears = slip = **1-99 %** |
-  | `0x0062401E` | Engine torque and pedal (+ brake switch) | Positive torque / pedal *reduces* the lock, so it is held at fixed values |
-
-  The brake switch in `0x0080401E` cuts the lock to 0 while moving, so it is cleared while a lock is wanted (as on the VAG units); **Follow Brake** puts the real brake state back.
-- **Standalone** sends only those three, the network heartbeat and the configuration page - the other seven frames of the P2 set made no fault and no lock change when switched off, cold start included.
-- **OEM mode** passes every car frame through and edits only the three lock inputs, so the mode buttons (FWD / 50:50 / 60:40 / 75:25), Expert and **Learn Haldex** work just like on the VAG cars. Stock is untouched passthrough.
-- **Reply.** Byte 6 of `0x1020000A` is the measured clutch pressure (0 open, `0xFF` full lock), shown as engagement. Byte 7 bit 0 is the fault / limp flag, shown on the Haldex Warning card.
-- **Before Learn**, lock requests of 25 / 50 / 75 / 100 % give about 37 / 49 / 74 / 100 % - run **Learn Haldex** once to straighten the curve.
-- **Fault codes** can be read and cleared from the Diagnostics page (Volvo D2, module `0x1A`) - see [Fault Codes](#fault-codes).
-- **ABS:** the rear-left qualifier bits of `0x10004002` make the unit open its clutch (ABS / stability control braking). With **Follow ABS** on (the default) the car's flag reaches the Haldex in OEM mode; turn it off and the lock overrules the ABS.
-- **Not done yet:** the DSTC off button (the Haldex doesn't use it, so it needs a car log with the button pressed), confirming which ABS value is ABS and which is DSTC, the steering-angle scale, and a car test.
+Full details are in `documents/` (P3 bench notes: `VOLVO_GEN4_BENCH_2026-11-07.md`) and every frame is decoded in `include/OpenHaldexC6_canID.h`. **Want to help?** Log your car with [SavvyCAN](#can-sniffing-savvycan--gvret) and send it in.
 
 ---
 
@@ -288,6 +231,8 @@ The rest of the **Expert** tab draws the same table as a lock-map surface, and a
   <img src="/Images/ui-steering-scale.png" alt="Expert tab — steering-angle lock scale curve" width="300">
 </p>
 
+From 11.00.6 the steering scale has an optional **Throttle Override** (off by default) for rally / hard driving, so the steering scale can't pull lock out under heavy acceleration or counter-steering. Below the **Start %** pedal (default 40%) the steering scale works as normal, keeping low-speed turn-in agility. Between Start % and **Full %** (default 75%) its reduction fades out in a straight line. At Full % and above it is ignored and full requested lock holds. Example: at 180° the curve gives 50%; at 57.5% pedal the override gives back half of the reduction, so 75%; at 75% pedal and above, 100%.
+
 ---
 
 ## Haldex Learning
@@ -302,17 +247,19 @@ Use the 'Learn Haldex' in the Settings page and within one minute the controller
 
 *Settings: pick the Haldex generation, then run **Learn Haldex**. The card reports whether a learned table is active and carries the Gen5 **Fix Hunting** toggle described below.*
 
-### Long Learn (which static blocks are needed)
+### Long Learn (which frame the Haldex needs from us)
 
-The **lock-driven** blocks (the frames whose payload follows the lock target, e.g. Motor_11 / Motor_12 / ESP_14 / ESP_19 on Gen5) always have to be edited to have control, so they are always sent. Everything else is a **static** payload. **Long Learn** on the Settings page finds out which of those the Haldex actually needs:
+On the bench the module sends every frame the Haldex needs and it reaches full lock. In a car, the car's own frames carry its own status - brake, handbrake, gear, ABS - and one of them can hold the lock back (people were seeing ~73 %). **Long Learn** on the Settings page finds which frame that is.
 
-1. **Reference** — every block for the generation is switched **on** (as standalone sends the bus) and a full 0–100% sweep is run on the unit's own settings.
-2. **BPK Adjust** *(Gen5 only, only if that sweep hunts — not smooth — or falls short)* — **Fix Hunting** (BPK packing) is switched on and kept only if a full sweep is genuinely better; if it is still short on level, the torque ceiling (**Lock Calibration**, `bpkCeilingNm`) is walked up to the lowest value that reaches 100%. Whatever wins is **kept** when the run completes.
-3. **Prove it** — the all-on sweep on the settled settings must be smooth (it is re-swept if BPK moved the ceiling). Then two quick reads at **20 / 40 / 70 / 100%** with everything on: their average is the reference, and their spread is the **noise** floor every block is judged against (minimum 4%). If all-on is not a smooth 100%, or the two reads differ by more than 10% at any point, the run stops — there is nothing trustworthy to compare blocks with.
-4. **Testing blocks** — each static block is switched off **on its own** (everything else on), read at the same four points (releasing to 0% before each one, since a held lock doesn't re-evaluate cleanly), and switched back on. A change beyond the noise floor at any point = **needed** (or **affects (higher without)** if it read higher — still kept on). No change = **no effect**. Spreading the points over the ramp means a block that only matters at part lock isn't missed on a clean 100%. Tick *Also test the lock-driven (core) blocks* to test those too.
-5. **Confirmation** — every "no effect" block off together, full sweep compared CF-by-CF with the step-3 curve. If it still matches, that becomes the final set and stored learn table. If not (a step between the two test points, or two frames covering for each other) every block is left on, the reference table is stored and the run is flagged as an **interaction**.
+"**Ours**" means OpenHaldex sends its own whole frame for that CAN ID (exactly what the bench sends) and the car's copy is held back. "**The car's**" means the car's own frame goes through untouched - or nothing, if the car doesn't send that ID.
 
-On the bench (standalone) "off" means the frame is not sent at all; in the car (normal mode) it means the car's own frame passes through untouched. A full sweep takes about a minute and a four-point block read 6–12 seconds, so a Gen5 run is roughly 6–8 minutes. The tracker shows the phase, sweep count, the block under test, Fix Hunting / torque ceiling, the reference score with its noise and threshold, and the live Sent/Returned bars; each tested block shows its worst deviation. Cancelling, or a failed proof, restores the blocks, floor, torque ceiling, Fix Hunting toggle and learn table that were in place before the run.
+1. **All ours** - every block ours and every car ID held back from the Haldex: the bench bus, in the car. A full 0-100 % sweep must reach **full lock (90 % or more) smoothly**. If not, it retries. On the 0CQ that means **Fix Hunting** on and, if it is still short on level, the torque ceiling (**Lock Calibration**) walked up in 40 Nm steps to the lowest value that reaches full lock - units differ in the ceiling they need; whatever works is kept. Other generations sweep once more. Still not: the run stops and says so. With the bench bus the unit can't lock, so it isn't a missing frame - check the unit, wiring and hydraulics.
+2. **Quick read** - all ours at **20 / 40 / 70 / 100 %**, the reference in the report.
+3. **Blocks** - each block is swapped to **the car's frame on its own**, read at the same four points (releasing to 0 % before each, since a held lock doesn't re-evaluate cleanly), then put back to ours. Below full lock at 100 % = **KEEP OURS**. Otherwise the car's frame is fine, or - if the car doesn't send it - ours isn't needed, and the block is switched off. The core (lock-control) blocks stay ours unless *Also test the core blocks* is ticked.
+4. **Unknown car IDs** - every car ID OpenHaldex has no block for is let through together. Still full lock = nothing missing. Lower = one of them cuts the lock: half of them are let through, then the other half, keeping the half that cuts it, until a single ID is left (about 7 reads for 80 IDs). That ID is **held back** from the Haldex from then on and the rest re-checked (up to 4 IDs). *Let held-back IDs through* on the card undoes it.
+5. **Confirmation** - kept blocks ours, the rest the car's, found IDs held back: one full sweep. Full lock and smooth = that set and its learn table are kept. If not (two frames covering for each other) every block is left ours with the step-1 table and the run is flagged as an **interaction**.
+
+The report logs, for every block that was kept or whose car frame was seen, **the car's bytes next to ours** and **the car's state during that test** (brake, handbrake, ABS, speed, rpm), plus the state when the run started and the Follow Brake / Handbrake / ABS settings. A run started with the brake on, the handbrake up or in gear reads differently, so note how the car was in the notes box. Car stopped, engine running; a run takes about 8-12 minutes, and it stops if the car moves. Cancelling, or a failed step 1, restores the blocks, Fix Hunting, torque ceiling, held-back IDs and learn table from before the run.
 
 Below the tracker, a **Chassis / car notes** box (saved on the unit) and **Export report (.txt)** produce a plain-text record of the car, calibration values, the recommended block set (as a checklist plus the raw mask), the full sweep log and the stored learn table — handy for sharing a known-good layout for a given chassis.
 
@@ -320,7 +267,7 @@ Below the tracker, a **Chassis / car notes** box (saved on the unit) and **Expor
   <img src="/Images/ui-long-learn.png" alt="Settings — Long Learn card with notes and report export, and the Gen 5 Lock Calibration card" width="300">
 </p>
 
-*Settings: the Long Learn card (with the core-blocks option, notes and report export) and, beneath it, the **Gen 5 Lock Calibration** card — the torque ceiling (`Lock Calibration`) and `Launch PWM Floor` that Long Learn adjusts.*
+*Settings: the Long Learn card (with the core-blocks option, notes and report export) and, beneath it, the **Gen 5 Lock Calibration** card — the torque ceiling (`Lock Calibration`) and `Launch PWM Floor`. Long Learn's retry can raise the torque ceiling (and turn Fix Hunting on) when all ours is short of full lock.*
 
 ### Gen5 'Fix Hunting'
 
@@ -488,7 +435,7 @@ If the Wi‑Fi interface becomes unresponsive:
 
 - Long‑press the `Mode` button to clear the WiFi password and restart the AP to an open state.
 
-> The Web UI is built on Forbes Automotive's shared dark theme (the same look used across the Can2Cluster, SpeedPulser, SpeedPulserPro, can2rpm, MQB Steering Wheel Controller and AirLift Controller firmware), so the interface and status conventions stay consistent across the whole product line. Current firmware version: **11.00.5** (beta: Volvo Gen4 P3 rewritten from a real unit on the bench - Standalone and OEM mode, no fault codes, proportional lock - plus Read / Clear Fault Codes on the Diagnostics page for the UDS, KWP2000 / TP2.0 and Volvo D2 generations; 11.00.4: coolant and oil temperature on the Live Data card, faster Live Data refresh, OEM-mode lock back to V10 behaviour on Gen1, Gen2, Gen4, 0CQ and 0AY, OTA from 11.00.2 and older fixed), shown in the UI footer and at `/ota/info`.
+> The Web UI is built on Forbes Automotive's shared dark theme (the same look used across the Can2Cluster, SpeedPulser, SpeedPulserPro, can2rpm, MQB Steering Wheel Controller and AirLift Controller firmware), so the interface and status conventions stay consistent across the whole product line. Current firmware version: **11.00.8** (beta: fixes from a full code audit - external-button hold now releases, a cancelled Learn keeps the old table, Volvo Gen4 brake / ABS decode, web requests always answered, libraries pinned; 11.00.7: frame blocks work the same in the car as on the bench - a block on sends our whole frame, off passes the car's - and Long Learn rebuilt to find the frame or unknown car ID that holds the lock back in the field; 11.00.6: Throttle Override for the Steering-Angle Lock Scale, holds full lock under hard acceleration / counter-steering, plus the CAN interrupt moved into IRAM so a settings save no longer drops CAN frames; 11.00.5: Volvo Gen4 P3 rewritten from a real unit on the bench - Standalone and OEM mode, no fault codes, proportional lock - plus Read / Clear Fault Codes on the Diagnostics page for the UDS, KWP2000 / TP2.0 and Volvo D2 generations; 11.00.4: coolant and oil temperature on the Live Data card, faster Live Data refresh, OEM-mode lock back to V10 behaviour on Gen1, Gen2, Gen4, 0CQ and 0AY, OTA from 11.00.2 and older fixed), shown in the UI footer and at `/ota/info`.
 
 ---
 
@@ -688,6 +635,8 @@ The protocol is documented in [`documents/MOBILE_APP_OPENHALDEX.md`](documents/M
 
 For full step‑by‑step instructions see the **[OpenHaldex Installation Guide](https://openhaldex.com/docs/OpenHaldex_Installation_Guide.pdf)**.
 
+**Installation & Assembly Manual:** [docs/INSTALLATION.md](docs/INSTALLATION.md) (print-ready PDF: [docs/OpenHaldex-C6-Installation-Manual.pdf](docs/OpenHaldex-C6-Installation-Manual.pdf)): the plug pinout, making up the MX23A plug, the harness and Y-branch wiring, and first setup.
+
 ▶ **Installation demo (YouTube Short):** https://youtube.com/shorts/iUkNh9NbyKY?si=IhgqLIi0WM8wXqe9
 
 ▶ **Installation demo (YouTube Short):** https://youtu.be/Wu-u-Dz1444
@@ -699,9 +648,9 @@ For full step‑by‑step instructions see the **[OpenHaldex Installation Guide]
 
 Gen1:
 - Chassis Connector: `1J0‑973‑714`
-- Haldex Conneector: `1J0‑973‑814`
+- Haldex Connector: `1J0‑973‑814`
 
-Gen4>:
+Gen4 and Gen5:
 - Haldex Connector — `VW 1J0‑973‑713`
 - Vehicle Connector — `VW 1J0‑973‑813`
 
@@ -712,6 +661,7 @@ Routing summary:
 - **Permanent power (Term30) and ground must also be branched to the OpenHaldex controller**:
   - Term30 -> MX Pin 1
   - Ground -> MX Pin 2
+  - Gen1: the 8-pin connector has no Term30, so take Term15 (pin 1) to MX Pin 1 (the controller then runs with the ignition), or use a separate fused permanent feed
   
 - Chassis CAN is taken from the Vehicle side and sent to the controller:
   - Vehicle Pin 5 -> MX Pin 3 (Chassis CAN Low)
@@ -721,7 +671,7 @@ Routing summary:
   - MX Pin 5 -> Haldex Pin 5 (Haldex CAN Low)
   - MX Pin 6 -> Haldex Pin 6 (Haldex CAN High)
 
-Generation 1 > 4:
+Generation 1 (8-pin):
 - Vehicle Connector — `VW 1J0‑973‑714`:
 
 | Pin | Signal | Notes |
@@ -745,10 +695,10 @@ Generation 1 > 4:
 | 4 | Handbrake | Pass-through: Vehicle → Haldex |
 | 5 | K-Line | Pass-through: Vehicle → Haldex |
 | 6 | N/A | Not Used |
-| 7 | Chassis Low | To MX Pin 5 (Haldex side) |
-| 8 | Chassis High | To MX Pin 6 (Haldex side) |
+| 7 | Haldex CAN Low | From MX Pin 5 (Haldex side) |
+| 8 | Haldex CAN High | From MX Pin 6 (Haldex side) |
 
-Generation 5:
+Generation 4 and 5 (6-pin):
 - Vehicle Connector — `VW 1J0‑973‑813`:
 
 | Pin | Signal | Notes |
@@ -957,6 +907,9 @@ python tools/can_capture.py analyze --dbc vw_pq.dbc
 
 OpenHaldex can request data from the Haldex ECU for **live measurement data** and display it in the Web UI - just like a scan tool would. This occupies the module's diagnostic channel, it is controlled by a single **Enable Live Diagnostics** toggle in Settings that is **off by default** — however if you use VCDS, ODIS or another diagnostic tool, it will automatically turn itself off until the scan tool is removed.
 
+> [!WARNING]
+> On some cars enabling Live Diagnostics can log fault codes or light dash warnings (e.g. the AWD / Haldex lamp). If you see this, switch it off - nothing else is affected.
+
 When enabled, the controller automatically uses the correct protocol for the configured generation — there is nothing else to select.
 
 ### Gen5 (MQB `0CQ` / PQ `0AY`) — UDS
@@ -1023,7 +976,7 @@ The **Fault Codes** card on the **Diagnostics** page reads and clears the Haldex
 From the **Diagnostics** page you can enable or disable OpenHaldex's editing of **individual CAN frames** for the selected Haldex generation.
 
 - Each editable frame for the current generation is listed as a checkbox.
-- **Unchecking** a frame leaves the car's original message untouched (clean pass‑through); **checking** it lets OpenHaldex modify or generate that frame.
+- **Checked** = **ours**: OpenHaldex sends its own whole frame for that ID (as standalone does) and the car's copy is held back. **Unchecked** = **the car's**: the car's own frame goes through untouched. Same rule in Normal and Standalone mode (from 11.00.7; before, a checked frame in Normal mode only had a few bytes edited).
 - Changes apply immediately and are saved per generation.
 - A **Reset to Defaults** button restores the generation's standard set.
 
