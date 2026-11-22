@@ -2,6 +2,7 @@
 #include <OpenHaldexC6_Calculations.h>
 #include <OpenHaldexC6_Analyzer.h>
 #include <OpenHaldexC6_can.h> // canTransmit (serial-lab UDS transactions on Bus 1)
+#include <OpenHaldexC6_UDS.h> // FAULTS / FAULTSCLR -> dtcTask (V11.00.5)
 
 // =============================================================================
 // Serial Lab - USB diagnostic brute-forcer
@@ -13,7 +14,7 @@
 // what a given torque ceiling really delivers.
 //
 // Telemetry (one line per interval, CSV after the tag):
-//   BPK,<t_ms>,<ceiling_nm>,<floor_pct>,<lock_target>,<cf>,<torque_nm>,
+//   BPK,<t_ms>,<ceiling_nm>,<floor_pct>,<lockTarget>,<cf>,<torque_nm>,
 //       <ist_nm>,<solf_nm>,<engagement>,<raw_engagement>,<fixhunt>,<qbit>,
 //       <mode>,<speed>,<standalone>,<hdx_can>,<chs_can>
 //
@@ -27,7 +28,7 @@
 //   QBIT <0|1>          Motor_11 MO_QBit_Motormomente (0x20 vs 0xA0)
 //   MODE <0..5>         state.mode (Stock/FWD/50:50/60:40/75:25/Expert)
 //   CF <0..100>         drive the raw lock request directly (learn-style),
-//                       bypassing mode/lock_target - the lever for sweeps
+//                       bypassing mode/lockTarget - the lock request for sweeps
 //   CF OFF              release the direct request, back to normal control
 //   GEN <n>             haldexGeneration live (1,2,3,4,21,41,42,43,44,50,51,52) - not persisted
 //                       (except to/from 21, which needs 250 kbit/s: saved + restart)
@@ -38,8 +39,9 @@
 //   DTC                 ReadDTCInformation (0x19 02) -> DTCR lines + OK,DTC,<n>
 //   DTCCLR              ClearDiagnosticInformation (0x14 FF FF FF)
 //   SESS <1|3>          DiagnosticSessionControl;  TP = TesterPresent
-//   WSLR <raw>          front left-vs-right wheel-speed split (VL - VR), VAQ lever
-//   TXADD <id> <ms> <bytes..> [MAGIC <hex>]   extra periodic frame (bench); TXDEL / TXCLR / TXS
+//   WSLR <raw>          front left-vs-right wheel-speed split (VL - VR), VAQ lock request
+//   TXADD <id> <ms> <bytes..> [MAGIC <hex>] [CNT <byte> <mask>]   extra periodic frame (bench); TXDEL / TXCLR / TXS
+//   TXMUTE <id> | ALL | CLR   drop the generation's own frame(s) (bench bisect / whole-set replay)
 //   HELP                -> list of commands
 // Telemetry also carries an FB line per sample: the raw feedback frame the
 // per-generation decoder last accepted (0x118 / 0x137 / 0x2C0 ...), its age,
@@ -52,10 +54,125 @@
 // the two can't fight over Serial.read().
 // =============================================================================
 
+// ---- Defines -------------------------------------------------------------------
+
+// ---- Extra periodic frames (bench only). Transmit an ID the standalone set  ----
+#define LAB_EXTRA_MAX 32 // was 4: a whole replayed frame set (Ford C1 = 24 IDs) has to fit
+
+// ---- Statics -------------------------------------------------------------------
+
 static uint32_t labLogIntervalMs = 0; // 0 = telemetry off
 static uint32_t labLastEmitMs = 0;
 static char labLine[96];
 static uint8_t labLineLen = 0;
+// ---- Serial-lab UDS transactions (Bus 1, module under test) ----
+// One ISO-TP request/response against udsHaldexReqId/udsHaldexRespId. Replies
+// arrive through the /api/uds/read copy-tap in parseCANHdx (udsWebRxQueue),
+// which also keeps them off Bus 0 - the same plumbing the web endpoint uses,
+// so the two share its one-at-a-time rule (udsWebRespId doubles as the busy
+// flag). Handles SF and FF/CF replies, sends the flow control itself, and
+// waits through 0x78 responsePending. Refuses to run while the live-diag
+// poller owns the channel: two testers interleaving on one ECU would give
+// answers attributed to the wrong question.
+static uint8_t labUdsBuf[256];
+struct LabExtraFrame
+{
+  uint32_t id;
+  uint16_t periodMs;
+  uint8_t dlc;
+  uint8_t data[8];
+  int16_t magic; // -1 = raw bytes as given, else CRC + rolling counter
+  uint8_t ctr;
+  int8_t cntByte; // -1 = none, else byte that carries a rolling counter
+  uint8_t cntMask;
+  uint8_t cntVal;
+  uint32_t lastMs;
+};
+static LabExtraFrame labExtra[LAB_EXTRA_MAX] = {};
+
+// ---- Small helpers -------------------------------------------------------------
+
+static const char *labUdsErr(int rc)
+{
+  switch (rc)
+  {
+  case -1: return "busy (web UDS read in flight)";
+  case -2: return "live-diag poller owns the channel - send UDS 0 first";
+  case -3: return "no memory for rx queue";
+  case -4: return "CAN transmit failed on Bus 1";
+  case -5: return "request must be 1..7 bytes";
+  case -6: return "timeout (no reply on response ID)";
+  default: return "unknown";
+  }
+}
+
+static void labPrintHex(const uint8_t *b, size_t n)
+{
+  for (size_t i = 0; i < n; i++)
+    Serial.printf("%02X", b[i]);
+}
+
+// Parse "22 F1 87" or "22F187" into bytes. Returns count, 0 on a bad token.
+static size_t labParseHexBytes(const char *s, uint8_t *out, size_t cap)
+{
+  char buf[64];
+  size_t k = 0;
+  for (; *s && k < sizeof(buf) - 1; s++)
+    if (*s != ' ' && *s != ',')
+      buf[k++] = *s;
+  buf[k] = '\0';
+  if (k == 0 || (k & 1))
+    return 0;
+  size_t n = 0;
+  for (size_t i = 0; i < k && n < cap; i += 2)
+  {
+    char h[3] = {buf[i], buf[i + 1], '\0'};
+    char *end = nullptr;
+    long v = strtol(h, &end, 16);
+    if (end != h + 2)
+      return 0;
+    out[n++] = (uint8_t)v;
+  }
+  return n;
+}
+
+static void labSetStandalone(bool on)
+{
+  setStandaloneMode(on); // Stock -> FWD when switching on (V11.00.12)
+}
+
+// Direct lock request. Piggybacks the learn plumbing (haldexLearnActive makes
+// every lock-derived byte scale by haldexLearnCF/100), which is exactly what
+// the learn sweeps already use - so a CF here produces the same CAN output a
+// sweep would at that step, without running a whole sweep.
+static void labSetCF(int cf)
+{
+  if (cf < 0)
+  {
+    haldexLearnActive = false;
+    haldexLearnCF = 0;
+    haldexLearnStep = 0;
+    return;
+  }
+  haldexLearnCancel = false;
+  haldexLearnActive = true;
+  haldexLearnCF = (uint8_t)cf;
+  haldexLearnStep = (uint8_t)cf;
+}
+
+static bool labArgInt(const char *s, int &out)
+{
+  while (*s == ' ')
+    s++;
+  if (*s == '\0')
+    return false;
+  char *end = nullptr;
+  const long v = strtol(s, &end, 10);
+  if (end == s)
+    return false;
+  out = (int)v;
+  return true;
+}
 
 static void labPrintStat(const char *tag)
 {
@@ -65,13 +182,13 @@ static void labPrintStat(const char *tag)
   // attributed rather than guessed at: b0 temp protection, b1 coupling open,
   // b2 speed limit, b3 limp, b4 AWD warning, b5/b6 clutch reports.
   const uint8_t flags =
-      (uint8_t)((received_temp_protection ? 0x01 : 0) |
-                (received_coupling_open ? 0x02 : 0) |
-                (received_speed_limit ? 0x04 : 0) |
-                (received_limp_mode ? 0x08 : 0) |
-                (received_awd_warning ? 0x10 : 0) |
-                (received_report_clutch1 ? 0x20 : 0) |
-                (received_report_clutch2 ? 0x40 : 0));
+      (uint8_t)((receivedTempProtection ? 0x01 : 0) |
+                (receivedCouplingOpen ? 0x02 : 0) |
+                (receivedSpeedLimit ? 0x04 : 0) |
+                (receivedLimpMode ? 0x08 : 0) |
+                (receivedAwdWarning ? 0x10 : 0) |
+                (receivedReportClutch1 ? 0x20 : 0) |
+                (receivedReportClutch2 ? 0x40 : 0));
 
   Serial.printf("%s,%lu,%u,%u,%d,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u"
                 ",%u,%u,%u,%u,%u,%u,%u,%d,%d"
@@ -80,23 +197,23 @@ static void labPrintStat(const char *tag)
                 (unsigned long)t,
                 (unsigned)bpkCeilingNm,
                 (unsigned)esp14MinFloorPct,
-                (int)lock_target,
+                (int)lockTarget,
                 (unsigned)haldexLearnCF,
                 (unsigned)bpkLastTorqueNm,
                 (unsigned)bpkLastIstNm,
                 (unsigned)bpkLastSolfNm,
-                (unsigned)received_haldex_engagement,
-                (unsigned)received_haldex_engagement_raw,
+                (unsigned)receivedHaldexEngagement,
+                (unsigned)receivedHaldexEngagementRaw,
                 (unsigned)(fixHunting ? 1 : 0),
                 (unsigned)((bpkStatusFl & 0x80) ? 1 : 0),
                 (unsigned)state.mode,
-                (unsigned)received_vehicle_speed,
+                (unsigned)receivedVehicleSpeed,
                 (unsigned)(isStandalone ? 1 : 0),
                 (unsigned)(hasCANHaldex ? 1 : 0),
                 (unsigned)(hasCANChassis ? 1 : 0),
                 // extended fields
                 (unsigned)flags,
-                (unsigned)received_long_lock_state,
+                (unsigned)receivedLongLockState,
                 (unsigned)bpkFloorNm,
                 (unsigned)bpkSlewIst,
                 (unsigned)bpkSlewSolf,
@@ -137,26 +254,17 @@ static void labPrintStat(const char *tag)
                 hdxFbData[0], hdxFbData[1], hdxFbData[2], hdxFbData[3],
                 hdxFbData[4], hdxFbData[5], hdxFbData[6], hdxFbData[7],
                 (unsigned long)(fbMs ? (t - fbMs) : 0xFFFFFFFFUL),
-                (unsigned)received_haldex_engagement,
-                (unsigned)received_haldex_engagement_raw,
-                (unsigned)received_quer_state,
-                (unsigned)received_quer_sync,
-                (unsigned)received_long_lock_state,
-                (unsigned)received_haldex_state);
+                (unsigned)receivedHaldexEngagement,
+                (unsigned)receivedHaldexEngagementRaw,
+                (unsigned)receivedQuerState,
+                (unsigned)receivedQuerSync,
+                (unsigned)receivedLongLockState,
+                (unsigned)receivedHaldexState);
 }
 
 // ---------------------------------------------------------------------------
 // Serial-lab UDS transactions (Bus 1, module under test)
 // ---------------------------------------------------------------------------
-// One ISO-TP request/response against udsHaldexReqId/udsHaldexRespId. Replies
-// arrive through the /api/uds/read copy-tap in parseCAN_hdx (udsWebRxQueue),
-// which also keeps them off Bus 0 - the same plumbing the web endpoint uses,
-// so the two share its one-at-a-time rule (udsWebRespId doubles as the busy
-// flag). Handles SF and FF/CF replies, sends the flow control itself, and
-// waits through 0x78 responsePending. Refuses to run while the live-diag
-// poller owns the channel: two testers interleaving on one ECU would give
-// answers attributed to the wrong question.
-static uint8_t labUdsBuf[256];
 
 static int labUdsTransact(const uint8_t *req, size_t reqLen, uint8_t *rsp, size_t cap,
                           size_t &rspLen, uint32_t timeoutMs)
@@ -164,6 +272,13 @@ static int labUdsTransact(const uint8_t *req, size_t reqLen, uint8_t *rsp, size_
   rspLen = 0;
   if (reqLen == 0 || reqLen > 7)
     return -5;
+  udsManualLastMs = millis(); // V11.00.10: the Ford live poll stands down while the lab drives the module
+  {
+    // A background live poll (Ford Kuga, Volvo D2) holds the tap for at most ~300 ms - wait it out
+    const uint32_t until = millis() + 400;
+    while (udsWebRespId != 0 && (int32_t)(until - millis()) > 0)
+      vTaskDelay(pdMS_TO_TICKS(10));
+  }
   if (udsWebRespId != 0)
     return -1; // web read in flight
   if (udsPollActive)
@@ -183,7 +298,7 @@ static int labUdsTransact(const uint8_t *req, size_t reqLen, uint8_t *rsp, size_
   memcpy(&m.data[1], req, reqLen);
   for (size_t i = reqLen + 1; i < 8; i++)
     m.data[i] = 0xAA;
-  if (!canTransmit(twai_bus_1, &m))
+  if (!canTransmit(twaiBus1, &m))
   {
     udsWebRespId = 0;
     return -4;
@@ -235,7 +350,7 @@ static int labUdsTransact(const uint8_t *req, size_t reqLen, uint8_t *rsp, size_
         fc.data[2] = 0x00; // STmin 0
         for (uint8_t i = 3; i < 8; i++)
           fc.data[i] = 0xAA;
-        canTransmit(twai_bus_1, &fc);
+        canTransmit(twaiBus1, &fc);
         if (got >= total || got >= cap)
         {
           rspLen = got;
@@ -264,50 +379,6 @@ static int labUdsTransact(const uint8_t *req, size_t reqLen, uint8_t *rsp, size_
   }
   udsWebRespId = 0;
   return rc;
-}
-
-static const char *labUdsErr(int rc)
-{
-  switch (rc)
-  {
-  case -1: return "busy (web UDS read in flight)";
-  case -2: return "live-diag poller owns the channel - send UDS 0 first";
-  case -3: return "no memory for rx queue";
-  case -4: return "CAN transmit failed on Bus 1";
-  case -5: return "request must be 1..7 bytes";
-  case -6: return "timeout (no reply on response ID)";
-  default: return "unknown";
-  }
-}
-
-static void labPrintHex(const uint8_t *b, size_t n)
-{
-  for (size_t i = 0; i < n; i++)
-    Serial.printf("%02X", b[i]);
-}
-
-// Parse "22 F1 87" or "22F187" into bytes. Returns count, 0 on a bad token.
-static size_t labParseHexBytes(const char *s, uint8_t *out, size_t cap)
-{
-  char buf[64];
-  size_t k = 0;
-  for (; *s && k < sizeof(buf) - 1; s++)
-    if (*s != ' ' && *s != ',')
-      buf[k++] = *s;
-  buf[k] = '\0';
-  if (k == 0 || (k & 1))
-    return 0;
-  size_t n = 0;
-  for (size_t i = 0; i < k && n < cap; i += 2)
-  {
-    char h[3] = {buf[i], buf[i + 1], '\0'};
-    char *end = nullptr;
-    long v = strtol(h, &end, 16);
-    if (end != h + 2)
-      return 0;
-    out[n++] = (uint8_t)v;
-  }
-  return n;
 }
 
 // ReadDTCInformation / reportDTCByStatusMask. Walks a few status masks because
@@ -374,51 +445,6 @@ static void labUdsRawCmd(const uint8_t *req, size_t reqLen, uint32_t timeoutMs)
   Serial.println();
 }
 
-static void labSetStandalone(bool on)
-{
-  isStandalone = on;
-  // Mirror /api/settings: the frame task only runs while standalone.
-  if (handle_standaloneFrames == nullptr)
-    return;
-  if (on)
-    vTaskResume(handle_standaloneFrames);
-  else
-    vTaskSuspend(handle_standaloneFrames);
-}
-
-// Direct lock request. Piggybacks the learn plumbing (haldexLearnActive makes
-// every lock-derived byte scale by haldexLearnCF/100), which is exactly what
-// the learn sweeps already use - so a CF here produces the same CAN output a
-// sweep would at that step, without running a whole sweep.
-static void labSetCF(int cf)
-{
-  if (cf < 0)
-  {
-    haldexLearnActive = false;
-    haldexLearnCF = 0;
-    haldexLearnStep = 0;
-    return;
-  }
-  haldexLearnCancel = false;
-  haldexLearnActive = true;
-  haldexLearnCF = (uint8_t)cf;
-  haldexLearnStep = (uint8_t)cf;
-}
-
-static bool labArgInt(const char *s, int &out)
-{
-  while (*s == ' ')
-    s++;
-  if (*s == '\0')
-    return false;
-  char *end = nullptr;
-  const long v = strtol(s, &end, 10);
-  if (end == s)
-    return false;
-  out = (int)v;
-  return true;
-}
-
 // ---------------------------------------------------------------------------
 // Extra periodic frames (bench only). Transmit an ID the standalone set does
 // not generate - e.g. Klemmen_Status_01 0x3C0 - to test whether the module
@@ -426,20 +452,13 @@ static bool labArgInt(const char *s, int &out)
 //   TXADD <id hex> <period ms> <b0..b7 hex> [MAGIC <hex>]
 //     With MAGIC: b1 low nibble rolls 0..15 on every send and b0 is the VW
 //     E2E CRC-8 (B1..B7 then the constant DataID), like ESP_14 / LWI_01.
+//   TXADD ... CNT <byte> <mask hex>   rolling counter in that byte, under the
+//     mask, stepping by the mask's lowest bit (FF = 8-bit, 0F = nibble, E0 =
+//     0x20 steps ...) - Ford C1 frames count like this (Kuga bench, V11.00.9).
 //   TXDEL <id hex>   TXCLR   TXS
+//   TXMUTE <id hex> | ALL | CLR    drop the generation's own frame(s) in
+//     standaloneTx() (TXADD frames are never muted); no argument = list.
 // ---------------------------------------------------------------------------
-#define LAB_EXTRA_MAX 4
-struct LabExtraFrame
-{
-  uint32_t id;
-  uint16_t periodMs;
-  uint8_t dlc;
-  uint8_t data[8];
-  int16_t magic; // -1 = raw bytes as given, else CRC + rolling counter
-  uint8_t ctr;
-  uint32_t lastMs;
-};
-static LabExtraFrame labExtra[LAB_EXTRA_MAX] = {};
 
 static void labExtraSend(uint32_t now)
 {
@@ -455,6 +474,11 @@ static void labExtraSend(uint32_t now)
     m.data_length_code = e.dlc;
     for (uint8_t b = 0; b < 8; b++)
       m.data[b] = e.data[b];
+    if (e.cntByte >= 0 && e.cntByte < e.dlc && e.cntMask)
+    {
+      m.data[e.cntByte] = (uint8_t)((e.data[e.cntByte] & ~e.cntMask) | (e.cntVal & e.cntMask));
+      e.cntVal = (uint8_t)(e.cntVal + (e.cntMask & (uint8_t)(-e.cntMask))); // + lowest set bit
+    }
     if (e.magic >= 0 && e.dlc >= 2)
     {
       m.data[1] = (uint8_t)((e.data[1] & 0xF0) | (e.ctr & 0x0F));
@@ -466,9 +490,9 @@ static void labExtraSend(uint32_t now)
       for (uint8_t b = 1; b < e.dlc; b++)
         in[n++] = m.data[b];
       in[n++] = (uint8_t)e.magic;
-      m.data[0] = crc8_autosar(in, n);
+      m.data[0] = crc8Autosar(in, n);
     }
-    canTransmit(twai_bus_1, &m);
+    canTransmit(twaiBus1, &m);
   }
 }
 
@@ -489,6 +513,8 @@ static void labExtraCmd(const char *verb, char *arg)
                       (unsigned)labExtra[i].dlc);
         for (uint8_t b = 0; b < 8; b++) Serial.printf("%02X", labExtra[i].data[b]);
         if (labExtra[i].magic >= 0) Serial.printf(",MAGIC %02X", (unsigned)labExtra[i].magic);
+        if (labExtra[i].cntByte >= 0)
+          Serial.printf(",CNT %d %02X", (int)labExtra[i].cntByte, (unsigned)labExtra[i].cntMask);
         Serial.println();
       }
     Serial.println("OK,TXS");
@@ -513,8 +539,20 @@ static void labExtraCmd(const char *verb, char *arg)
   e.id = id;
   e.periodMs = (uint16_t)period;
   e.magic = -1;
+  e.cntByte = -1;
   while ((tok = strtok(nullptr, " ")) != nullptr)
   {
+    if (strcmp(tok, "CNT") == 0)
+    {
+      char *b = strtok(nullptr, " ");
+      char *mk = b ? strtok(nullptr, " ") : nullptr;
+      if (!b || !mk) { Serial.println("ERR,TXADD CNT needs <byte> <mask hex>"); return; }
+      const int bi = atoi(b);
+      if (bi < 0 || bi > 7) { Serial.println("ERR,TXADD CNT byte 0..7"); return; }
+      e.cntByte = (int8_t)bi;
+      e.cntMask = (uint8_t)strtoul(mk, nullptr, 16);
+      continue;
+    }
     if (strcmp(tok, "MAGIC") == 0)
     {
       tok = strtok(nullptr, " ");
@@ -534,8 +572,43 @@ static void labExtraCmd(const char *verb, char *arg)
       if (labExtra[i].id == 0) { slot = i; break; }
   if (slot < 0) { Serial.println("ERR,TXADD no free slots (TXCLR first)"); return; }
   labExtra[slot] = e;
-  Serial.printf("OK,TXADD,%03lX,%u,%u%s\n", (unsigned long)id, (unsigned)e.periodMs, (unsigned)e.dlc,
-                e.magic >= 0 ? ",CRC" : "");
+  Serial.printf("OK,TXADD,%03lX,%u,%u%s%s\n", (unsigned long)id, (unsigned)e.periodMs, (unsigned)e.dlc,
+                e.magic >= 0 ? ",CRC" : "", e.cntByte >= 0 ? ",CNT" : "");
+}
+
+static void labMuteCmd(char *arg)
+{
+  while (*arg == ' ')
+    arg++;
+  if (*arg == 0)
+  {
+    Serial.printf("TXMUTE,ALL,%d", labMuteAll ? 1 : 0);
+    for (uint8_t i = 0; i < LAB_MUTE_MAX; i++)
+      if (labMuteIds[i]) Serial.printf(",%03lX", (unsigned long)labMuteIds[i]);
+    Serial.println();
+    Serial.println("OK,TXMUTE");
+    return;
+  }
+  if (strncasecmp(arg, "ALL", 3) == 0) { labMuteAll = true; Serial.println("OK,TXMUTE,ALL"); return; }
+  if (strncasecmp(arg, "CLR", 3) == 0)
+  {
+    labMuteAll = false;
+    for (uint8_t i = 0; i < LAB_MUTE_MAX; i++) labMuteIds[i] = 0;
+    Serial.println("OK,TXMUTE,CLR");
+    return;
+  }
+  const uint32_t id = (uint32_t)strtoul(arg, nullptr, 16);
+  if (id == 0 || id > 0x1FFFFFFF) { Serial.println("ERR,TXMUTE <id hex> | ALL | CLR"); return; }
+  for (uint8_t i = 0; i < LAB_MUTE_MAX; i++)
+    if (labMuteIds[i] == id) { Serial.printf("OK,TXMUTE,%03lX\n", (unsigned long)id); return; }
+  for (uint8_t i = 0; i < LAB_MUTE_MAX; i++)
+    if (labMuteIds[i] == 0)
+    {
+      labMuteIds[i] = id;
+      Serial.printf("OK,TXMUTE,%03lX\n", (unsigned long)id);
+      return;
+    }
+  Serial.println("ERR,TXMUTE no free slots (TXMUTE CLR first)");
 }
 
 static void labHandleLine(char *line)
@@ -694,7 +767,7 @@ static void labHandleLine(char *line)
   else if (strcmp(line, "WSLR") == 0)
   {
     // Front left-vs-right split (VL - VR) in raw counts, 0.0075 km/h each.
-    // Works in both legacy and WSBASE mode. The VAQ-specific slip lever.
+    // Works in both legacy and WSBASE mode. The VAQ-specific slip lock request.
     if (!labArgInt(arg, v)) { Serial.println("ERR,WSLR needs raw counts (VL-VR, can be negative)"); return; }
     wsLeftRightDeltaRaw = constrain(v, -40000, 40000);
     Serial.printf("OK,WSLR,%d\n", (int)wsLeftRightDeltaRaw);
@@ -706,7 +779,14 @@ static void labHandleLine(char *line)
       Serial.println("ERR,MODE needs 0..5");
       return;
     }
-    state.mode = (openhaldex_mode_t)v;
+    // Same rules as the web / buttons (requestMode, IO.cpp): refused while the
+    // controller is disabled, and Stock in standalone keeps the last driving mode.
+    // The reply carries the mode actually set.
+    if (!requestMode((uint8_t)v))
+    {
+      Serial.println("ERR,MODE controller disabled");
+      return;
+    }
     Serial.printf("OK,MODE,%u\n", (unsigned)state.mode);
   }
   else if (strcmp(line, "CF") == 0)
@@ -749,7 +829,7 @@ static void labHandleLine(char *line)
   else if (strcmp(line, "BLOCKS") == 0)
   {
     // List the frame-edit blocks for the live generation, so individual CAN
-    // frames can be isolated - the lever for attributing behaviour to a frame.
+    // frames can be isolated - the lock request for attributing behaviour to a frame.
     const int gi = frameEditGenIdx(haldexGeneration);
     if (gi < 0) { Serial.println("ERR,BLOCKS,no gated blocks for this generation"); return; }
     const uint64_t m = activeFrameEditMask()[gi];
@@ -773,6 +853,7 @@ static void labHandleLine(char *line)
     int bit = atoi(arg), on = atoi(sp2);
     const int gi = frameEditGenIdx(haldexGeneration);
     if (gi < 0 || bit < 0 || bit > 63) { Serial.println("ERR,BLOCK bad bit"); return; }
+    if (longLearnActive) { Serial.println("ERR,BLOCK Long Learn is running"); return; } // it swaps blocks itself
     uint64_t *mask = activeFrameEditMask();
     if (on) mask[gi] |= (1ULL << bit);
     else    mask[gi] &= ~(1ULL << bit);
@@ -830,6 +911,10 @@ static void labHandleLine(char *line)
   {
     labExtraCmd(line, arg);
   }
+  else if (strcmp(line, "TXMUTE") == 0)
+  {
+    labMuteCmd(arg);
+  }
   else if (strcmp(line, "GEN") == 0)
   {
     // Live generation switch (not persisted). Lets one bench session A/B the
@@ -841,8 +926,11 @@ static void labHandleLine(char *line)
                     (unsigned long)udsHaldexReqId, (unsigned long)udsHaldexRespId);
       return;
     }
-    if (!(v == 1 || v == 2 || v == 4 || v == 41 || v == 42 || v == 50 || v == 51 || v == 52 || isVolvoOrSaabGeneration((uint8_t)v)))
+    // The user list, plus 42 (Ford, untested) for bench work only - it isn't in the UI
+    if (!isSupportedGeneration((uint8_t)v) && v != 42)
     { Serial.println("ERR,GEN unsupported generation"); return; }
+    if (longLearnActive)
+    { Serial.println("ERR,GEN Long Learn is running"); return; }
     // Note: moving to/from 21 (Volvo P2 Gen2, 250 kbit/s) saves the generation and
     // restarts the controller ~2 s later, so unlike the others it does persist.
     haldexGeneration = (uint8_t)v;
@@ -853,6 +941,7 @@ static void labHandleLine(char *line)
   else if (strcmp(line, "SA") == 0)
   {
     if (!labArgInt(arg, v)) { Serial.printf("OK,SA,%u\n", (unsigned)(isStandalone ? 1 : 0)); return; }
+    if (longLearnActive) { Serial.println("ERR,SA Long Learn is running"); return; } // it works on one mode's mask
     labSetStandalone(v != 0);
     Serial.printf("OK,SA,%u\n", (unsigned)(isStandalone ? 1 : 0));
   }
@@ -878,8 +967,7 @@ static void labHandleLine(char *line)
   }
   else if (strcmp(line, "RXCLR") == 0)
   {
-    for (uint8_t i = 0; i < HDX_RX_STATS_MAX; i++) hdxRxStats[i].id = 0;
-    hdxRxDroppedIds = 0;
+    canRxCensusClear(); // both buses (V11.00.12)
     Serial.println("OK,RXCLR");
   }
   else if (strcmp(line, "DIAGID") == 0)
@@ -944,12 +1032,30 @@ static void labHandleLine(char *line)
     const uint8_t req[2] = {0x3E, 0x00};
     labUdsRawCmd(req, sizeof(req), 800);
   }
+  else if (strcmp(line, "HTEMP") == 0)
+  {
+    // V11.00.5: the Haldex temperature the dashboard shows (-128 = none)
+    Serial.printf("OK,HTEMP,%d\n", (int)receivedHaldexTempC);
+  }
+  else if (strcmp(line, "FAULTS") == 0 || strcmp(line, "FAULTSCLR") == 0)
+  {
+    // V11.00.5: the same fault-code read / clear as the web page (dtcTask, any
+    // supported generation). Prints FLT,<code>,<detail> per code then OK / ERR.
+    if (dtcState == DTC_BUSY || dtcRequest != 0) { Serial.println("ERR,FAULTS,busy"); return; }
+    dtcState = DTC_BUSY;
+    dtcRequest = (strcmp(line, "FAULTS") == 0) ? 1 : 2;
+    const uint32_t until = millis() + 8000;
+    while (dtcState == DTC_BUSY && (int32_t)(until - millis()) > 0) vTaskDelay(pdMS_TO_TICKS(50));
+    if (dtcState != DTC_DONE) { Serial.printf("ERR,FAULTS,%s\n", dtcMessage); return; }
+    for (uint8_t i = 0; i < dtcCount; i++) Serial.printf("FLT,%s,%s\n", dtcList[i].code, dtcList[i].detail);
+    Serial.printf("OK,FAULTS,%u,%s,%s\n", (unsigned)dtcCount, dtcProtocol, dtcMessage);
+  }
   else if (strcmp(line, "HELP") == 0)
   {
     Serial.println("OK,HELP,PING GET LOG CEIL FLOOR FIXHUNT QBIT MODE CF"
                    " BPKFLOOR SLEWIST SLEWSOLF TRAEG SCHUB STATUS FORCEIST FORCESOLF"
                    " WSFREEZE WSBASE WSDITHER WSFRONT WSLR UDS BLOCKS BLOCK OVR OVRS OVRCLR DANGER DANGERNM"
-                   " GEN SA RXIDS RXCLR DIAGID UDSRAW DTC DTCCLR SESS TP TXADD TXDEL TXCLR TXS HELP");
+                   " GEN SA RXIDS RXCLR DIAGID UDSRAW DTC DTCCLR SESS TP TXADD TXDEL TXCLR TXS TXMUTE HELP");
   }
   else
   {

@@ -4,7 +4,8 @@
 // identical copies live in OpenHaldex-C6/include/cannow_tx.h and adc2can/include/cannow_tx.h, so both relay the same
 // way and show the same setting. Include it in one .cpp only (it holds the state).
 //
-//   cannBegin(kind)    once at boot (cannKind_t): creates the queue
+//   cannBegin(kind)    once at boot (cannKind_t). The queue + per-ID table (~7 KB) are only made the first
+//                      time the relay is switched on (cannSetRate) - most units never use it
 //   cannLink(up)       true straight after ESP-NOW's broadcast peer is added, false before ESP-NOW is shut down
 //   cannRate           the setting (cannRate_t), persisted by the device; cannSetRate() to change it
 //   cannTap(m)         every frame received on the car's CAN, from the CAN receive task: cheap, never blocks
@@ -36,12 +37,12 @@ struct CannQFrame
   uint8_t len, ext;
   uint8_t d[8];
 };
-static QueueHandle_t cannQ = nullptr;
+static QueueHandle_t volatile cannQ = nullptr; // made by cannSetRate the first time the relay goes on
 static uint8_t cannKind = 0;
 static volatile bool cannUp = false;      // ESP-NOW is up: frames are queued
 static volatile uint32_t cannTapLost = 0; // queue full (written by the receive task only)
 static uint32_t cannSendLost = 0;         // in packets ESP-NOW refused (pump task only)
-static uint16_t cannLastMs[2048];         // per 11-bit id: millis() (low 16 bits) of the last frame let through
+static uint16_t *volatile cannLastMs = nullptr; // [2048] per 11-bit id: millis() (low 16 bits) of the last frame let through
 static uint8_t cannBuf[CANN_BYTES];
 static size_t cannLen = sizeof(CannHdr);
 static uint8_t cannCount = 0, cannSeq = 0;
@@ -51,8 +52,6 @@ static uint32_t cannFirstMs = 0, cannLostSent = 0, cannSecMs = 0, cannSecFrames 
 static inline void cannBegin(uint8_t kind)
 {
   cannKind = kind;
-  if (!cannQ)
-    cannQ = xQueueCreate(CANN_QUEUE, sizeof(CannQFrame));
 }
 
 static inline void cannLink(bool up)
@@ -63,7 +62,20 @@ static inline void cannLink(bool up)
     xQueueReset(cannQ);
 }
 
-static inline void cannSetRate(uint8_t r) { cannRate = r < CANN_R_MAX ? r : CANN_R_OFF; }
+static inline void cannSetRate(uint8_t r)
+{
+  r = r < CANN_R_MAX ? r : CANN_R_OFF;
+  if (r != CANN_R_OFF && !cannQ)
+  {
+    // First time on: allocate. The table goes first - cannTap only uses it once
+    // cannQ is set, so the receive task never sees one without the other.
+    if (!cannLastMs)
+      cannLastMs = (uint16_t *)calloc(2048, sizeof(uint16_t));
+    if (cannLastMs)
+      cannQ = xQueueCreate(CANN_QUEUE, sizeof(CannQFrame));
+  }
+  cannRate = r;
+}
 
 static inline void cannTap(const twai_message_t &m)
 {

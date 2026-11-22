@@ -2,7 +2,11 @@
 #include <OpenHaldexC6_defs.h>
 
 // Current firmware version
-#define FW_VERSION "11.00.4" // also bump data/version.json ("fs")
+#define FW_VERSION "11.00.14" // also bump data/version.json ("fs")
+
+// Hardware (PCB) version shown in System Info. One board so far; when a second
+// one exists, readBoardRev() (OpenHaldexC6_defs.h, not written yet) picks it.
+#define BOARD_VERSION "1.0"
 
 /*
 Version Control:
@@ -610,6 +614,436 @@ V11.00.4 - (unreleased) engine temperatures and a faster Live Data refresh.
           web UI first, so the gzipped image was rejected (500), wiped, and the unit fell to
           the recovery page.
 
+V11.00.5 - (beta, 2026-11-07) Volvo Gen4 (P3, generation 43) rewritten from a real unit
+          on the bench (31219215 AA / software 31219186 AE). documents/VOLVO_GEN4_BENCH_2026-11-07.md
+        - The unit is 29-bit and uses the P2 facelift DEM's message set (it answers on
+          0x1020000A); the old 11-bit V60-DBC frames (0x12A / 0x20A / 0x220 / 0x405,
+          reply 0x243) got no answer at all. Gen 43 now sends the P2G3 frames.
+        - New frame 0x10A2407C page 0x14 (CEM configuration, byte 7 = 0x59) every 1 s.
+          Without it the unit stores fault 0x0015 ~32 s after start and goes into limp.
+        - Lock inputs (bench-measured, the only frames that move the clutch):
+          engine rpm 0x0080401E b2-3 (<300 = pump off = 0 %), wheel speeds 0x10004002
+          (bytes 0-3 rear, 4-7 front: all 0 = stood still = full pre-lock = 100 %; at
+          4000 with the front pair 150..600 faster = pressure 0x3A..0xEF = 1-99 %, slip
+          capped at 600 - over ~650 the unit opens the clutch) and engine torque / pedal
+          0x0062401E (positive torque or pedal pull the lock down, missing = -40 %).
+        - Standalone sends only what the unit needs: those three + 0x10A2407C page 1
+          and page 0x14. The other 7 P2 frames made no fault and no lock change when
+          off, cold power-up included (bench). Lock 0/25/50/75/100 -> 0/37/49/74/100 %
+          before Learn.
+        - Feedback: byte 6 = clutch pressure, full scale 0xFF. Byte 7 bit 0 = fault /
+          limp (0x8E at rest is normal, NOT limp), bits 2-3 = input monitors.
+        - Frame editing: new block group for gen 43 (12 blocks, one per frame / page,
+          each decoded in canID.h from the S60R DEM code, the 500k S60 log and the
+          bench). OEM mode edits only Wheel Speeds, Engine Torque and Engine RPM, from
+          lever_lock_percent() so the mode buttons and Learn work as on the VAG units;
+          every other car frame passes untouched, Stock = untouched passthrough. In
+          standalone a block turned off lets the car's own frame through (as the P1).
+          The lock blocks (and in standalone the config page) are kept on at boot.
+        - Brake: the ECM brake switch (0x0080401E b6 bit 3) cuts lock to 0 while moving
+          (bench), so OEM mode clears it and 0x0062401E b4 bit 4 while lock is asked
+          for (as the VAG Bremse_1 edit); Follow Brake writes the real state back.
+        - OEM chassis decode (29-bit): engine rpm, brake switch, pedal (0.4 %/bit
+          assumed), road speed (rear wheels of 0x10004002, 1/64 km/h: the AWD module's
+          live data + vtl/volvo-ddd + 0x11600002 / 0x11800002 in 0.01 km/h agree), ABS
+          braking (0x10004002 rear-left qualifier 1 / 2 = the unit opens its clutch -
+          drives Follow ABS; OEM edit passes it only with Follow ABS on), steering angle
+          from 0x11600002 b2-3 (display only, ~0.4 deg/count estimated). Wheel order
+          corrected: bytes 0-1 RR, 2-3 RL, 4-5 FR, 6-7 FL. Fault 0x0012 = wheel-speed
+          signal invalid (front qualifier not 3). DSTC off button: not found (the unit
+          doesn't use it - needs a car log).
+        - Fault codes, all generations we can talk to: new Fault Codes card on the
+          Diagnostics page (Read / Clear, the list with each code's status), GET /api/dtc
+          + POST /api/dtc/read | /api/dtc/clear, serial lab FAULTS / FAULTSCLR. Run by a
+          new dtcTask; the live-diag pollers stand down while it runs.
+          UDS 0x19 02 / 0x14 FF FF FF: Gen5 0CQ / 0AY / VAQ. KWP2000 over TP2.0
+          0x18 02 FF 00 / 0x14 FF 00: Gen2 / Gen4. Volvo D2 over CAN (request 0x000FFFFE,
+          reply 0x01204001, module 0x1A, AE 11 / AF 11): Volvo P2 Gen2 / Gen3 and P3 Gen4 -
+          bench-proven on the P3. Gen1 = K-line (VCDS); GM / Ford / P1 / SAAB / SPC: address
+          not known yet.
+        - Volvo P2 / P3: the Haldex oil temperature (not in its CAN reply) is read over D2
+          (A6 00 02, signed degC) every 2 s while Live Diagnostics is on, and shown on the
+          Haldex temperature tile. Serial lab HTEMP prints it.
+        - Learn: the result when no engagement was ever seen now says so ("the Haldex never
+          reported any engagement") instead of "No Haldex CAN data recorded" - CAN was
+          fine (the tick); the clutch just never engaged during the sweep.
+        - Gauges over WiFi (ESP-NOW), added 2026-11-08 after the 11.00.5 beta went out (Adam:
+          kept as 11.00.5, a tiny update): the status says whether 'Use CAN if Available' is
+          on (flags[3] bit 1, OHX_F3_USE_CAN in the shared ohx_proto.h; same packet size, so
+          older gauges just ignore it). can2gauge 0.45.3 uses it to offer Expert in
+          standalone only when it's on, as this web UI does. Two new gauge commands
+          (OHX_C_STANDALONE = 9, OHX_C_USE_CAN = 10; car stopped, and Standalone not during a
+          learn) switch Standalone and 'Use CAN if Available' as POST /api/settings does.
+          They still need 'Allow Gauges to Change Settings'. can2gauge 0.45.4 has them on its
+          Haldex quick settings. Not compiled.
+
+V11.00.6 - (beta, 2026-11-11) Throttle Override for the Steering-Angle Lock Scale (rally use)
+        - Stops the steering scale pulling lock out under hard acceleration or
+          counter-steering, while keeping low-speed turn-in agility. Off by default, so an
+          updated unit drives exactly as before until it's turned on.
+        - Below Start % pedal (default 40) the steering curve works as before. Between
+          Start % and Full % (default 75) its reduction fades out in a straight line. At
+          Full % and above the steering reduction is ignored and full requested lock holds.
+          final scale = curve + (100 - curve) x override / 100. Example at 180 deg (curve
+          50 %): 40 % pedal -> 50 %, 57.5 % -> 75 %, 75 % and up -> 100 %.
+        - Works in every mode the steering scale already covers (50:50, 60:40, 75:25,
+          Expert, and the same modes forced by TC / hazards / button / drive mode).
+          No pedal data (chassis CAN lost) = pedal 0 = no override.
+        - Settings: steeringThrottleOverrideEnabled / Start / Full, saved in EEP as
+          steerThrEn / steerThrLo / steerThrHi (a bad saved pair goes back to 40 / 75).
+          Read in GET /api/settings, saved with POST /api/tune (Full must be above Start,
+          else 400 and nothing saved). Live status: steeringThrottleOverride (0-100 %).
+        - Web UI: Throttle Override toggle + Start % / Full % in the Steering-Angle Lock
+          Scale card (toggle saves at once; the boxes save with Save Steering Scale);
+          the live steering-reduction note shows the override; Backup & Restore carries it.
+          Web page only - not on BLE (Settings layout unchanged). Not compiled.
+        - CAN interrupt in IRAM (the old "ESP_INTR_FLAG_IRAM" to-do). Writing flash (settings
+          saves, OTA) switches off the chip's flash cache; the CAN interrupt lived in flash, so
+          it stopped too, the CAN chip's 5-frame buffer overflowed (~3 ms on a busy 500k bus)
+          and frames were lost - a settings save could drop 45-300 ms of bridging (possible
+          dash lights). Now: CONFIG_TWAI_ISR_IN_IRAM=y (platformio.ini custom_sdkconfig) +
+          intr_flags = LEVEL1 | IRAM (setupCAN). Frames now wait in the 512-frame queue and
+          go out late instead of being lost. Does NOT make OTA safe with the car awake
+          (tasks still stop for seconds). First build after this rebuilds Espressif's
+          libraries (long, once). Review: documents/WEB_VS_CAN_TASK_REVIEW_2026-11-11.md.
+          Not compiled.
+        - Status view: steering angle now shows on Gen1 (and any other VW gen whose
+          chassis bus carries LW_1 / LWI_01). /api/status only reported it for gens
+          2/4/50/52 + Volvo Gen4 (the lock-scale gens), so Gen1 showed "--" / Unhealthy
+          while dashCAN (BLE, no such limit) showed the angle. Now the same gens as BLE,
+          plus Volvo Gen4. Display only - the steering lock scale still runs on 2/4/50/52.
+          Not compiled.
+
+V11.00.7 - (beta, 2026-11-18) Frame blocks: ours vs the car's, the same in the car as on the bench;
+          Long Learn rebuilt to find the frame that holds the lock back in the field
+        - One rule for every frame-edit generation (1/2/4/50/51/52, Volvo P1 + Gen4), both
+          modes: a block ON = the Haldex gets OUR whole frame for that ID (the standalone
+          builders) and the car's copy is held back; OFF = the car's own frame goes through
+          untouched. Before, normal mode only edited a few bytes of the car's frame, some
+          blocks had no edit at all (Gen4 Motor_2 / Motor_5 / Bremse_5 / Bremse_8 /
+          Getriebe_1, 0AY Getriebe_1, Gen1 Motor_2 / Kombi_1) and several edits kept the
+          car's brake / handbrake / ABS bits - so on / off was often the same and Long Learn
+          could reach 100 % on the bench but not in the car (field reports ~73 %).
+          - The frame task now runs in both modes and sends while own_frames_active()
+            (standalone, or normal mode outside Stock / Learn). Stock and Controller
+            Disabled stay untouched passthrough. Car IDs with no block: normal mode passes
+            them, standalone holds them back (standalone in a car used to pass nothing;
+            now a block switched off passes the car's frame there too, as the Volvos did).
+          - getLockData()'s per-generation byte edits and VolvoGen4_editOemFrame() removed
+            (now unused). lock_target comes from update_lock_target() every 100 ms with the
+            release rate limit (standalone now honours Gradual Lock Release too).
+          - Gen1 / Gen2 Bremse_4 lever: with the block on we always send 0x2A0, so the
+            lever works on cars that don't send one (was the "V11 TODO: inject it").
+            The car's own Bremse_4 ceiling is no longer kept when lower - Follow ABS still
+            opens the clutch on ABS braking.
+          - Gen2 Motor_3 (0x380) has no standalone builder: "ours" = not sent (the 7H0
+            doesn't receive it - spec_gen2_7h0 §1).
+        - Long Learn (tasks.cpp longLearnTask):
+          1. All ours (every block ours, every car ID held back = the bench bus): a full
+             sweep must reach LL_REACH_MIN (90 %) smoothly; if not, a retry - on the 0CQ
+             Fix Hunting on, then (still short on level) the torque-ceiling walk, 40 Nm
+             steps up to 500, kept; other gens sweep once more; still not -> stop:
+             "not a missing frame".
+          2. Quick all-ours read at CF 20/40/70/100 (must reach 90 % at 100).
+          3. Each block swapped to the car's frame on its own: below 90 % at 100 = KEEP OURS,
+             else block off. The car's bytes, ours and the car's state (brake / handbrake /
+             ABS / speed / rpm) are captured per test.
+          4. Car IDs with no block: all through together; if that cuts the lock, halve the
+             group until one ID is left, hold it back (heldBackIds, saved, max 4) and
+             re-check the rest.
+          5. Confirmation sweep on the final set; fails -> every block ours, step-1 table,
+             "interaction".
+          Removed: noise threshold (the verdict is now "below 90 % at full lock"), PWM floor
+          fields. Start is refused while the car is moving, and the run stops (restores,
+          "car moved") above 5 km/h. New status fields, POST /api/longlearn/clearheld,
+          new report (car state, Follow settings, car bytes vs ours, unknown IDs).
+        - Normal mode sends our frames only while the car's bus is live (hasCANChassis),
+          so a parked car's Haldex can sleep.
+        - lastCANChassisTick / lastCANHaldexTick are now volatile uint32_t, "never seen" = 0
+          (was signed long tested "> 0": after 24.8 days of uptime - Gen5 is on permanent
+          power - the CAN health flags stayed false, and with the line above normal mode
+          would have stopped sending our frames). Ponytail audit 2026-11-18 #1.
+        - Gen2 / Gen4 Live Diagnostics: the Haldex's TP2.0 replies to OUR channel (0x20A
+          setup, 0x300 data) are no longer forwarded to the car's bus unless a real tool is
+          on it (same rule as the Gen5 UDS replies).
+        - Live Diagnostics: hint + README note that it can log faults / light dash warnings
+          on some cars.
+        - StandaloneCAN.cpp: comments reviewed (copy-paste leftovers, wrong IDs, typos);
+          Volvo / SAAB data tables and counters moved to the top of the file, the Volvo
+          Gen4 scalar constants to defs.h. No byte or logic change.
+          Not compiled.
+
+V11.00.8 - (beta, 2026-11-18) Fixes from the ponytail audit (documents/PONYTAIL_AUDIT_2026-11-18.md)
+        - #2 External button "Hold: force mode": releasing the button now ends it
+          (modeChangeExtLongOff was never bound - one hold forced the mode until reboot).
+        - #3 A cancelled Learn puts the previous learn table back (it left a half-empty table
+          marked valid, which capped the lock at ~40 % and was saved). writeEEP no longer saves
+          the table, masks, held-back IDs, torque ceiling or Fix Hunting while a Learn / Long
+          Learn runs, so a power cut mid-run keeps the last finished state.
+        - #4 Volvo Gen4: the 29-bit chassis decode (rpm, brake switch, pedal, wheel speed, ABS)
+          never ran - an early "29-bit: return" came first. So Follow Brake / Follow ABS and the
+          speed / throttle settings now act on a Gen4 Volvo.
+        - #5 Volvo Gen4: our 0x0062401E / 0x0080401E carry the brake switch with Follow Brake on
+          (they replace the car's in normal mode since V11.00.7).
+        - #6 Every JSON POST answers (the mode endpoint never did - the page froze after ~6 taps);
+          /api/tune checks every array before writing anything (a bad row half-saved the map).
+        - #7 Analyzer (SLCAN / GVRET): a frame with DLC 9-15 no longer overruns the buffers.
+        - #9 While Long Learn runs: Learn start / cancel / clear, frame-block toggles, Reset,
+          generation and Standalone changes are refused (web, ESP-NOW, serial lab).
+        - #10 tools/can_capture.py puts Disable Controller back after a capture.
+        - #11 Web UI: Forget Paired Phones no longer runs the whole page start-up twice.
+        - #13 Frame builders: the LW_1 replay counter shared with Gen2 is masked before Gen4 /
+          0AY index the table with it. Gen2 Motor_3 block removed (no standalone frame to send,
+          the 7H0 doesn't read 0x380). VAQ Motor_12 rpm: a steady 2000 rpm (as the 0CQ) - it was
+          the frame counter scaled by the lock, a copy-paste; the 2026-09-17 VAQ bench showed rpm
+          has no effect on the VAQ. NOT changed, bench check first: Gen2 Motor_1 byte 0 = 0x08
+          (clutch pressed?).
+        - #14 UDS poller reconnects when the generation changes or the module drops out of the
+          extended session (values froze until Live Diag was toggled).
+        - #15 Web server: POST bodies over 4 KB refused (413); bodies collected in a malloc buffer
+          (a dropped upload leaked a String); JSON replies streamed instead of copied.
+        - #16 RAM / CPU: serial logger task only with enableDebug; analyzer task idles at 100 ms
+          when off (was 1 ms at priority 13); CAN relay queue + table (~7 KB) only made when the
+          relay is switched on (cannow_tx.h is shared with adc2can - port it there too); OTA
+          hash buffer 1 KB static -> 256 B local.
+        - #17 One set of mode rules: OBD write-DID, the 0x6A0 external frame, ESP-NOW and the
+          serial lab MODE all go through requestMode(); the two mode-button handlers share one
+          cycleToNextMode() (button presses are now ignored while the controller is disabled).
+          One generation list: isSupportedGeneration() (serial lab also allows 42 for bench work).
+        - #19 platformio.ini: libraries pinned to exact versions (git ones to a commit); the
+          two NimBLE role flags removed (they never did anything - NimBLE reads sdkconfig).
+        - #20 readEEP opens its one namespace once (38 extra begin() calls did nothing) and the
+          first-run defaults now really run on a blank unit (the check read a key that never
+          existed). Unused globals removed (isMPH, mphFactor, rxtxcount, alerts_to_enable,
+          tx_message_chs, stackupdateLabels, MOTOR6_counter/2, mLW_1_counter2, BRAKES4_counter2,
+          ESP_02_crc, tempCounter1/2, GETRIEBE_1_array). ESPAsyncButton removed. Duplicate CAN ID
+          names merged: VOLVO_P3_*29_ID -> VOLVO_G4_*_ID, NMH_Gateway -> GATEWAY_ID,
+          diagnostics_5_ID -> ISO_ALLRAD_REQ, OPENHALDEX_UDS_RESPONSE_ID -> ISO_ALLRAD_RESP.
+          Not compiled.
+
+V11.00.9 - (bench, 2026-11-19) Ford Kuga Mk1 Haldex bring-up (documents/FORD_KUGA_GEN4_BENCH_2026-11-18.md)
+        - Serial lab TXADD: 32 slots (was 4) and a rolling-counter option "CNT <byte> <mask>"
+          (steps by the mask's lowest bit), so a whole Ford C1 frame set (24 IDs, several with
+          8-bit / nibble / 0x20-step counters) can be replayed from a real car trace.
+        - Serial lab TXMUTE <id> | ALL | CLR: drops the generation's own frames in
+          standaloneTx() (TXADD frames are never muted) - frame-set bisecting / replacement.
+        - setupCAN(): the IRAM CAN interrupt flag is only asked for when the linked framework
+          libs have CONFIG_TWAI_ISR_IN_IRAM, else a compile #warning and the normal interrupt.
+          A build on a PC with stale custom libs (synced sdkconfig.defaults hash hid it) made
+          the controller abort() at every boot - no frames, and the Kuga Haldex pumps then.
+        - NEW generation 45 "Generation 4 - Ford Kuga (Mk1)" (Ford C1, 500 kbit/s, 11-bit), from the
+          bench + the AWD module's own firmware (leaf_trace/trackF_kuga_8v41.md, trackH_kuga_9v4n.md):
+          > Standalone: the unit's whole receive set (0x080 0x090 0x201 0x205 0x211 0x231 0x433 0x4B0
+            0x4F0 0x4F1) with a real 2007 Focus Mk2's idle bytes + counters; engine rpm only while
+            lock is asked for (pump off in FWD). Brake (0x205 b2.6), handbrake (0x433 b3.0) and ABS
+            (0x211 b6 bits 1-2) follow Follow Brake / Handbrake / ABS.
+          > Lock lever = 0x6F1, the unit's test / EOL override: setpoint = lock % x 18048 (the unit's
+            own ceiling). One frame drives both firmwares (09 HH LL HH LL). The unit latches it, so
+            a release (00s) goes out whenever our frames stop (Stock / off / generation change).
+          > OEM: only the 0x6F1 lever is ours by default; the car's frames pass through, with the
+            brake / handbrake bits edited for Follow Brake / Handbrake. Chassis decode = the Focus RS
+            IDs (rpm / speed / pedal 0x201, brake 0x205, handbrake 0x433) + ABS from 0x211.
+          > Feedback 0x260: b1 bits 6-7 status, b2[3:0]:b3 clutch torque / 8 (8V41: from measured
+            pressure; 9V4N: final request). b4-b7 are never data. % scale PROVISIONAL (defs.h).
+          > Fault codes: Ford KWP2000 on 0x761 / 0x769 (18 00 FF 00 read, 14 FF 00 clear).
+          > NOT confirmed on a coupling that builds pressure: the bench unit (a Gen3-era 5WP33501
+            controller on a Volvo Gen4 coupling) commands and drives the valve but its measured
+            pressure never moved.
+
+V11.00.10 - (bench, 2026-11-20) Live Diagnostics checked against the modules' own firmware
+        - Ford Kuga (gen 45) live data: Ford KWP2000 22 HH LL on 0x761 / 0x769 in the default
+          session (never a session change), new "Live Data (Ford KWP)" card + the Haldex
+          temperature tile. Firmware variant found from its DID set: 8V41 = oil temp 0x1943,
+          measured pressure 0x1944, valve current 0x1945, pump current 0x1946, pressure target
+          0x1947, supply 0x0042; 9V4N = 0x19BA / 0x1945 / 0xEE04 / 0x1946 / 0x0042 (no valve DID,
+          pressures raw). Bar scale provisional (0x1947 / 1000, 0x1944 x 0.01953 - same scale per
+          the unit's own conversion). Backs off 15 s after any serial-lab / web UDS request; a
+          Ford tool (0x761) on the car side pauses it like the VAG pollers.
+        - Gen5 UDS (leaf_trace/diag_gen5_0cq.md, diag_gen5_0ay.md - 0CQ sw7082, VAQ, 0AY sw7521/7543):
+          > 0x2BE9 pump voltage is ONE byte x 0.1 V (calculated by the unit, ~back-EMF); the old LE16
+            read showed ~2227 V on a 554C. 0x2BE4 fin temp offset 22757 (was 22767, 0.1 C low) - a model.
+          > 0x028D is a real sensor (ADC ch15, 10 mV/C IC sensor); 0x2BF1 ("clutch temp" in VCDS) is a
+            second one of the same type (ch13, the backup) - relabelled Module Temp 1 / 2.
+          > 0x2BE6 = pump motor current (minus the unit's fixed +5 mA); 0x2BE7 = pump duty.
+          > NEW 0x2BF3 clutch torque applied % (replaces the never-found "Blockage" tile) and
+            0x2BF0 axle speed difference (0CQ / 0AY; the VAQ hasn't got it).
+        - Gen4 KWP (leaf_trace/diag_gen4_0br.md - 0BR sw3016, same on 0BS / 0BR B / 2K0 / 0AY907554C):
+          decode was right; labels fixed - group 3 "oil pressure" is the pressure TARGET (no group
+          reports the sensor), "est. torque" = torque command, duty = valve duty, plate temp = model.
+          NEW group 4: pump duty + pump motor current. Formula 0x0E = standard 0.005*a*b.
+        - Gen2 KWP (leaf_trace/diag_gen2_7h0.md - 7H0, 1K0 identical): groups 1 / 2 / 7D decoded -
+          supply, brake switch, oil temp, MEASURED oil pressure (the old 0x0E formula would have
+          shown -188 bar), CAN status. Then SecurityAccess level 3 (27 03 / 27 04, key = seed + 0x762B,
+          fixed in 7H0 + 1K0 code, checked against a 1K0 EEPROM seed/key pair) opens groups 0x32 / 0x33:
+          pump motor current, valve duty, valve current. One key per channel; a single refused key
+          (7F 27 35) stops the login for good - SAVED in settings (NRC + seed + key) so it survives
+          reboots (3 wrong = the unit locks every level, stored in its EEPROM), shown as a highlighted
+          warning on the Gen2 card with "Allow one more try" (POST /api/kwp/gen2login/reset).
+          7F 27 36 / 37 = the unit's own delay: wait 15 min.
+
+V11.00.11 - (bench, 2026-11-21) Ford Kuga (gen 45) driven through its own torque strategy - no test channel
+        - The 11.00.9 / 10 lever was 0x6F1, the unit's test / EOL override. Its firmware (trackF "Pump speed
+          control") skips the strategy pump demand while any 0x6F1 override is on, so the pump sat on its
+          standby floor (~34.5 % duty) whatever lock was asked for - slow pump in 50/50.
+        - NEW lever = the unit's normal strategy, as the car drives it (trackF "Strategy enable" /
+          "Normal-path lever"): 0x201 rpm (base demand > ~401) + pedal b6 > 5 (pump demand on), 0x205
+          engine torque w0 / w3 high (7000 Nm) so the demand is set by the ABS / ESP frame 0x211 b6
+          field 3 torque ceiling C (b2[3:0]:b3) = lock % x 2294 (bench: 0x260 = 2294 with the pressure
+          sensor at its 40 bar full scale - same unit as C). The unit makes the pressure target,
+          runs the pump from target - measured and closes the loop on the valve itself.
+          > Standalone: rpm 800 + pedal 40 % + 7000 Nm only while lock is asked for; FWD = rpm 0 +
+            ceiling 0 -> pump off, clutch open. Follow ABS still sends field 1 (open).
+          > OEM (default blocks 0x205, 0x201, 0x211 - was 0x6F1 only): the car's rpm / pedal (pedal raised
+            to 40 % while locking), our torque, and the ceiling never above the car's own ESP ceiling
+            (0x211 field 3 decoded -> kugaCarTorqueCeiling). Saved OEM masks from 11.00.9 / 10 (0x6F1
+            only) leave no lever: reset the Kuga frame blocks to defaults.
+          > 0x6F1: only a one-shot release (3 x 00s) when our frames start, to clear an override latched
+            by 11.00.9 / 10; never sent after that.
+          > Feedback 0x260 b2[3:0]:b3 = clutch torque from measured pressure in the ceiling's unit: lock %
+            = feedback / 2294 (KUGA_FB_ZERO 0 - the old 0x0E3 was a stuck-sensor artefact).
+          > Bench (sensor signal shorted to full scale while locked): pump drops to its floor, setpoint
+            backs off, 0x260 = 2294 - the unit's closed loop and lock report work through this lever.
+          > NOT confirmed proportional on the bench unit: the coupling leaked oil into the controller and
+            its measured pressure stays ~1.4 bar (0x1944 ~ 0.05 bar/count), so its loop winds to full.
+
+V11.00.12 - (2026-11-22) Expert PT (pass-through) cells, draggable Lock Map Surface and steering curve
+        - Request from Jakub: a cell in the Expert map can be PT instead of a number - in that area of the
+          map the car's own Haldex strategy has the unit, the same as Stock (car frames untouched).
+          > Firmware: lockPTMask (one bit per cell, NVS "lockPT"; missing = none). lockArray keeps the
+            cell's number, so clearing PT brings it back. /api/settings sends "lockPT" (7x7 of 0/1) and
+            /api/tune takes it (absent = left as it is); lockArray values now clamped to 0-100 on save
+            and load (was an unchecked cast).
+          > Lookup: the four cells around the live point are weighed as before; PT share >= 55 % = PT
+            on, <= 45 % = off, 250 ms minimum in each state (no flicking between the car's frames and
+            ours on a boundary). Below that the lock blends the NUMBER cells only (re-weighted), so it
+            still fades smoothly up to a PT area.
+          > stock_effective() is true while Expert (selected or forced by TC / hazards / button / drive
+            mode) sits in a PT area - worked out there, not in update_lock_target(), because the frame
+            task stops calling that while the car's frames go through. Learn still wins. Standalone
+            has no car strategy to pass through: PT = 0 % lock there.
+          > /api/status: "expertPT"; the dashboard Target shows "PT"; no lock-gate reason in a PT area.
+        - Web UI (Expert tab):
+          > Long-press a grid cell (550 ms, the cell darkens while held) = PT on / off. A PT cell is a
+            dark shade of its colour showing PT with its kept number faded underneath. Tap still edits.
+          > Lock Map Surface: hold a point (450 ms), slide up / down, let go to set it; sliding off the
+            chart cancels. The page only stops scrolling once the hold completes. PT points sit on the
+            floor in grey and can't be dragged. The view is framed on the 0-100 % box so it doesn't
+            rescale mid-drag.
+          > NEW steering-angle lock scale curve under its table, same hold / slide / release; table and
+            curve stay in sync.
+          > NEW Restore buttons (tune, steering scale): back to what the controller has saved. Save
+            buttons show "Unsaved changes" until sent. Restore Defaults now redraws the axis headers too.
+          > Backups carry lockPT (web UI + tools/openhaldex_config.py); an older backup clears PT.
+        - Bench / CAN status review (2026-11-22):
+          > NEW CAN Test on Diagnostics > CAN Status: the IDs each bus is receiving (Bus 0 now has
+            the same census as Bus 1; serial RXCLR clears both) and a Loop Test for CHS wired to HDX -
+            each bus sends one marked frame (ext 0x1FFFFE5A "OHXLP") and the other must hear it. Test
+            frames are swallowed before the ticks / parsers / bridge, so linked buses can't storm. The
+            old check (link the lines, look for two ticks) needed the 0x6B0 broadcast always on; since
+            it was fixed to need the setting AND a live Haldex, a linked pair only ever shows one tick.
+          > Broadcast frame zero-initialised (its "self" bit was stack garbage = self-reception).
+          > OTA: the status check refused any mode but Stock - and standalone never sits in Stock - so
+            the page blocked updates in FWD. The update switches to Stock itself, so the mode no longer
+            blocks; the reason text only lists what really does (moving, bus failure, over-temp).
+          > Switching Standalone on while in Stock now moves to FWD (web UI, gauges, serial lab, and
+            a saved Stock + standalone at boot).
+          > Per-corner wheel slip on the PQ cars from Bremse_3's four wheel speeds (was MQB ESP_19 only).
+          > Web UI: Display Options only list tiles this generation can fill; Gen 5 Lock Calibration
+            card only on 0CQ / VAQ; LP Wake Threshold and LED Brightness sliders on their own line;
+            calibration-slider thumb no longer overlaps the text; shorter helper text.
+          > Charts: a full-screen button (top right) on the Lock Map Surface and the steering curve - bigger
+            chart, finer steps; same hold / slide / release. The steering curve now spaces its five points
+            evenly with straight lines between them (exact: the firmware blends in a straight line between
+            points); the square-root angle axis bent the first segment. Wheel Slip card hidden where no
+            wheel speeds are decoded, and its hint no longer says MQB only.
+
+V11.00.13 - (2026-11-22) Audit fixes (every REA trace re-checked against the binaries), Land Rover, fault codes
+        - Source: documents/haldex-binaries/leaf_trace/AUDIT_SUMMARY_2026-11-22.md + audit_<unit>.md, and the
+          dtc_check_*.md read / clear checks. Not bench-tested yet. No controller identification (Adam).
+        - Stock = untouched passthrough for every generation: the Follow Brake / Handbrake override no longer
+          edits the car's frames in Stock (or in an Expert PT area).
+        - Gen1 (02D): the 02D keeps the last Bremse_4 ceiling until power-off, so when our ceiling stops (Stock,
+          controller off, block off, generation change) 3 x 0x2A0 b0 = 0x00 hand it back. With the Bremse_4
+          block off, FWD sends rpm 0x0021 (the fixed 0x4E21 alone asked ~53 %). OEM default + Motor_2 (our
+          260 Nm, brake bit = Follow Brake) so OEM = standalone (the car's BLS bits capped lock at ~11 %).
+          Read-back 100 % = 0xC9 (the lever's own full scale; bench full lock now reads ~96 %).
+        - Gen2 (7H0 / 1K0): new gen2_lever_byte() - full valve from 0xD6 (7H0) / 0xEA (1K0), so 1-99 % =
+          0x81..0xE9 (1K0 exact; a 7H0 is at full lock from ~82 %), 100 % = 0xFD. Read-back uses the same
+          0x80..0xEA range (was /0x7D: full lock showed ~69 % / ~86 %).
+        - Ford Kuga (45): 100 % = ceiling C 1281 (was 2294 = sensor full scale; the unit's own demand tops out
+          at C 1281 parked, so 56-100 % all did the same). OEM 0x211 is now built on the car's own frame - only
+          C and the request field are ours, and the car's ESP open / ramp-down (field 1 / 2) passes untouched.
+          9V4N DID 0x1945 shown as valve current (it has no pressure read-back); 0x260 = 0x0FF fault marker
+          shows 0 % + clutch fault (was ~19 %).
+        - Volvo SPC (53): 0x041 b5 bit 2 = the signal's update bit (without it the lever did nothing); the value
+          is a torque CEILING (0 = none) so 0 % sends 1; full scale 0x0C80 (was 0x7FFF); feedback full 2033
+          [INF]; status 1 no longer shown as limp. Fault codes: UDS 0x738 -> 0x638.
+        - Volvo P2 facelift (3): engagement full scale 135 (was 150); b7 = 2 ("not ready", engine off) shown as
+          coupling open, not limp.
+        - 0CQ: ALR_Sta = 2 shown as coupling open only (limp / fault from 0x17F0000F b0.0). 0AY: 0x2C0 b3.7 is
+          a self-test flag - no longer "Fault Stored".
+        - NEW generation 46 "Land Rover (Freelander 2 / Evoque)" - untested, from the binary trace (trackG +
+          audit_landrover): lever = 0x20A field 4 torque request (0..1500 = cal cap 24000 >> 4), feedback
+          0x310 (FL2) / 0x301 (Evoque) commanded torque, union frame set at 20 ms (rates [GUESS - bench]),
+          OEM blocks 0x20A / 0x2B5 / 0x250 on the car's own frames, fault codes UDS 0x795 -> 0x79D.
+          Frame-edit masks: new LAST slot, older saves load unchanged.
+        - Fault codes:
+          > UDS (0CQ / 0AY / VAQ / SPC / Land Rover): only active / stored codes listed (after a clear every code
+            reads "not tested since clear" and filled the list); 5.5 s after "response pending"; 2 ms STmin;
+            the generation's own ID pair is set before every read / clear.
+          > KWP TP2.0 (Gen2 / Gen4): the 7H0's "7F 14 78" before the clear answer is waited out (was reported
+            as refused); "intermittent" only for stored-not-active codes (bit 0x20 is always set); one retry
+            when a stale channel blocks the setup. Gen1 has no CAN diagnostics (K-line KWP1281).
+          > Ford KWP: status text = the Kuga's own bits (0x40 active, 0x20 stored, 0x10 not tested, 0x80 lamp).
+          > Volvo D2: clear sends a read first (the DEM refuses AF 11 before an AE 11); "1A 7E xx 23" (still
+            working) is waited out.
+        - Comments: every byte of every frame we build / decode now carries [KM <KMatrix / DBC signal>] and
+          [REA <audit ref>] tags (Gen1, Gen2, Gen4, 0AY, 0CQ, VAQ, Volvo 3 / 21 / 43 / 31 / 53, Kuga, Land Rover);
+          comments the audit proved wrong were corrected.
+
+
+V11.00.14 - (2026-11-22) Code tidy - no behaviour change intended
+        - CAN split into three files, each laid out top to bottom (statics, small helpers, setup, main code):
+          > OpenHaldexC6_can.cpp - what both buses share: canInstallBus() (driver settings), setupCAN(),
+            bus-off recovery, counted transmit, RX census, loop test, 0x6B0 broadcast, bus speed
+          > OpenHaldexC6_CHS.cpp - Bus 0 / chassis: setupCHS(), chsDecodeChassis() = one case per generation,
+            one chsDecode<Car>() per car, frames to the Haldex, our DID answers, parseCANChs()
+          > OpenHaldexC6_HDX.cpp - Bus 1 / Haldex: setupHDX(), hdxDecodeFeedback() = one case per generation,
+            one hdxDecode<Gen>() per unit, diagnostic reply taps, parseCANHdx()
+        - OpenHaldexC6_ChassisOther.cpp / .h removed: the non-VW chassis decoders live in CHS.cpp and are picked
+          by the generation switch (hasOtherCarChassisDecode() and the "skip the VW decoder" test are gone)
+        - Gen 50 (0CQ) and 52 (VAQ) feedback: their own cases / functions (was one case re-testing the generation)
+        - static inline -> static in the .cpp files (header helpers keep inline)
+        - One naming style: camelCase for every variable / function (received_haldex_engagement ->
+          receivedHaldexEngagement, lock_target -> lockTarget, parseCAN_chs -> parseCANChs ...). #define constants
+          and CAN IDs stay UPPER_CASE; VW K-matrix message names (mKombi_1, mLW_1 ...) keep their K-matrix spelling.
+          String literals are untouched, so web / API JSON keys, saved-setting keys and serial-lab commands are
+          unchanged (one key still says "leverAccepted" for that reason).
+        - "lever" renamed "lock request" everywhere (lever_lock_percent -> lockRequestPercent, gen1_lever_byte ->
+          gen1LockRequestByte, LR_LEVER_20A_ID -> LR_REQUEST_20A_ID ...)
+        - Lock request + feedback scaling for every generation in ONE block in defs.h with one naming pattern:
+          <GEN>_REQUEST_FULL / _REQUEST_STEP / _REQUEST_FULL_BYTE / _FEEDBACK_FULL (was spread over defs.h, canID.h,
+          Calculations.cpp and bare 125 / 250 / 200 / 201 / 0xFD / 0xFE in the code). vagLockRequestByte() now takes
+          the generation's steps + full byte.
+        - Every .cpp laid out top to bottom: includes, #defines, statics, small helpers, setup, the rest, task loops
+          last (StandaloneCAN: the frame dispatchers + standaloneFramesTask now at the end; per-generation state
+          moved up with the other statics). Duplicate #define OTA_PASSWORD removed.
+        Also in V11.00.14 (behaviour / UI):
+        - Vehicle geometry defaults per generation (one representative car each, table + sources in
+          OpenHaldexC6_Settings.cpp). Untouched figures follow a generation change (web / ESP-NOW) and a unit still
+          on the old Audi TT Mk3 figures moves to its generation's car at boot; typed-in figures are never changed.
+          /api/settings sends vehicleDefaults {car, ...}; POST vehicleDefaults:true = "Use Defaults" button.
+        - System Info board: BOARD_VERSION "1.0" sent as boardVersion (was "--": boardRev was never sent)
+        - Web: full-screen chart turns sideways on an upright phone + pinch zoom; real full screen + landscape
+          lock on Android
+        - Web: config import checks every step, keeps the home WiFi password, only sends changed WiFi names, does a
+          CAN-speed generation change last; BLE pairing code left out of the backup file; product check
+        - Config backup now also carries every generation's frame-edit masks (both modes, named slots, hex),
+          the Long Learn held-back IDs and the learn table: GET / POST /api/backup (backupLayout 1 in
+          /api/settings). Older files still import (per-bit frame edits as before); a new file on older firmware
+          restores everything else and says the extras need the update
+        - Web: Drive Mode (force + diagnostics card) only for Gen5 VW (50 / 51 / 52); banner on one fixed line
+          (CAN as two dots); dashboard layout drawn before the settings load; diagnostics notes under the label
 */
 
 
@@ -619,5 +1053,5 @@ V11.00.4 - (unreleased) engine temperatures and a faster Live Data refresh.
         > add throttle/speed axis refresh
         > add 'ota' to match existing layout
         > add reduction in throttle/speed off
-        > move CAN into interrupt based - ESP_INTR_FLAG_IRAM
+        > (done V11.00.6) move CAN into interrupt based - ESP_INTR_FLAG_IRAM
 */

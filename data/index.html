@@ -9,7 +9,7 @@
     <meta http-equiv="Expires" content="0">
 
     <title>OpenHaldex-C6</title>
-    <link rel="stylesheet" href="style.css?v=20261103">
+    <link rel="stylesheet" href="style.css?v=20261122b">
 
     <!-- Favicons -->
     <link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png">
@@ -35,7 +35,7 @@
             <div class="status-bar">
                 <!--<span class="status-badge" id="wsStatus">Connecting...</span>-->
                 <span class="status-badge" id="modeStatus">--</span>
-                <span class="status-badge" id="canStatus">CAN: --</span>
+                <span class="status-badge can-dots" id="canStatus"><i class="can-dot"></i>CHS <i class="can-dot"></i>HDX</span>
             </div>
         </header>
 
@@ -226,7 +226,7 @@
                         <div class="gauge-unit">%</div>
                     </div>
                 </div>
-                <p class="hint">Per-corner slip vs. steering-predicted speed. Needs MQB wheel-speed and steering CAN. Set the car's geometry below.</p>
+                <p class="hint">Each wheel vs. its steering-predicted speed. Car geometry is on the Expert tab.</p>
             </section>
 
             <section class="card" id="gen41Card" style="display:none;">
@@ -267,7 +267,7 @@
             </section>
 
             <section class="card" id="udsDataCard" style="display:none;">
-                <h2>UDS Data (MQB)</h2>
+                <h2>UDS Data (Gen5)</h2>
                 <div class="gauge-grid">
                     <div class="gauge">
                         <div class="gauge-label">Terminal Volt.</div>
@@ -275,39 +275,44 @@
                         <div class="gauge-unit">V</div>
                     </div>
                     <div class="gauge">
-                        <div class="gauge-label">Module Temp</div>
+                        <div class="gauge-label">Module Temp 1</div>
                         <div class="gauge-value" id="udsModuleTemp">--</div>
                         <div class="gauge-unit">°C</div>
                     </div>
                     <div class="gauge">
-                        <div class="gauge-label">Clutch Temp</div>
+                        <div class="gauge-label" title="VCDS calls this Clutch Temperature (0x2BF1); the firmware reads it from a second control-unit sensor">Module Temp 2</div>
                         <div class="gauge-value" id="udsClutchTemp">--</div>
                         <div class="gauge-unit">°C</div>
                     </div>
                     <div class="gauge">
-                        <div class="gauge-label">Fin Temp</div>
+                        <div class="gauge-label">Fin Temp (model)</div>
                         <div class="gauge-value" id="udsCoolingFinTemp">--</div>
                         <div class="gauge-unit">°C</div>
                     </div>
                     <div class="gauge">
-                        <div class="gauge-label">Clutch Current</div>
+                        <div class="gauge-label">Pump Current</div>
                         <div class="gauge-value" id="udsClutchCurrent">--</div>
                         <div class="gauge-unit">A</div>
                     </div>
                     <div class="gauge">
-                        <div class="gauge-label">PWM Signal</div>
+                        <div class="gauge-label">Pump Duty</div>
                         <div class="gauge-value" id="udsClutchPWM">--</div>
                         <div class="gauge-unit">%</div>
                     </div>
                     <div class="gauge">
-                        <div class="gauge-label">Voltage (2BE4)</div>
+                        <div class="gauge-label" title="0x2BE9 - calculated by the module (duty x supply - current x winding resistance), not measured">Pump Volt. (calc.)</div>
                         <div class="gauge-value" id="udsClutchVoltage">--</div>
                         <div class="gauge-unit">V</div>
                     </div>
                     <div class="gauge">
-                        <div class="gauge-label">Blockage</div>
-                        <div class="gauge-value" id="udsBlockagePct">--</div>
+                        <div class="gauge-label">Clutch Torque</div>
+                        <div class="gauge-value" id="udsClutchTorquePct">--</div>
                         <div class="gauge-unit">%</div>
+                    </div>
+                    <div class="gauge" id="udsAxleSpeedDiffTile">
+                        <div class="gauge-label">Axle Speed Diff.</div>
+                        <div class="gauge-value" id="udsAxleSpeedDiff">--</div>
+                        <div class="gauge-unit">km/h</div>
                     </div>
                 </div>
                 <p class="hint" id="udsStatus"></p>
@@ -322,7 +327,7 @@
                         <div class="gauge-unit">°C</div>
                     </div>
                     <div class="gauge">
-                        <div class="gauge-label">Plate Temp</div>
+                        <div class="gauge-label">Plate Temp (model)</div>
                         <div class="gauge-value" id="kwpPlateTemp">--</div>
                         <div class="gauge-unit">°C</div>
                     </div>
@@ -332,17 +337,17 @@
                         <div class="gauge-unit">V</div>
                     </div>
                     <div class="gauge">
-                        <div class="gauge-label">Oil Pressure</div>
+                        <div class="gauge-label" id="kwpOilPressureLabel">Pressure Target</div>
                         <div class="gauge-value" id="kwpOilPressure">--</div>
                         <div class="gauge-unit">bar</div>
                     </div>
                     <div class="gauge">
-                        <div class="gauge-label">Est. Torque</div>
+                        <div class="gauge-label">Torque Command</div>
                         <div class="gauge-value" id="kwpEstTorque">--</div>
                         <div class="gauge-unit">Nm</div>
                     </div>
                     <div class="gauge">
-                        <div class="gauge-label">Clutch Duty</div>
+                        <div class="gauge-label">Valve Duty</div>
                         <div class="gauge-value" id="kwpClutchDuty">--</div>
                         <div class="gauge-unit">%</div>
                     </div>
@@ -351,8 +356,64 @@
                         <div class="gauge-value" id="kwpClutchValveCurrent">--</div>
                         <div class="gauge-unit">A</div>
                     </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Pump Duty</div>
+                        <div class="gauge-value" id="kwpPumpDuty">--</div>
+                        <div class="gauge-unit">%</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Pump Current</div>
+                        <div class="gauge-value" id="kwpPumpCurrent">--</div>
+                        <div class="gauge-unit">A</div>
+                    </div>
                 </div>
                 <p class="hint" id="kwpStatus">Connecting…</p>
+                <!-- V11.00.10: Gen2 SecurityAccess key refused - saved, no more tries until reset. -->
+                <div class="login-fault" id="kwpLoginFault" hidden>
+                    <strong>Gen2 security login refused</strong>
+                    <p id="kwpLoginFaultText"></p>
+                    <p class="hint">OpenHaldex has stopped trying, even after a reboot, because three wrong keys
+                        lock the module. Pump current, valve duty and valve current are not shown.
+                        Please send these numbers to Forbes Automotive.</p>
+                    <button class="btn-secondary" id="kwpLoginRetryBtn" type="button">Allow one more try</button>
+                </div>
+            </section>
+
+            <section class="card" id="fordDataCard" style="display:none;">
+                <h2>Live Data (Ford KWP)</h2>
+                <div class="gauge-grid">
+                    <div class="gauge">
+                        <div class="gauge-label">Oil Temp</div>
+                        <div class="gauge-value" id="fordOilTemp">--</div>
+                        <div class="gauge-unit">°C</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Supply Volt.</div>
+                        <div class="gauge-value" id="fordSupplyV">--</div>
+                        <div class="gauge-unit">V</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Pressure</div>
+                        <div class="gauge-value" id="fordPressure">--</div>
+                        <div class="gauge-unit" id="fordPressureUnit">bar</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Pressure Target</div>
+                        <div class="gauge-value" id="fordSetpoint">--</div>
+                        <div class="gauge-unit" id="fordSetpointUnit">bar</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Valve Current</div>
+                        <div class="gauge-value" id="fordValveCurrent">--</div>
+                        <div class="gauge-unit">A</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Pump Current</div>
+                        <div class="gauge-value" id="fordPumpCurrent">--</div>
+                        <div class="gauge-unit">A</div>
+                    </div>
+                </div>
+                <p class="hint" id="fordStatus">Connecting…</p>
             </section>
 
             <section class="card">
@@ -399,12 +460,15 @@
                     <option value="41">Generation 4 - GM (Vauxhall / Opel)</option>
                     <option value="43">Generation 4 - Volvo (P3)</option>
                     <option value="44">Generation 4 - SAAB 9-3 XWD</option>
+                    <option value="45">Generation 4 - Ford Kuga (Mk1)</option>
+                    <option value="46">Generation 4 - Land Rover (Freelander 2 / Evoque) - untested</option>
                     <option value="50">Generation 5 (0CQ)</option>
                     <option value="52">Generation 5 (0CQ VAQ)</option>
                     <option value="51">Generation 5 (0AY)</option>
                     <option value="53">Generation 5 - Volvo (SPC 31380867)</option>
                 </select>
                 <p class="hint" id="genVolvoSaabHint" style="display:none;">Volvo and SAAB support is new: standalone only, with starting values to be confirmed from logs. CAN bus: <span id="canSpeedKbps">--</span> kbit/s. Changing to or from Volvo P2 (Pre-Facelift) switches the bus speed and restarts the controller.</p>
+                <p class="hint" id="genLandRoverHint" style="display:none;">Land Rover (Freelander 2 BH52 / Evoque BJ32) is untested: no car log yet, built from the Haldex unit's own firmware. One setting covers both cars. Lock is sent as the DSC's direct torque request; engagement shows the torque the unit commands (not measured).</p>
             </section>
 
             <!-- V11.00.1: Volvo P1 standalone - how the lock is shown to the AWD module.
@@ -526,14 +590,14 @@
 
             <section class="card" id="longLearnSection">
                 <h2>Long Learn</h2>
-                <p class="hint">Finds which frame blocks the Haldex actually needs. Engine running, Haldex CAN active, about 6&ndash;8 min. Cancel restores everything.</p>
+                <p class="hint">Finds which frames the Haldex needs from us in this car. First every frame is ours (the bench) and must reach full lock; then each block is swapped to the car's own frame, and the car's IDs we don't know are let through. Whatever cuts the lock is kept ours / held back. Car stopped, engine running, about 8&ndash;12 min. Note brake, handbrake and gear in the notes: the report logs them. Cancel restores everything.</p>
                 <div class="toggle-group">
                     <label class="toggle">
                         <input type="checkbox" id="longLearnTestAll">
                         <span class="toggle-slider"></span>
-                        <span class="toggle-label">Also test the lock-driven (core) blocks</span>
+                        <span class="toggle-label">Also test the core blocks</span>
                     </label>
-                    <p class="hint">On = also test the lock-control blocks. Slower, and lock can drop out during a sweep.</p>
+                    <p class="hint">On = also swap the lock-control blocks to the car's frame. Slower; they will almost always cut the lock.</p>
                 </div>
                 <p class="hint" id="longLearnStatusText">--</p>
                 <div class="learn-progress-wrap" id="longLearnProgressWrap" style="display:none;">
@@ -544,11 +608,12 @@
                 </div>
                 <div class="ll-tracker" id="longLearnTracker" style="display:none;">
                     <div class="ll-row"><span class="ll-key">Phase</span><span class="ll-val" id="llPhase">--</span></div>
-                    <div class="ll-row"><span class="ll-key">Sweep</span><span class="ll-val" id="llSweep">--</span></div>
+                    <div class="ll-row"><span class="ll-key">Read</span><span class="ll-val" id="llSweep">--</span></div>
                     <div class="ll-row"><span class="ll-key">Testing</span><span class="ll-val" id="llTesting">--</span></div>
-                    <div class="ll-row"><span class="ll-key">PWM floor</span><span class="ll-val" id="llFloor">--</span></div>
-                    <div class="ll-row"><span class="ll-key">Torque ceiling</span><span class="ll-val" id="llBpk">--</span></div>
-                    <div class="ll-row"><span class="ll-key">Reference</span><span class="ll-val" id="llBaseline">--</span></div>
+                    <div class="ll-row"><span class="ll-key">All ours</span><span class="ll-val" id="llBaseline">--</span></div>
+                    <div class="ll-row"><span class="ll-key">Fix Hunting</span><span class="ll-val" id="llFix">--</span></div>
+                    <div class="ll-row"><span class="ll-key">Car at start</span><span class="ll-val" id="llCarState">--</span></div>
+                    <div class="ll-row"><span class="ll-key">Unknown car IDs</span><span class="ll-val" id="llUnlisted">--</span></div>
                     <div class="ll-row"><span class="ll-key">Elapsed</span><span class="ll-val" id="llElapsed">--</span></div>
                     <div class="learn-dual-bars">
                         <div class="learn-bar-row">
@@ -571,6 +636,7 @@
                 <div class="learn-controls">
                     <button class="btn-secondary" id="longLearnStart">Start Long Learn</button>
                     <button class="btn-secondary" id="longLearnCancel" style="display:none;">Cancel Long Learn</button>
+                    <button class="btn-secondary" id="longLearnClearHeld" style="display:none;">Let held-back IDs through</button>
                 </div>
 
                 <h3 class="subsection-title" style="margin-top:18px;">Chassis / car notes</h3>
@@ -592,7 +658,7 @@
                     </div>
                     <input type="range" id="bpkCeilingRange" min="10" max="500" step="5" value="220" class="slider cal-slider">
                 </div>
-                <p class="hint">Torque ceiling claimed at full command. Not a strength dial: run a Learn and adjust until Sent matches Returned. Needs Fix Hunting on.</p>
+                <p class="hint">Not a strength dial: adjust after a Learn until Sent matches Returned. Needs Fix Hunting on.</p>
                 <div class="button-row">
                     <button class="btn" id="bpkCeilingResetBtn" type="button">Reset to default (220 Nm)</button>
                 </div>
@@ -604,9 +670,7 @@
                     </div>
                     <input type="range" id="esp14MinFloorRange" min="0" max="100" step="5" value="0" class="slider cal-slider">
                 </div>
-                <p class="hint">Experimental. Raises the minimum clutch PWM while lock is commanded, for firmer launches. 0% = off.
-                    Since V11.00.0 the 0CQ is driven with ESP_14 Min = Max (an exact request it follows directly), so this
-                    floor is no longer used there; it is kept for comparison on the bench.</p>
+                <p class="hint">Experimental. Minimum clutch PWM while locking. 0% = off. Not used on the 0CQ since V11.00.0.</p>
                 <div class="button-row">
                     <button class="btn" id="esp14MinFloorResetBtn" type="button">Reset to default (0 %)</button>
                 </div>
@@ -664,13 +728,16 @@
                     </div>
                     <p class="hint">Press: next mode. Hold: force the selected mode until released.</p>
 
-                    <label class="toggle" style="margin-top:10px;">
-                        <input type="checkbox" id="driveModeForce">
-                        <span class="toggle-slider"></span>
-                        <span class="toggle-label">Use Drive Mode to Force Mode</span>
-                    </label>
-                    <div id="driveModeForceTable"></div>
-                    <p class="hint">MQB only. Forces a mode from the car's drive mode select. N/A leaves the mode alone.</p>
+                    <!-- Gen5 VW (MQB) only: shown by updateVolvoSaabHint() for gens 50 / 51 / 52 -->
+                    <div id="driveModeForceBlock" style="display:none;">
+                        <label class="toggle" style="margin-top:10px;">
+                            <input type="checkbox" id="driveModeForce">
+                            <span class="toggle-slider"></span>
+                            <span class="toggle-label">Use Drive Mode to Force Mode</span>
+                        </label>
+                        <div id="driveModeForceTable"></div>
+                        <p class="hint">Forces a mode from the car's drive mode select. N/A leaves the mode alone.</p>
+                    </div>
 
                     <div class="brightness-row" style="margin-top:10px;">
                         <span class="toggle-label">Force Mode Priority</span>
@@ -768,7 +835,7 @@
                             <option value="4">Each ID up to 10 per second</option>
                         </select>
                     </div>
-                    <p class="hint">Sends every frame received from the car's CAN to can2gauge gauges over WiFi, so a gauge with power only - no CAN wire - reads the car as if it were wired: its CAN profile, the CAN monitor, DBC and user signals. A busy 500 kbit/s bus is around 2000 frames a second; if frames are lost, cap each ID's rate. It rides on the WiFi broadcast to gauges, so that has to be on too.</p>
+                    <p class="hint">Sends every frame from the car's CAN to can2gauge gauges over WiFi, so a gauge with no CAN wire reads the car as if it were wired.</p>
                     <p class="hint" id="canRelayStatus"></p>
                     <label class="toggle">
                         <input type="checkbox" id="dangerZoneEnabled">
@@ -793,6 +860,7 @@
                     </label>
                     <p class="hint">Polls the Haldex for live data (Gen5: UDS, Gen2/4: KWP2000). Needs Haldex CAN.</p>
                     <p class="hint">Uses the diagnostic channel. Turn off when using VCDS.</p>
+                    <p class="hint">On some cars this can log fault codes or light dash warnings (e.g. the AWD lamp) - switch it off if you see them.</p>
                     <label class="toggle">
                         <input type="checkbox" id="disableOnboardButton">
                         <span class="toggle-slider"></span>
@@ -822,12 +890,12 @@
                     </label>
                     <p class="hint">Keeps WiFi on for bench testing with no car connected. Switches itself off as soon as CAN traffic is seen.</p>
                     <p class="hint" id="benchModeStatus">--</p>
-                    <div class="brightness-row">
-                        <span class="toggle-label">LP Wake Threshold</span>
-                        <div class="brightness-controls">
-                            <input type="range" id="lpWakeThresholdFpsRange" min="0" max="2000" step="10" value="1100" class="slider-inline">
-                            <span id="lpWakeThresholdFpsValue">1100</span> fps
+                    <div class="cal-row">
+                        <div class="cal-row-head">
+                            <span class="toggle-label">LP Wake Threshold</span>
+                            <span class="cal-row-value"><span id="lpWakeThresholdFpsValue">1100</span> fps</span>
                         </div>
+                        <input type="range" id="lpWakeThresholdFpsRange" min="0" max="2000" step="10" value="1100" class="slider cal-slider">
                     </div>
                     <p class="hint" id="sleepCalStatus" hidden></p>
                     <p class="hint">OEM: chassis bus fps. Standalone: Haldex bus fps. Parked = 0.</p>
@@ -839,12 +907,12 @@
                             <span>Haldex: <span id="lpHaldexFrameRate">--</span> fps</span>
                         </div>
                     </div>
-                    <div class="brightness-row">
-                        <span class="toggle-label">LED Brightness</span>
-                        <div class="brightness-controls">
-                            <input type="range" id="ledBrightnessRange" min="0" max="100" step="5" value="100" class="slider-inline">
-                            <span id="ledBrightnessValue">100</span>%
+                    <div class="cal-row">
+                        <div class="cal-row-head">
+                            <span class="toggle-label">LED Brightness</span>
+                            <span class="cal-row-value"><span id="ledBrightnessValue">100</span> %</span>
                         </div>
+                        <input type="range" id="ledBrightnessRange" min="0" max="100" step="5" value="100" class="slider cal-slider">
                     </div>
                 </div>
             </section>
@@ -902,7 +970,7 @@
         <div class="page" id="expert-page">
             <section class="card">
                 <h2>Expert Editor</h2>
-                <p class="hint">Tap cells to edit lock percentage</p>
+                <p class="hint">Tap a cell to edit its lock %. Long-press a cell to make it <strong>PT</strong> (pass-through): in that area the car's own Haldex strategy is used, the same as Stock. Long-press it again to bring its number back. In Standalone there's no car strategy to pass through, so PT = 0 %.</p>
 
                 <div class="map-container">
                     <div class="map-axis-label-y">Throttle %</div>
@@ -910,15 +978,17 @@
                     <div class="map-axis-label-x">Speed (km/h)</div>
                 </div>
 
-                <div class="map-controls">
+                <div class="map-controls three">
                     <button class="btn-secondary" id="saveMap">Save Tune</button>
+                    <button class="btn-secondary" id="restoreSavedMap" title="Back to the tune saved on the controller" disabled>Restore</button>
                     <button class="btn-secondary" id="restoreDefaults">Restore Defaults</button>
                 </div>
+                <p class="unsaved-note" id="mapUnsaved" hidden>Unsaved changes. Save Tune sends them to the controller, Restore goes back to what it has saved.</p>
             </section>
 
             <section class="card">
                 <h2>Lock Map Surface</h2>
-                <p class="hint">3D view of the lock table. The dot is the live operating point.</p>
+                <p class="hint">3D view of the lock table. The red dot is the live operating point. Hold a point, then slide up or down to change it. Let go to set it, or slide off the chart to cancel. Grey points are PT. Changes are sent with Save Tune.</p>
                 <div class="tune-chart" id="tuneChart"></div>
                 <div class="chart-legend" id="tuneChartLegend"></div>
             </section>
@@ -934,15 +1004,32 @@
                     </label>
                 </div>
                 <table id="steeringScaleTable" class="steering-scale-table"></table>
-                <div class="map-controls">
+                <div class="steer-chart" id="steerChart"></div>
+                <p class="hint">Hold a point on the curve, then slide up or down to change its Lock %. Let go to set it, or slide off the chart to cancel. Angles are typed in the table.</p>
+                <h3>Throttle Override (rally)</h3>
+                <p class="hint">Stops the steering scale pulling lock out under hard acceleration or counter-steering. Below Start % the steering scale works as normal; between Start % and Full % its reduction fades out; at Full % and above the steering scale is ignored and full lock holds.</p>
+                <div class="toggle-group">
+                    <label class="toggle">
+                        <input type="checkbox" id="steeringThrottleOverrideEnabled">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Enable Throttle Override</span>
+                    </label>
+                </div>
+                <table id="steeringThrottleOverrideTable" class="steering-scale-table">
+                    <tr><th>Start % (pedal)</th><td><input type="number" min="0" max="99" id="steeringThrottleOverrideStart" value="40"></td></tr>
+                    <tr><th>Full % (pedal)</th><td><input type="number" min="1" max="100" id="steeringThrottleOverrideFull" value="75"></td></tr>
+                </table>
+                <div class="map-controls three">
                     <button class="btn-secondary" id="saveSteeringScale">Save Steering Scale</button>
+                    <button class="btn-secondary" id="restoreSavedSteering" title="Back to the steering scale saved on the controller" disabled>Restore</button>
                     <button class="btn-secondary" id="restoreSteeringScale">Restore Defaults</button>
                 </div>
+                <p class="unsaved-note" id="steeringUnsaved" hidden>Unsaved changes. Save Steering Scale sends them to the controller, Restore goes back to what it has saved.</p>
             </section>
 
             <section class="card" id="vehicleGeometryCard">
                 <h2>Vehicle Geometry</h2>
-                <p class="hint">Used for per-wheel slip and Steering-Angle Lock Scale. Defaults are Audi TT Mk3; enter your car's figures.</p>
+                <p class="hint">Used for per-wheel slip and Steering-Angle Lock Scale. Defaults for this generation: <span id="vehicleDefaultsCar">--</span>. Enter your own car's figures; until you do, they follow the generation.</p>
                 <div class="form-group">
                     <label for="slipWheelbaseMm">Wheelbase (mm)</label>
                     <input type="number" id="slipWheelbaseMm" min="0" max="4000" step="1" class="input-number">
@@ -958,6 +1045,9 @@
                 <div class="form-group">
                     <label for="slipSteeringRatio">Steering Ratio (wheel:road-wheel)</label>
                     <input type="number" id="slipSteeringRatio" min="1" max="40" step="0.1" class="input-number">
+                </div>
+                <div class="wifi-controls">
+                    <button class="btn-secondary" id="vehicleDefaultsBtn" type="button">Use Defaults for This Generation</button>
                 </div>
             </section>
 
@@ -985,7 +1075,33 @@
                         <span class="diag-label">Haldex CAN:</span>
                         <span class="diag-value" id="diagHaldexCAN">--</span>
                     </div>
+                    <div class="diag-item">
+                        <span class="diag-label">Chassis IDs:</span>
+                        <span class="diag-value can-ids allow-select" id="canIdsChassis">--</span>
+                    </div>
+                    <div class="diag-item">
+                        <span class="diag-label">Haldex IDs:</span>
+                        <span class="diag-value can-ids allow-select" id="canIdsHaldex">--</span>
+                    </div>
                 </div>
+                <p class="hint">Loop test: wire CHS to HDX first.</p>
+                <div class="button-row" style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;">
+                    <button class="btn-secondary" id="canLoopTestBtn" type="button">Loop Test</button>
+                    <button class="btn-secondary" id="canIdsClearBtn" type="button">Clear IDs</button>
+                </div>
+                <p class="hint" id="canLoopResult" hidden></p>
+            </section>
+
+            <section class="card">
+                <h2>Fault Codes</h2>
+                <p class="hint">Reads and clears the Haldex module's own fault codes over its diagnostic
+                    protocol (<span id="dtcProtocol">--</span>). Gen1 is K-line only - use VCDS.</p>
+                <div class="button-row" style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;">
+                    <button class="btn-secondary" id="dtcReadBtn" type="button">Read Fault Codes</button>
+                    <button class="btn-secondary" id="dtcClearBtn" type="button">Clear Fault Codes</button>
+                </div>
+                <p class="hint" id="dtcStatus">--</p>
+                <div id="dtcList" class="diag-grid allow-select"></div>
             </section>
 
             <section class="card">
@@ -1022,7 +1138,7 @@
                 </div>
             </section>
 
-            <section class="card">
+            <section class="card" id="driveModeDiagCard" style="display:none;">
                 <h2>Drive Mode</h2>
                 <p class="hint">The car's drive mode select (MQB). Read from the gateway's Charisma frames once a second.</p>
                 <div class="diag-grid">
@@ -1077,21 +1193,19 @@
                         <span class="diag-value" id="diagBrakeFromCAN">--</span>
                     </div>
                     <div class="diag-item">
-                        <span class="diag-label">Handbrake (CAN):</span>
+                        <span class="diag-label">Handbrake (CAN):<span class="diag-sub" id="diagHandbrakeFromCANNote">Gen1/2/4 PQ, Gen5 MQB</span></span>
                         <span class="diag-value" id="diagHandbrakeFromCAN">--</span>
-                        <span class="diag-label" id="diagHandbrakeFromCANNote" style="font-size:0.75em;color:#888;">(Gen1/2/4 PQ, Gen5 MQB)</span>
                     </div>
                     <div class="diag-item">
-                        <span class="diag-label">ABS Braking (CAN):</span>
+                        <span class="diag-label">ABS Braking (CAN):<span class="diag-sub">PQ Bremse_1, MQB ESP_21 - opens the clutch</span></span>
                         <span class="diag-value" id="diagAbsBraking">--</span>
-                        <span class="diag-label" style="font-size:0.75em;color:#888;">(PQ Bremse_1, MQB ESP_21 - opens the clutch)</span>
                     </div>
                 </div>
             </section>
 
             <section class="card">
                 <h2>Frame Editing (Advanced)</h2>
-                <p class="hint">Choose which frames are edited in normal mode. Unticked frames pass through untouched. Saved immediately, current generation only.</p>
+                <p class="hint">Ticked = ours: OpenHaldex sends its own whole frame for that ID and holds the car's back. Unticked = the car's frame goes through untouched. Same in normal and standalone mode. Saved immediately, current generation only.</p>
                 <p class="hint" id="frameEditP1Hint" style="display:none;">Volvo P1 in Standalone: a ticked frame is
                     made up by the controller, an unticked one is the car's own frame passed through. Untick them all and
                     the module sees the real car; then tick them back one at a time on a drive to find the one it won't
@@ -1167,7 +1281,7 @@
 
             <section class="card">
                 <h2>Backup &amp; Restore</h2>
-                <p class="hint">Exports tune, steering scale, frame edits and settings to a file. Do this before a firmware update. Passwords aren't exported; you'll re-enter them after import.</p>
+                <p class="hint">Exports tune, steering scale, settings, frame edits (every generation, both modes), the IDs Long Learn holds back and the learn table to a file. Older backup files still import. Do this before a firmware update. Passwords aren't exported; you'll re-enter them after import.</p>
                 <p class="hint" id="backupStatus">--</p>
                 <div class="wifi-controls">
                     <button class="btn-secondary" id="backupExport">Export Config</button>
@@ -1327,7 +1441,7 @@
             </section>
         </div>
 
-        <script src="./app.js?v=20261103" type="text/javascript"></script>
+        <script src="./app.js?v=20261122b" type="text/javascript"></script>
         <!-- The device now serves app.js/style.css with Cache-Control: no-cache
              (ETag revalidation), so this ?v= no longer needs bumping. It was
              changed once to escape the year-long cache older builds handed out. -->

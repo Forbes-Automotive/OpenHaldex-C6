@@ -1,23 +1,24 @@
 #include <OpenHaldexC6_EEP.h>          // include the header for EEPROM/preference functions
 #include <OpenHaldexC6_Calculations.h> // for haldexLearnTable and learn globals
 #include <OpenHaldexC6_ESPNow.h>       // espNowEnabled / espNowControl
+#include <OpenHaldexC6_Settings.h>     // vehicle geometry defaults per generation
 
 // V11.00.0 one-off settings upgrade, called by readEEP() the first time a V11
 // firmware boots (after the saved frame-edit masks are loaded).
 //
 // OEM (normal) masks: the job in every non-Stock mode is to achieve the lock %.
-// A mask still on the OLD default moves to the new V11 default (lever byte +
+// A mask still on the OLD default moves to the new V11 default (lock request byte +
 // lock-scaled wheel speeds + Motor_1 demand where used). A mask the user changed
 // (by hand or with Long Learn) keeps its extra blocks, but every lock-driving
-// block (frameEditLockDriven - incl. the new levers) is switched on in it.
+// block (frameEditLockDriven - incl. the new lock requests) is switched on in it.
 //
 // Standalone masks: still on the old default -> new default. Otherwise the
-// frames the unit needs are switched on (the lever, and on Gen4 the five
+// frames the unit needs are switched on (the lock request, and on Gen4 the five
 // monitored frames - a missing Motor_5 made it set its own limp bit). Only Gen4
 // also switches off the two frames it never reads; the others leave a
 // customised mask's extra frames alone (harmless - the unit ignores them).
 //
-// Learn table: on the VAG units the lever itself changed in V11 (Bremse_4 /
+// Learn table: on the VAG units the lock request itself changed in V11 (Bremse_4 /
 // ESP_14), so a table learned against the old 0x7F x CF scaling no longer fits.
 // It is cleared - run Learn once after the update.
 static void migrateSettingsToV11()
@@ -36,7 +37,7 @@ static void migrateSettingsToV11()
   }
   else
   {
-    frameEditMaskSA[FE_GEN_1] = frameEditMaskSA[FE_GEN_1] | (1ULL << 4); // bit 4 Bremse_4 on (the lever)
+    frameEditMaskSA[FE_GEN_1] = frameEditMaskSA[FE_GEN_1] | (1ULL << 4); // bit 4 Bremse_4 on (the lock request)
     frameEditMaskSA[FE_GEN_1] = frameEditMaskSA[FE_GEN_1] | (1ULL << 5); // bit 5 Motor_2 on (missing = false limp)
   }
 
@@ -52,7 +53,7 @@ static void migrateSettingsToV11()
   }
   else
   {
-    frameEditMaskSA[FE_GEN_2] = frameEditMaskSA[FE_GEN_2] | (1ULL << 5); // bit 5 Bremse_4 on (the lever)
+    frameEditMaskSA[FE_GEN_2] = frameEditMaskSA[FE_GEN_2] | (1ULL << 5); // bit 5 Bremse_4 on (the lock request)
   }
 
   // ----- Gen4 0BR (FE_GEN_4): old OEM 0x3F, old standalone 0xFFF -----
@@ -62,7 +63,7 @@ static void migrateSettingsToV11()
   }
   frameEditMask[FE_GEN_4] = frameEditMask[FE_GEN_4] | frameEditLockDriven[FE_GEN_4]; // lock-driving blocks on
   frameEditMaskSA[FE_GEN_4] = frameEditMaskSA[FE_GEN_4] | 0x1F000ULL;  // bits 12-16 on: Motor_2, Motor_5, Bremse_5, Bremse_8, Getriebe_1
-  frameEditMaskSA[FE_GEN_4] = frameEditMaskSA[FE_GEN_4] | (1ULL << 5); // bit 5 Bremse_4 on (the lever)
+  frameEditMaskSA[FE_GEN_4] = frameEditMaskSA[FE_GEN_4] | (1ULL << 5); // bit 5 Bremse_4 on (the lock request)
   frameEditMaskSA[FE_GEN_4] = frameEditMaskSA[FE_GEN_4] & ~(1ULL << 9);  // bit 9 Bremse_11 off (Gen4 doesn't read it)
   frameEditMaskSA[FE_GEN_4] = frameEditMaskSA[FE_GEN_4] & ~(1ULL << 10); // bit 10 Kombi_2 off (Gen4 doesn't read it)
 
@@ -77,8 +78,8 @@ static void migrateSettingsToV11()
     }
   }
   frameEditMask[FE_GEN_50] = frameEditMask[FE_GEN_50] | frameEditLockDriven[FE_GEN_50]; // lock-driving blocks on
-  // Standalone default stays all-on (shared with the VAQ); just make sure the lever is on
-  frameEditMaskSA[FE_GEN_50] = frameEditMaskSA[FE_GEN_50] | (1ULL << 4); // bit 4 ESP_14 on (the lever)
+  // Standalone default stays all-on (shared with the VAQ); just make sure the lock request is on
+  frameEditMaskSA[FE_GEN_50] = frameEditMaskSA[FE_GEN_50] | (1ULL << 4); // bit 4 ESP_14 on (the lock request)
 
   // ----- Gen5 0AY (FE_GEN_51): old OEM 0x0F, old standalone 0x3FFFF -----
   if (frameEditMask[FE_GEN_51] == 0x0FULL)
@@ -93,17 +94,17 @@ static void migrateSettingsToV11()
   else
   {
     frameEditMaskSA[FE_GEN_51] = frameEditMaskSA[FE_GEN_51] | (1ULL << 18); // bit 18 Getriebe_1 on (new)
-    frameEditMaskSA[FE_GEN_51] = frameEditMaskSA[FE_GEN_51] | (1ULL << 2);  // bit 2 Bremse_4 on (the lever)
+    frameEditMaskSA[FE_GEN_51] = frameEditMaskSA[FE_GEN_51] | (1ULL << 2);  // bit 2 Bremse_4 on (the lock request)
   }
 
-  // ----- Learn table: the VAG levers changed, so the old table no longer fits -----
+  // ----- Learn table: the VAG lock requests changed, so the old table no longer fits -----
   if (haldexGeneration == 1 || haldexGeneration == 2 || haldexGeneration == 4 ||
       haldexGeneration == 50 || haldexGeneration == 51)
   {
     if (haldexLearnTableValid)
     {
       haldexLearnTableValid = false; // run Learn again after the update
-      DEBUG("EEPROM - V11 lever change: old learn table cleared, run Learn again");
+      DEBUG("EEPROM - V11 lock request change: old learn table cleared, run Learn again");
     }
   }
 
@@ -116,51 +117,18 @@ void readEEP() // function to read stored preferences into runtime variables
   DEBUG("EEPROM initialising!"); // debug: EEPROM init start
 #endif
 
-  // use ESP32's 'Preferences' to remember settings
-  pref.begin("broadcastOpen", false);   // open CAN broadcast preference
-  pref.begin("isStandalone", false);    // standalone mode preference
-  pref.begin("useCANifAvail", false);   // use CAN if available preference
-  pref.begin("disableControl", false);  // controller disable preference
-  pref.begin("followBrake", false);     // follow brake input preference
-  pref.begin("followHandbrake", false); // follow handbrake input preference
-  pref.begin("invertBrake", false);     // invert brake output preference
-  pref.begin("invertHandbrake", false); // invert handbrake output preference
-  pref.begin("tcForceMode", false);     // TC force mode preference
-  pref.begin("extBtnForceMode", false); // external button force mode
-  pref.begin("hazardForceMode", false); // hazard lights force mode
-  pref.begin("dsbOnboardBtn", false);   // disable onboard button preference
-  pref.begin("dsbExtBtn", false);       // disable external button preference
-  pref.begin("canSleepEn", false);      // CAN-wake light sleep enable preference
-  pref.begin("benchMode", false);       // bench-mode (hold WiFi up, no harness) preference
-  pref.begin("ledBrightness", false);   // LED brightness preference
-  pref.begin("slipWheelbase", false); // vehicle geometry: wheelbase (mm), for per-corner slip
-  pref.begin("slipTrackFront", false); // vehicle geometry: front track (mm)
-  pref.begin("slipTrackRear", false); // vehicle geometry: rear track (mm)
-  pref.begin("slipSteerRatio", false); // vehicle geometry: steering-wheel:road-wheel ratio
+  // use ESP32's 'Preferences' to remember settings. Every key lives in this one
+  // namespace: Preferences ignores begin() once it is open, so the 38 further
+  // begin("...") calls that were here never opened anything (removed V11.00.8).
+  // The name stays "broadcastOpen" - renaming it would lose every saved setting.
+  pref.begin("broadcastOpen", false);
 
-  pref.begin("haldexGen", false);       // stored haldex generation
-  pref.begin("forceModeValue", false);  // stored force mode value
-  pref.begin("lastMode", false);        // stored last mode
-  pref.begin("disableThrottle", false); // stored throttle disable value
-  pref.begin("disengageUSpeed", false); // stored disengage under speed
-  pref.begin("disengageASpeed", false); // stored disengage above speed
-  pref.begin("otaUpdate", false);       // stored OTA update flag
-
-  pref.begin("throttleArray", false); // stored throttle curve bytes
-  pref.begin("speedArray", false);    // stored speed curve bytes
-  pref.begin("lockArray", false);     // stored lock curve bytes
-  pref.begin("steerArray", false);    // stored steering-angle breakpoint bytes
-  pref.begin("steerScale", false);    // stored steering-angle lock-scale bytes
-  pref.begin("learnTable", false);    // stored haldex learn table
-  pref.begin("wifiPwd", false);       // stored WiFi AP password
-  pref.begin("wifiStaSsid", false);   // stored home-network (bridge mode) SSID
-  pref.begin("wifiStaPwd", false);    // stored home-network (bridge mode) password
-  pref.begin("udsMQBEn", false);      // UDS MQB polling enable preference
-
-  // first run comes with EEP value of 255, so write actual values
-  if (pref.getUInt("haldexGeneration") == 255) // detect first run
-  {                                            // if first run
-#if detailedDebugEEPF
+  // First run: nothing saved yet, so write the defaults. (On the Teensy a blank
+  // EEPROM read 255; here the check is "haldexGen has never been written" - the
+  // old test read a key that never existed, so this branch never ran. V11.00.8)
+  if (!pref.isKey("haldexGen")) // detect first run
+  {                             // if first run
+#if detailedDebugEEP
     DEBUG("First run..."); // debug: first run detected
 #endif
     pref.putBool("broadcastOpen", broadcastOpenHaldexOverCAN); // save broadcast setting
@@ -187,6 +155,7 @@ void readEEP() // function to read stored preferences into runtime variables
     pref.putUShort("bpkCeilNm", bpkCeilingNm);                 // save per-car BPK ceiling (Nm)
     pref.putUChar("esp14Floor", esp14MinFloorPct);             // save ESP_14 launch PWM floor (%)
     pref.putString("llNotes", longLearnNotes);                 // save Long Learn notes (empty on first run)
+    pref.putBytes("heldBack", heldBackIds, sizeof(heldBackIds)); // V11.00.7: car IDs Long Learn keeps from the Haldex (none)
     pref.putBool("canSleepEn", canSleepEnabled);               // save CAN-wake light sleep enable
     pref.putBool("benchMode", benchMode);                      // save bench mode (off)
     pref.putBool("canSleepAggr", canSleepAggressive);          // save aggressive CAN sleep enable
@@ -211,6 +180,7 @@ void readEEP() // function to read stored preferences into runtime variables
     pref.putBytes("speedArray", (byte *)(&speedArray), sizeof(speedArray));          // save speed array bytes
     pref.putBytes("throttleArray", (byte *)(&throttleArray), sizeof(throttleArray)); // save throttle array bytes
     pref.putBytes("lockArray", (byte *)(&lockArray), sizeof(lockArray));             // save lock array bytes
+    pref.putULong64("lockPT", lockPTMask);                                           // save Expert PT cells (V11.00.12)
     pref.putBytes("steerArray", (byte *)(&steeringArray), sizeof(steeringArray));                   // save steering breakpoint bytes
     pref.putBytes("steerScale", (byte *)(&steeringLockScaleArray), sizeof(steeringLockScaleArray)); // save steering lock-scale bytes
     pref.putBool("learnOK", false);                                                  // learn table not valid on first run
@@ -225,6 +195,9 @@ void readEEP() // function to read stored preferences into runtime variables
     pref.putFloat("lockReleaseRate", lockReleaseRatePerSec);                         // save lock release rate (%/s)
     pref.putBool("lockReleaseEn", lockReleaseEnabled);                               // save lock release enable
     pref.putBool("steerScaleEn", steeringScaleEnabled);                              // save steering-scale enable
+    pref.putBool("steerThrEn", steeringThrottleOverrideEnabled);                     // save steering throttle override enable (off)
+    pref.putUChar("steerThrLo", steeringThrottleOverrideStart);                      // save steering throttle override start % (40)
+    pref.putUChar("steerThrHi", steeringThrottleOverrideFull);                       // save steering throttle override full % (75)
     pref.putBytes("feMask", frameEditMask, sizeof(frameEditMask));                    // save frame-edit masks (defaults)
     pref.putBytes("feMaskSA", frameEditMaskSA, sizeof(frameEditMaskSA));              // save standalone frame-edit masks (defaults)
     pref.putBool("v11Mig", true);                                                     // fresh install already has the V11 defaults - skip the V11 upgrade (it would clear a learn table made before the next boot)
@@ -283,7 +256,7 @@ void readEEP() // function to read stored preferences into runtime variables
     lpWakeThresholdFps = pref.getUShort("lpWakeFps", 1100);                  // load LP wake threshold (fps)
     sleepCalState = pref.getUChar("sleepCal", SLEEP_CAL_NONE);              // load sleep auto-setup state
     sleepCalAvgFps = pref.getUShort("sleepCalAvg", 0);                      // load parked-bus average (fps)
-    ledBrightness = pref.getUChar("ledBrightness", led_brightness_default); // load LED brightness
+    ledBrightness = pref.getUChar("ledBrightness", ledBrightnessDefault); // load LED brightness
     slipWheelbaseMm = pref.getUShort("slipWheelbase", 2505);                     // load vehicle wheelbase (mm), default Audi TT Mk3
     slipTrackFrontMm = pref.getUShort("slipTrackFront", 1572);                  // load vehicle front track (mm), default Audi TT Mk3
     slipTrackRearMm = pref.getUShort("slipTrackRear", 1543);                    // load vehicle rear track (mm), default Audi TT Mk3
@@ -293,17 +266,25 @@ void readEEP() // function to read stored preferences into runtime variables
     haldexGeneration = pref.getUChar("haldexGen", 1);                      // load haldex generation with default
     if (haldexGeneration == 5) haldexGeneration = 50;                      // migrate legacy Gen5 -> Gen5 (0CQ)
     udsApplyDefaultIds(); // UDS pair follows the generation from boot (0x71E/0x788 for the VAQ), not only once the poller connects
+    // V11.00.14: a unit still on the old one-for-all geometry (Audi TT Mk3, also
+    // what a first boot saves) gets its generation's car instead. Typed-in figures stay.
+    vehicleGeometryFollowGeneration(0, haldexGeneration);
     tcForceModeValue = pref.getUChar("tcFMV", 2);                          // load TC force mode value (default 50:50)
     hazardForceModeValue = pref.getUChar("hazFMV", 2);                     // load Hazard force mode value
     extBtnForceModeValue = pref.getUChar("extFMV", 2);                     // load ExtBtn force mode value
     lastMode = pref.getUChar("lastMode", 0);                               // load last mode with default
     disableThrottle = pref.getUChar("disableThrottle", 0);                 // load throttle disable with default
-    state.pedal_threshold = disableThrottle;                               // apply throttle disable to state
+    state.pedalThreshold = disableThrottle;                               // apply throttle disable to state
     disengageUnderSpeed = pref.getUShort("disengageUSpeed", 0);            // load disengage under speed
     disengageAboveSpeed = pref.getUShort("disengageASpeed", 0);            // load disengage above speed
     pref.getBytes("speedArray", &speedArray, sizeof(speedArray));          // read speed array bytes
     pref.getBytes("throttleArray", &throttleArray, sizeof(throttleArray)); // read throttle array bytes
     pref.getBytes("lockArray", &lockArray, sizeof(lockArray));             // read lock array bytes
+    for (uint8_t t = 0; t < throttleArrayCount; t++)                        // V11.00.12: a cell is 0-100, never more
+      for (uint8_t sp = 0; sp < speedArrayCount; sp++)
+        if (lockArray[t][sp] > 100)
+          lockArray[t][sp] = 100;
+    lockPTMask = pref.getULong64("lockPT", 0) & LOCK_PT_ALL;              // Expert PT cells (missing on older saves = none)
     if (pref.getBytesLength("steerArray") == sizeof(steeringArray))
       pref.getBytes("steerArray", &steeringArray, sizeof(steeringArray)); // read steering breakpoints (keep defaults if absent)
     if (pref.getBytesLength("steerScale") == sizeof(steeringLockScaleArray))
@@ -329,14 +310,26 @@ void readEEP() // function to read stored preferences into runtime variables
     lockReleaseRatePerSec = pref.getFloat("lockReleaseRate", 120.0f); // load lock release rate (%/s)
     lockReleaseEnabled = pref.getBool("lockReleaseEn", true);        // load lock release enable
     steeringScaleEnabled = pref.getBool("steerScaleEn", true);       // load steering-scale enable
+    steeringThrottleOverrideEnabled = pref.getBool("steerThrEn", false);                             // load steering throttle override enable (missing = off)
+    steeringThrottleOverrideStart = pref.getUChar("steerThrLo", STEERING_THROTTLE_START_DEFAULT);   // load steering throttle override start %
+    steeringThrottleOverrideFull = pref.getUChar("steerThrHi", STEERING_THROTTLE_FULL_DEFAULT);     // load steering throttle override full %
+    if (steeringThrottleOverrideFull > 100 || steeringThrottleOverrideStart >= steeringThrottleOverrideFull)
+    {
+      steeringThrottleOverrideStart = STEERING_THROTTLE_START_DEFAULT; // bad saved pair: go back to 40
+      steeringThrottleOverrideFull = STEERING_THROTTLE_FULL_DEFAULT;   // and 75
+    }
     bpkCeilingNm = pref.getUShort("bpkCeilNm", 220);                 // load per-car BPK ceiling (Nm)
     esp14MinFloorPct = pref.getUChar("esp14Floor", 0);              // load ESP_14 launch PWM floor (%)
     pref.getString("llNotes", longLearnNotes, sizeof(longLearnNotes)); // load Long Learn notes (empty if absent)
+    if (pref.getBytesLength("heldBack") == sizeof(heldBackIds))
+      pref.getBytes("heldBack", heldBackIds, sizeof(heldBackIds)); // V11.00.7: car IDs Long Learn keeps from the Haldex
     bool frameEditMasksChanged = false;
     // V11.00.1: the masks are one 8-byte number per generation, and the list got
     // longer (spare V12 slot + Volvo P1). A save from an older version has fewer
     // numbers: load the ones it has and give the new generations their defaults,
-    // so nobody loses their frame-edit choices.
+    // so nobody loses their frame-edit choices. V11.00.13: Land Rover (FE_GEN_LANDROVER_GEN4)
+    // is appended as slot 9 for exactly this reason - a 9-slot save from 11.00.9-11.00.12 loads
+    // slots 0-8 into the same generations and slot 9 gets its defaults (OEM 0x07, standalone all 24 on).
     uint8_t savedSlots = pref.getBytesLength("feMask") / sizeof(uint64_t); // generations in the saved normal-mode masks
     if (savedSlots > 0 && savedSlots <= FE_GEN_COUNT &&
         pref.getBytesLength("feMask") == savedSlots * sizeof(uint64_t))
@@ -376,6 +369,12 @@ void readEEP() // function to read stored preferences into runtime variables
         frameEditMaskSA[i] = frameEditMaskDefaultsSA[i];             // legacy install: use standalone all-on defaults
       frameEditMasksChanged = true;
     }
+    // V11.00.5 Volvo Gen4 (P3): the blocks the unit can't run without are kept on,
+    // whatever was saved - OEM: the lock inputs (wheel speeds, engine torque,
+    // engine rpm); standalone: the same plus the CEM configuration page (without
+    // it the unit goes into limp 32 s after power-up). Bench 2026-11-07.
+    if (frameEditKeepRequired()) // shared with the config restore (/api/backup)
+      frameEditMasksChanged = true;
     // V11.00.0 one-off upgrade (OEM code spec, documents/haldex-binaries/). Runs once,
     // then "v11Mig" is saved so it never runs again.
     if (!pref.getBool("v11Mig", false))
@@ -470,6 +469,10 @@ void readEEP() // function to read stored preferences into runtime variables
       state.mode = MODE_FWD;    // default to MODE_FWD
       break;
     } 
+    if (isStandalone && state.mode == MODE_STOCK && !disableController)
+    {
+      state.mode = MODE_FWD; // V11.00.12: standalone has no Stock (older firmware could save it)
+    }
   }
 
 #if detailedDebugEEP
@@ -525,7 +528,14 @@ void writeEEP(void *arg) // task function to periodically write preferences
     pref.putBool("hazardForceMode", hazardForceMode);          // write hazard force mode
     pref.putBool("dsbOnboardBtn", disableOnboardButton);       // write disable onboard button
     pref.putBool("dsbExtBtn", disableExternalButton);          // write disable external button
-    pref.putBool("fixHunting", fixHunting);                    // write Motor_11 BPK-mode toggle
+    // V11.00.8: a Learn / Long Learn run changes these temporarily (half-built table,
+    // "every block ours", test values) - write them only when no run is active, so a
+    // power cut mid-run keeps the last finished state.
+    const bool learnRunning = haldexLearnActive || longLearnActive;
+    if (!learnRunning)
+    {
+      pref.putBool("fixHunting", fixHunting); // write Motor_11 BPK-mode toggle
+    }
     pref.putBool("dangerZone", dangerZoneEnabled);             // write Danger Zone (full-duty 50:50)
     pref.putBool("canSleepEn", canSleepEnabled);               // write CAN-wake light sleep enable
     pref.putBool("benchMode", benchMode);                      // write bench mode
@@ -552,12 +562,16 @@ void writeEEP(void *arg) // task function to periodically write preferences
     pref.putBytes("speedArray", (byte *)(&speedArray), sizeof(speedArray));          // write speed array
     pref.putBytes("throttleArray", (byte *)(&throttleArray), sizeof(throttleArray)); // write throttle array
     pref.putBytes("lockArray", (byte *)(&lockArray), sizeof(lockArray));             // write lock array
+    pref.putULong64("lockPT", lockPTMask);                                           // write Expert PT cells (V11.00.12)
     pref.putBytes("steerArray", (byte *)(&steeringArray), sizeof(steeringArray));                   // write steering breakpoints
     pref.putBytes("steerScale", (byte *)(&steeringLockScaleArray), sizeof(steeringLockScaleArray)); // write steering lock-scale
-    pref.putBool("learnOK", haldexLearnTableValid);                                  // write learn valid flag
-    if (haldexLearnTableValid)
+    if (!learnRunning)
     {
-      pref.putBytes("learnTbl", haldexLearnTable, sizeof(haldexLearnTable)); // write learn table bytes
+      pref.putBool("learnOK", haldexLearnTableValid); // write learn valid flag
+      if (haldexLearnTableValid)
+      {
+        pref.putBytes("learnTbl", haldexLearnTable, sizeof(haldexLearnTable)); // write learn table bytes
+      }
     }
     pref.putString("wifiSsid", wifiSsid);    // write WiFi AP SSID
     pref.putString("wifiPwd", wifiPassword); // write WiFi AP password
@@ -570,11 +584,21 @@ void writeEEP(void *arg) // task function to periodically write preferences
     pref.putFloat("lockReleaseRate", lockReleaseRatePerSec);  // write lock release rate (%/s)
     pref.putBool("lockReleaseEn", lockReleaseEnabled);        // write lock release enable
     pref.putBool("steerScaleEn", steeringScaleEnabled);       // write steering-scale enable
-    pref.putUShort("bpkCeilNm", bpkCeilingNm);                // write per-car BPK ceiling (Nm)
+    pref.putBool("steerThrEn", steeringThrottleOverrideEnabled); // write steering throttle override enable
+    pref.putUChar("steerThrLo", steeringThrottleOverrideStart);  // write steering throttle override start %
+    pref.putUChar("steerThrHi", steeringThrottleOverrideFull);   // write steering throttle override full %
+    if (!learnRunning)
+    {
+      pref.putUShort("bpkCeilNm", bpkCeilingNm); // write per-car BPK ceiling (Nm)
+    }
     pref.putUChar("esp14Floor", esp14MinFloorPct);           // write ESP_14 launch PWM floor (%)
     pref.putString("llNotes", longLearnNotes);                // write Long Learn chassis/car notes
-    pref.putBytes("feMask", frameEditMask, sizeof(frameEditMask)); // write frame-edit masks
-    pref.putBytes("feMaskSA", frameEditMaskSA, sizeof(frameEditMaskSA)); // write standalone frame-edit masks
+    if (!learnRunning)
+    {
+      pref.putBytes("heldBack", heldBackIds, sizeof(heldBackIds));         // write the car IDs Long Learn keeps from the Haldex
+      pref.putBytes("feMask", frameEditMask, sizeof(frameEditMask));       // write frame-edit masks
+      pref.putBytes("feMaskSA", frameEditMaskSA, sizeof(frameEditMaskSA)); // write standalone frame-edit masks
+    }
 
 #if detailedDebugEEP
     DEBUG("Written EEPROM with data:");                                                            // debug: print written prefs

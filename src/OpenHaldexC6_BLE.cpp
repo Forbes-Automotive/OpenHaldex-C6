@@ -27,6 +27,8 @@
 // WiFi. A connected phone does NOT hold the device awake: phones auto-reconnect
 // indefinitely, which would keep a parked car from ever sleeping.
 
+// ---- Defines -------------------------------------------------------------------
+
 #define BLE_SERVICE_UUID "6254A001-C7B7-494F-A2FB-76FB74A7DDF0"
 #define BLE_MODE_UUID "6254A002-C7B7-494F-A2FB-76FB74A7DDF0"
 #define BLE_CONTROLLER_UUID "6254A003-C7B7-494F-A2FB-76FB74A7DDF0"
@@ -71,6 +73,8 @@
 #define BLE_FLAG_STANDALONE (1u << 12)
 #define BLE_FLAG_DIAG_TOOL (1u << 13)
 
+// ---- Statics -------------------------------------------------------------------
+
 enum : uint8_t
 {
   BLE_WRITE_MODE,
@@ -113,6 +117,8 @@ static NimBLECharacteristic *chrSettings = nullptr;
 static NimBLECharacteristic *chrDiag = nullptr;
 static NimBLECharacteristic *chrPairing = nullptr;
 
+// ---- Small helpers -------------------------------------------------------------
+
 static bool isTrustedPeer(const NimBLEAddress &addr)
 {
   for (const auto &a : trustedPeers)
@@ -147,6 +153,93 @@ static void applyPairingMode(bool codeRequired)
     NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
   }
   updatePairingValue();
+}
+
+static void put16(uint8_t *p, uint32_t v)
+{
+  if (v > 0xFFFE)
+    v = 0xFFFE; // 0xFFFF is the "unknown" sentinel
+  p[0] = (uint8_t)(v & 0xFF);
+  p[1] = (uint8_t)(v >> 8);
+}
+
+static uint8_t clampPct(float v)
+{
+  if (v < 0.0f)
+    return 0;
+  if (v > 100.0f)
+    return 100;
+  return (uint8_t)(v + 0.5f);
+}
+
+// Signed steering-wheel angle in 0.1 deg (the web UI shows the magnitude only).
+// Negative when the VW sign bit (LW1_LRW_Sign / LWI_VZ_Lenkradwinkel) is set.
+// Unlike the web view this is not limited to the gens that use steering for lock
+// scaling: every gen whose chassis bus carries LW_1 / LWI_01 reports it. GM/Ford
+// (41/42) are excluded because foreign frames on those IDs would be misdecoded.
+static bool bleSteeringDeci(int16_t &out)
+{
+  const bool fresh = hasCANChassis && receivedSteeringMs != 0 &&
+                     (millis() - receivedSteeringMs) <= steeringStaleMs &&
+                     haldexGeneration != 41 && haldexGeneration != 42 &&
+                     haldexGeneration != GEN_LANDROVER_GEN4 &&   // V11.00.13: no LR steering decode
+                     !isVolvoOrSaabGeneration(haldexGeneration); // Volvo / SAAB: not decoded either
+  if (!fresh)
+  {
+    return false;
+  }
+  float deci = fabsf(receivedSteeringAngle) * 10.0f + 0.5f;
+  if (deci > 32767.0f)
+    deci = 32767.0f;
+  out = receivedSteeringNegative ? -(int16_t)deci : (int16_t)deci;
+  return true;
+}
+
+static void putI16(uint8_t *p, float v, float scale)
+{
+  float x = v * scale;
+  x = x > 32767.0f ? 32767.0f : (x < -32767.0f ? -32767.0f : x); // -32768 is the sentinel
+  const int16_t i = (int16_t)(x < 0 ? x - 0.5f : x + 0.5f);
+  p[0] = (uint8_t)(i & 0xFF);
+  p[1] = (uint8_t)((uint16_t)i >> 8);
+}
+
+static void putU16Scaled(uint8_t *p, float v, float scale)
+{
+  float x = v * scale;
+  x = x < 0.0f ? 0.0f : (x > 65534.0f ? 65534.0f : x); // 0xFFFF is the sentinel
+  put16(p, (uint32_t)(x + 0.5f));
+}
+
+static void putUnknown16(uint8_t *p, uint16_t sentinel)
+{
+  p[0] = (uint8_t)(sentinel & 0xFF);
+  p[1] = (uint8_t)(sentinel >> 8);
+}
+
+static void updateInfo()
+{
+  const uint8_t info[3] = {BLE_PROTO_VERSION, haldexGeneration, (uint8_t)(isStandalone ? 1 : 0)};
+  chrInfo->setValue(info, sizeof(info));
+}
+
+static void bleStop()
+{
+  NimBLEDevice::deinit(true); // frees server, services and characteristics
+  chrMode = chrController = chrStatus = chrInfo = chrSettings = chrDiag = chrPairing = nullptr;
+  bleConnected = false;
+  bleRunning = false;
+  xQueueReset(bleWriteQueue);
+  DEBUG("BLE - stopped");
+}
+
+// Set Mode/Controller back to the values in effect and notify them (write echo / change from another source).
+static void notifySettings(uint8_t mode, uint8_t ctrl)
+{
+  chrMode->setValue(&mode, 1);
+  chrMode->notify();
+  chrController->setValue(&ctrl, 1);
+  chrController->notify();
 }
 
 class BleServerCallbacks : public NimBLEServerCallbacks
@@ -247,45 +340,6 @@ class BleWriteCallbacks : public NimBLECharacteristicCallbacks
 static BleServerCallbacks serverCallbacks;
 static BleWriteCallbacks writeCallbacks;
 
-static void put16(uint8_t *p, uint32_t v)
-{
-  if (v > 0xFFFE)
-    v = 0xFFFE; // 0xFFFF is the "unknown" sentinel
-  p[0] = (uint8_t)(v & 0xFF);
-  p[1] = (uint8_t)(v >> 8);
-}
-
-static uint8_t clampPct(float v)
-{
-  if (v < 0.0f)
-    return 0;
-  if (v > 100.0f)
-    return 100;
-  return (uint8_t)(v + 0.5f);
-}
-
-// Signed steering-wheel angle in 0.1 deg (the web UI shows the magnitude only).
-// Negative when the VW sign bit (LW1_LRW_Sign / LWI_VZ_Lenkradwinkel) is set.
-// Unlike the web view this is not limited to the gens that use steering for lock
-// scaling: every gen whose chassis bus carries LW_1 / LWI_01 reports it. GM/Ford
-// (41/42) are excluded because foreign frames on those IDs would be misdecoded.
-static bool bleSteeringDeci(int16_t &out)
-{
-  const bool fresh = hasCANChassis && received_steering_ms != 0 &&
-                     (millis() - received_steering_ms) <= steeringStaleMs &&
-                     haldexGeneration != 41 && haldexGeneration != 42 &&
-                     !isVolvoOrSaabGeneration(haldexGeneration); // Volvo / SAAB: not decoded either
-  if (!fresh)
-  {
-    return false;
-  }
-  float deci = fabsf(received_steering_angle) * 10.0f + 0.5f;
-  if (deci > 32767.0f)
-    deci = 32767.0f;
-  out = received_steering_negative ? -(int16_t)deci : (int16_t)deci;
-  return true;
-}
-
 // Same sources and null rules as /api/status (statusOutgoing in _API.cpp),
 // except the steering angle (see bleSteeringDeci).
 static void buildStatus(uint8_t *p)
@@ -298,15 +352,15 @@ static void buildStatus(uint8_t *p)
   p[1] = seq++;
   p[2] = (uint8_t)state.mode;
   p[3] = disableController ? 0 : 1;
-  p[4] = clampPct(lock_target);
-  p[5] = haldexOk ? (received_haldex_engagement > 0xFE ? 0xFE : received_haldex_engagement) : 0xFF;
+  p[4] = clampPct(lockTarget);
+  p[5] = haldexOk ? (receivedHaldexEngagement > 0xFE ? 0xFE : receivedHaldexEngagement) : 0xFF;
 
   if (chassisOk)
   {
-    put16(&p[6], received_vehicle_speed);
-    p[8] = clampPct(received_pedal_value);
-    put16(&p[9], received_vehicle_rpm);
-    put16(&p[11], received_vehicle_boost);
+    put16(&p[6], receivedVehicleSpeed);
+    p[8] = clampPct(receivedPedalValue);
+    put16(&p[9], receivedVehicleRpm);
+    put16(&p[11], receivedVehicleBoost);
   }
   else
   {
@@ -335,11 +389,11 @@ static void buildStatus(uint8_t *p)
   if (haldexOk)
   {
     flags |= BLE_FLAG_HALDEX_CAN;
-    if (received_temp_protection)
+    if (receivedTempProtection)
       flags |= BLE_FLAG_TEMP_PROTECTION;
-    if (received_coupling_open)
+    if (receivedCouplingOpen)
       flags |= BLE_FLAG_COUPLING_OPEN;
-    if (received_speed_limit)
+    if (receivedSpeedLimit)
       flags |= BLE_FLAG_SPEED_LIMIT;
   }
   if (isBusFailure)
@@ -356,28 +410,6 @@ static void buildStatus(uint8_t *p)
     flags |= BLE_FLAG_DIAG_TOOL;
   p[15] = (uint8_t)(flags & 0xFF);
   p[16] = (uint8_t)(flags >> 8);
-}
-
-static void putI16(uint8_t *p, float v, float scale)
-{
-  float x = v * scale;
-  x = x > 32767.0f ? 32767.0f : (x < -32767.0f ? -32767.0f : x); // -32768 is the sentinel
-  const int16_t i = (int16_t)(x < 0 ? x - 0.5f : x + 0.5f);
-  p[0] = (uint8_t)(i & 0xFF);
-  p[1] = (uint8_t)((uint16_t)i >> 8);
-}
-
-static void putU16Scaled(uint8_t *p, float v, float scale)
-{
-  float x = v * scale;
-  x = x < 0.0f ? 0.0f : (x > 65534.0f ? 65534.0f : x); // 0xFFFF is the sentinel
-  put16(p, (uint32_t)(x + 0.5f));
-}
-
-static void putUnknown16(uint8_t *p, uint16_t sentinel)
-{
-  p[0] = (uint8_t)(sentinel & 0xFF);
-  p[1] = (uint8_t)(sentinel >> 8);
 }
 
 // Haldex live diagnostics, the same values as /api/status "uds" / "kwp"
@@ -410,20 +442,14 @@ static void buildDiag(uint8_t *p)
   }
   else if (kwp)
   {
-    putI16(&p[2], kwpPlateTemp, 10.0f); // clutch plate temp, 0.1 °C
+    putI16(&p[2], kwpPlateTemp, 10.0f); // clutch plate temp (the unit's model, no sensor), 0.1 °C
     putI16(&p[4], kwpOilTemp, 10.0f);   // oil temp, 0.1 °C
     putU16Scaled(&p[10], kwpSupplyVoltage, 100.0f);
     putU16Scaled(&p[12], kwpClutchValveCurrent, 1000.0f);
     putU16Scaled(&p[14], kwpClutchDuty, 10.0f);
-    putI16(&p[16], kwpOilPressure, 100.0f); // oil pressure, 0.01 bar
-    putI16(&p[18], kwpEstTorque, 1.0f);     // estimated torque, Nm
+    putI16(&p[16], kwpOilPressure, 100.0f); // clutch pressure TARGET (Gen4 G03[0], not measured), 0.01 bar
+    putI16(&p[18], kwpEstTorque, 1.0f);     // commanded clutch torque (Gen4 G03[1]), Nm
   }
-}
-
-static void updateInfo()
-{
-  const uint8_t info[3] = {BLE_PROTO_VERSION, haldexGeneration, (uint8_t)(isStandalone ? 1 : 0)};
-  chrInfo->setValue(info, sizeof(info));
 }
 
 static bool bleStart()
@@ -532,25 +558,6 @@ static bool bleStart()
   bleRunning = true;
   DEBUG("BLE - advertising as %s", name);
   return true;
-}
-
-static void bleStop()
-{
-  NimBLEDevice::deinit(true); // frees server, services and characteristics
-  chrMode = chrController = chrStatus = chrInfo = chrSettings = chrDiag = chrPairing = nullptr;
-  bleConnected = false;
-  bleRunning = false;
-  xQueueReset(bleWriteQueue);
-  DEBUG("BLE - stopped");
-}
-
-// Set Mode/Controller back to the values in effect and notify them (write echo / change from another source).
-static void notifySettings(uint8_t mode, uint8_t ctrl)
-{
-  chrMode->setValue(&mode, 1);
-  chrMode->notify();
-  chrController->setValue(&ctrl, 1);
-  chrController->notify();
 }
 
 static void bleTask(void *arg)

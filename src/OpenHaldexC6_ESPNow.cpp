@@ -1,11 +1,14 @@
 #include <OpenHaldexC6_ESPNow.h>
 #include <OpenHaldexC6_Calculations.h> // learn / long learn state
+#include <OpenHaldexC6_Settings.h> // vehicle geometry follows the generation
 #include <ohx_proto.h>
 #include <cannow_tx.h> // CAN frame relay (shared with adc2can)
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include <esp_random.h>
 #include "mbedtls/md.h"
+
+// ---- Statics -------------------------------------------------------------------
 
 bool espNowEnabled = true;
 bool espNowControl = true;
@@ -26,6 +29,8 @@ struct RxCmd
 };
 
 static const uint8_t bcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+// ---- Small helpers -------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // ESP-NOW up / down (follows the WiFi)
@@ -64,6 +69,26 @@ static void nowStart()
   xSemaphoreGive(nowMutex);
   DEBUG("ESP-NOW (gauges): %s", nowUp ? "up" : "FAILED");
 }
+// ---- status ----
+static int16_t tenths(float c) { return (int16_t)lroundf(c * 10.0f); }
+// ---- commands ----
+static bool hmacOk(const OhxCommand &c)
+{
+  uint8_t full[32];
+  const mbedtls_md_info_t *md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+  mbedtls_md_hmac(md, (const uint8_t *)wifiPassword, strlen(wifiPassword), (const uint8_t *)&c,
+                  offsetof(OhxCommand, hmac), full);
+  uint8_t diff = 0;
+  for (int i = 0; i < 8; i++)
+    diff |= full[i] ^ c.hmac[i];
+  return diff == 0;
+}
+
+// generation, learn: only with the car stopped (or on the bench, with no chassis CAN at all)
+static bool stopped() { return !hasCANChassis || receivedVehicleSpeed == 0; }
+
+// the relay's packets: the task holds nowMutex with ESP-NOW up while cannPump calls this
+static bool relaySend(const uint8_t *data, size_t len) { return esp_now_send(bcast, data, len) == ESP_OK; }
 
 void espNowStop()
 {
@@ -83,7 +108,6 @@ void espNowStop()
 // ---------------------------------------------------------------------------
 // status
 // ---------------------------------------------------------------------------
-static int16_t tenths(float c) { return (int16_t)lroundf(c * 10.0f); }
 
 static void sendStatus()
 {
@@ -106,33 +130,37 @@ static void sendStatus()
   const bool chassisOk = hasCANChassis, haldexOk = hasCANHaldex;
   s.flags[0] = (isStandalone ? OHX_F0_STANDALONE : 0) | (chassisOk ? OHX_F0_CHASSIS_CAN : 0) |
                (haldexOk ? OHX_F0_HALDEX_CAN : 0) | (disableController ? OHX_F0_CTRL_OFF : 0) |
-               (isBusFailure ? OHX_F0_BUS_FAIL : 0) | (state.mode_override ? OHX_F0_OVERRIDE : 0) |
+               (isBusFailure ? OHX_F0_BUS_FAIL : 0) | (state.modeOverride ? OHX_F0_OVERRIDE : 0) |
                (broadcastOpenHaldexOverCAN ? OHX_F0_CAN_BCAST : 0) | (haldexLearnTableValid ? OHX_F0_LEARNED : 0);
   s.flags[1] = (tcForceModeFlag ? OHX_F1_TC_FORCE : 0) | (hazardForceModeFlag ? OHX_F1_HAZARD : 0) |
                (extButtonForceModeFlag ? OHX_F1_EXT_BTN : 0) | (brakeActive ? OHX_F1_BRAKE : 0) |
-               (handbrakeActive ? OHX_F1_HANDBRAKE : 0) | (haldexOk && received_temp_protection ? OHX_F1_TEMP_PROT : 0) |
-               (haldexOk && received_coupling_open ? OHX_F1_COUPLING_OPEN : 0) |
-               (haldexOk && received_speed_limit ? OHX_F1_SPEED_LIMIT : 0);
+               (handbrakeActive ? OHX_F1_HANDBRAKE : 0) | (haldexOk && receivedTempProtection ? OHX_F1_TEMP_PROT : 0) |
+               (haldexOk && receivedCouplingOpen ? OHX_F1_COUPLING_OPEN : 0) |
+               (haldexOk && receivedSpeedLimit ? OHX_F1_SPEED_LIMIT : 0);
   s.flags[2] = (haldexLearnActive ? OHX_F2_LEARN : 0) | (longLearnActive ? OHX_F2_LONG_LEARN : 0) |
                (espNowControl ? OHX_F2_CONTROL : 0) | (wifiPassword[0] ? OHX_F2_KEY : 0) |
-               (fixHunting ? OHX_F2_FIX_HUNTING : 0) | (steering_scale_is_active() ? OHX_F2_STEER_SCALE : 0) |
+               (fixHunting ? OHX_F2_FIX_HUNTING : 0) | (steeringScaleIsActive() ? OHX_F2_STEER_SCALE : 0) |
                (analyzerMode ? OHX_F2_ANALYZER : 0) | (liveDiagEnabled ? OHX_F2_LIVE_DIAG : 0);
   s.flags[3] = (chassisOk && asrForceModeFlag) ? OHX_F3_ASR_OFF : 0;
+  if (useCANifAvailable) // V11.00.5 (2026-11-08): 'Use CAN if Available' - a gauge only offers Expert in standalone with it on
+  {
+    s.flags[3] |= OHX_F3_USE_CAN;
+  }
 
-  s.lockTarget = (uint8_t)constrain((int)lock_target, 0, 100);
-  s.lockActual = haldexOk ? received_haldex_engagement : OHX_NONE8;
-  s.engagementRaw = received_haldex_engagement_raw;
-  s.haldexState = received_haldex_state;
-  s.speed = chassisOk ? received_vehicle_speed : OHX_NONE16;
-  s.rpm = chassisOk ? received_vehicle_rpm : OHX_NONE16;
-  s.boost = chassisOk ? received_vehicle_boost : OHX_NONE16;
-  s.throttle = chassisOk ? (uint8_t)constrain((int)received_pedal_value, 0, 100) : OHX_NONE8;
+  s.lockTarget = (uint8_t)constrain((int)lockTarget, 0, 100);
+  s.lockActual = haldexOk ? receivedHaldexEngagement : OHX_NONE8;
+  s.engagementRaw = receivedHaldexEngagementRaw;
+  s.haldexState = receivedHaldexState;
+  s.speed = chassisOk ? receivedVehicleSpeed : OHX_NONE16;
+  s.rpm = chassisOk ? receivedVehicleRpm : OHX_NONE16;
+  s.boost = chassisOk ? receivedVehicleBoost : OHX_NONE16;
+  s.throttle = chassisOk ? (uint8_t)constrain((int)receivedPedalValue, 0, 100) : OHX_NONE8;
   s.disableThrottle = disableThrottle;
   s.disengageUnderSpeed = disengageUnderSpeed;
   s.disengageAboveSpeed = disengageAboveSpeed;
   const uint32_t now = millis();
-  const bool steerFresh = chassisOk && received_steering_ms && now - received_steering_ms <= steeringStaleMs;
-  s.steering = steerFresh ? (uint16_t)(fabsf(received_steering_angle) + 0.5f) : OHX_NONE16;
+  const bool steerFresh = chassisOk && receivedSteeringMs && now - receivedSteeringMs <= steeringStaleMs;
+  s.steering = steerFresh ? (uint16_t)(fabsf(receivedSteeringAngle) + 0.5f) : OHX_NONE16;
   const bool slipFresh = lastCornerSlipMs && now - lastCornerSlipMs < 500;
   for (int i = 0; i < 4; i++)
     s.slip[i] = slipFresh ? cornerSlip[i] : -128;
@@ -179,45 +207,28 @@ static void sendStatus()
 // ---------------------------------------------------------------------------
 // commands
 // ---------------------------------------------------------------------------
-static bool hmacOk(const OhxCommand &c)
-{
-  uint8_t full[32];
-  const mbedtls_md_info_t *md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-  mbedtls_md_hmac(md, (const uint8_t *)wifiPassword, strlen(wifiPassword), (const uint8_t *)&c,
-                  offsetof(OhxCommand, hmac), full);
-  uint8_t diff = 0;
-  for (int i = 0; i < 8; i++)
-    diff |= full[i] ^ c.hmac[i];
-  return diff == 0;
-}
-
-// generation, learn: only with the car stopped (or on the bench, with no chassis CAN at all)
-static bool stopped() { return !hasCANChassis || received_vehicle_speed == 0; }
 
 static uint8_t execute(const OhxCommand &c)
 {
   switch (c.cmd)
   {
-  case OHX_C_MODE: // as POST /api/mode
-    if (c.arg[0] >= (uint8_t)openhaldex_mode_t_MAX)
+  case OHX_C_MODE: // as POST /api/mode - the rules live in requestMode() (IO.cpp)
+    if (c.arg[0] >= (uint8_t)openHaldexMode_t_MAX)
       return OHX_R_INVALID;
     if (disableController)
       return OHX_R_CTRL_OFF;
-    if (isStandalone && c.arg[0] == MODE_STOCK)
-      state.mode = (openhaldex_mode_t)lastMode;
-    else
-      state.mode = (openhaldex_mode_t)c.arg[0];
-    lastMode = state.mode;
+    requestMode(c.arg[0]);
     return OHX_R_OK;
   case OHX_C_GENERATION: // as POST /api/settings {haldexGeneration}
   {
     const uint8_t g = c.arg[0];
-    if (!(g == 1 || g == 2 || g == 4 || g == 50 || g == 51 || g == 52 || g == 41 || isVolvoOrSaabGeneration(g)))
+    if (!isSupportedGeneration(g))
       return OHX_R_INVALID;
     if (!stopped())
       return OHX_R_MOVING;
     if (haldexLearnActive || longLearnActive)
       return OHX_R_BUSY;
+    vehicleGeometryFollowGeneration(haldexGeneration, g); // untouched geometry -> the new generation's car
     haldexGeneration = g;
     udsApplyDefaultIds();
     return OHX_R_OK;
@@ -232,6 +243,8 @@ static uint8_t execute(const OhxCommand &c)
     startHaldexLearn();
     return OHX_R_OK;
   case OHX_C_LEARN_CANCEL:
+    if (longLearnActive)
+      return OHX_R_BUSY; // would stop Long Learn's sweep half-way - use LONG_CANCEL
     haldexLearnCancel = true;
     return OHX_R_OK;
   case OHX_C_LEARN_CLEAR: // as POST /api/learn/clear
@@ -261,6 +274,18 @@ static uint8_t execute(const OhxCommand &c)
       state.mode = MODE_STOCK;
       lastMode = 0;
     }
+    return OHX_R_OK;
+  case OHX_C_STANDALONE: // V11.00.5 (2026-11-08): as POST /api/settings {isStandalone}, car stopped only
+    if (!stopped())
+      return OHX_R_MOVING;
+    if (haldexLearnActive || longLearnActive)
+      return OHX_R_BUSY;
+    setStandaloneMode(c.arg[0] != 0); // Stock -> FWD when switching on (V11.00.12)
+    return OHX_R_OK; // saved by writeEEP, as from the web UI
+  case OHX_C_USE_CAN: // V11.00.5 (2026-11-08): as POST /api/settings {useCANifAvailable}, car stopped only
+    if (!stopped())
+      return OHX_R_MOVING;
+    useCANifAvailable = c.arg[0] != 0;
     return OHX_R_OK;
   default:
     return OHX_R_INVALID;
@@ -299,9 +324,6 @@ static void handle(const RxCmd &r)
   ackResult = result;
   statusNow = true;
 }
-
-// the relay's packets: the task holds nowMutex with ESP-NOW up while cannPump calls this
-static bool relaySend(const uint8_t *data, size_t len) { return esp_now_send(bcast, data, len) == ESP_OK; }
 
 // ---------------------------------------------------------------------------
 // task

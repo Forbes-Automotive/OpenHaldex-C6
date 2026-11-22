@@ -13,13 +13,7 @@ extern "C" {
 #define OTA_DEBUG(...)
 #endif
 
-#define OTA_PASSWORD "haldex"
-
-//static AsyncWebServer *otaServer = nullptr;
-
-// ============================================================================
-// SAFETY-CRITICAL: Configuration
-// ============================================================================
+// ---- Defines -------------------------------------------------------------------
 
 // OTA password - CHANGE THIS FOR PRODUCTION USE!
 #define OTA_PASSWORD "haldex"
@@ -30,6 +24,10 @@ extern "C" {
 
 // Safety check timeout (ms) - how long to wait for safety conditions
 #define OTA_SAFETY_CHECK_TIMEOUT_MS 5000
+#define OTA_CONFIRM_UPTIME_MS 60000UL // confirm after 60s of uptime even if no client connected
+#define OTA_WEB_ACTIVE_WINDOW_MS 30000UL
+
+// ---- Statics -------------------------------------------------------------------
 
 // ============================================================================
 // SAFETY-CRITICAL: State Variables
@@ -50,22 +48,25 @@ static bool firmwareConfirmed = false;
 // device has proven itself (web UI reachable, or a clean uptime window).
 static bool rollbackPending = false;
 static bool webServedOk = false;
-#define OTA_CONFIRM_UPTIME_MS 60000UL // confirm after 60s of uptime even if no client connected
 
 // Last time any polled UI endpoint was hit (see otaWebClientActive). The
 // dashboard polls every 500 ms and the OTA page every 3 s, so 30 s of silence
 // means the browser really has gone away, not just paused between polls.
 static volatile uint32_t lastWebActivityMs = 0;
-#define OTA_WEB_ACTIVE_WINDOW_MS 30000UL
+// ---- Upload results ----
+struct OtaResult {
+  bool set = false;
+  int code = 0;
+  String msg;
+};
+static OtaResult fwResult, fsResult;
+static bool fwRebootPending = false;
+// ---- Filesystem (LittleFS) Update Handler - writes littlefs.bin to the "spi ----
+static size_t fsBytesReceived = 0;
+static uint8_t fsHeadRx[32]; // first bytes as received - compared with the flash read-back on failure
+static size_t fsHeadRxLen = 0;
 
-void otaNoteWebActivity() {
-  lastWebActivityMs = millis();
-}
-
-bool otaWebClientActive() {
-  if (otaUpdateInProgress) return true;
-  return lastWebActivityMs != 0 && (millis() - lastWebActivityMs) < OTA_WEB_ACTIVE_WINDOW_MS;
-}
+// ---- Small helpers -------------------------------------------------------------
 
 // No integrity hash on the upload stream: the chip validates a firmware
 // image itself (esp_ota_end) and a filesystem image is validated by mounting
@@ -80,7 +81,7 @@ static String partitionSha256(const esp_partition_t *p, size_t len) {
   mbedtls_sha256_context ctx;
   mbedtls_sha256_init(&ctx);
   mbedtls_sha256_starts(&ctx, 0);
-  static uint8_t buf[1024];
+  uint8_t buf[256]; // V11.00.8: local, not a 1 KB static held for the whole run by a diagnostics-only call
   for (size_t off = 0; off < len; off += sizeof(buf)) {
     size_t n = min(sizeof(buf), len - off);
     if (esp_partition_read(p, off, buf, n) != ESP_OK) { mbedtls_sha256_free(&ctx); return ""; }
@@ -109,23 +110,7 @@ static String readFsVersion() {
   if (q1 < 0 || q2 < 0) return "--";
   return body.substring(q1 + 1, q2);
 }
-
-// ============================================================================
-// Web UI filesystem guards
-// ============================================================================
-// LittleFS is built with CONFIG_LITTLEFS_ASSERTS=y, and the panic handler
-// reboots. Feed lfs a partition that is half one image and half another (a
-// filesystem OTA that stopped part-way, or was rejected after the partition
-// had already been rewritten) and it can trip an assert while walking the
-// directory tree - at boot, every boot: a boot loop with no web server to
-// recover from. So:
-//   - the partition is only ever handed to lfs after a look at the superblock
-//     pair (the "littlefs" magic and a geometry that fits this partition);
-//   - a filesystem upload that fails for any reason erases that superblock
-//     pair, so what's left can never be mistaken for a filesystem;
-//   - the web server always starts; with no usable filesystem "/" serves a
-//     built-in recovery page (see setupWebServer) with the two upload forms.
-// ============================================================================
+// ---- Web UI filesystem guards ----
 static const esp_partition_t *fsPartition() {
   return esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, NULL);
 }
@@ -162,6 +147,94 @@ static bool fsSuperblockLooksValid(const esp_partition_t *p) {
 static bool fsHasUiFile(const char *path) {
   return LittleFS.exists(path) || LittleFS.exists(String(path) + ".gz");
 }
+
+static void otaSetResult(OtaResult &r, int code, const String &msg) {
+  if (r.set) return;
+  r.set = true;
+  r.code = code;
+  r.msg = msg;
+  OTA_DEBUG("[OTA] result %d: %s", code, msg.c_str());
+}
+
+static void otaSendResult(AsyncWebServerRequest *request, OtaResult &r, const char *noFileMsg) {
+  if (!r.set) { r.code = 400; r.msg = noFileMsg; }
+  request->send(r.code, "text/plain", r.msg);
+  r.set = false;
+}
+
+// The UI sends the file size as ?size=. An image bigger than the target
+// partition is refused before anything is erased: since the BLE release moved
+// to bigger app slots / a smaller LittleFS, old-layout images (e.g. a 0xB0000
+// littlefs.bin) and new firmware on an old-layout device are both possible.
+static bool otaImageTooBig(AsyncWebServerRequest *request, const esp_partition_t *p, size_t *size) {
+  *size = 0;
+  if (!p || !request->hasParam("size")) return false;
+  *size = (size_t)strtoul(request->getParam("size")->value().c_str(), nullptr, 10);
+  return *size > p->size;
+}
+
+// Runs after the body: send the outcome, then reboot if a firmware image was
+// just installed.
+static void finishFirmwareRequest(AsyncWebServerRequest *request) {
+  if (fwRebootPending && !isSystemSafeForOTA()) {
+    // Installed and set as the boot image, but not safe to restart right now
+    // (e.g. the car started moving during the upload): it takes over at the
+    // next power-on instead.
+    fwRebootPending = false;
+    otaUpdateInProgress = false;
+    fwResult.set = false;
+    otaSetResult(fwResult, 200, "Firmware installed, but the car is not in a safe state to restart now. It will start at the next power-on.");
+  }
+  otaSendResult(request, fwResult, "No file received - pick firmware.bin first.");
+  if (!fwRebootPending) return;
+  delay(1000); // let the response leave
+  for (int i = 0; i <= 8; i++) {
+    strip.setLedColorData(ledChannel, ledBrightness / 2, ledBrightness / 2, ledBrightness / 2);
+    strip.show();
+    delay(50);
+    strip.setLedColorData(ledChannel, 0, 0, 0);
+    strip.show();
+    delay(50);
+  }
+  ESP.restart();
+}
+
+// `wipe` = false only when nothing has been written yet (the old image is
+// intact, so put it back rather than erase it).
+static void fsUpdateFail(int code, const String &msg, bool wipe = true) {
+  Update.abort();
+  if (wipe) fsInvalidate(); else fsMountSafe();
+  otaUpdateInProgress = false;
+  otaSetResult(fsResult, code, msg);
+}
+
+//static AsyncWebServer *otaServer = nullptr;
+
+void otaNoteWebActivity() {
+  lastWebActivityMs = millis();
+}
+
+bool otaWebClientActive() {
+  if (otaUpdateInProgress) return true;
+  return lastWebActivityMs != 0 && (millis() - lastWebActivityMs) < OTA_WEB_ACTIVE_WINDOW_MS;
+}
+
+// ============================================================================
+// Web UI filesystem guards
+// ============================================================================
+// LittleFS is built with CONFIG_LITTLEFS_ASSERTS=y, and the panic handler
+// reboots. Feed lfs a partition that is half one image and half another (a
+// filesystem OTA that stopped part-way, or was rejected after the partition
+// had already been rewritten) and it can trip an assert while walking the
+// directory tree - at boot, every boot: a boot loop with no web server to
+// recover from. So:
+//   - the partition is only ever handed to lfs after a look at the superblock
+//     pair (the "littlefs" magic and a geometry that fits this partition);
+//   - a filesystem upload that fails for any reason erases that superblock
+//     pair, so what's left can never be mistaken for a filesystem;
+//   - the web server always starts; with no usable filesystem "/" serves a
+//     built-in recovery page (see setupWebServer) with the two upload forms.
+// ============================================================================
 
 bool fsMountSafe() {
   const esp_partition_t *p = fsPartition();
@@ -233,9 +306,9 @@ bool isSystemSafeForOTA(bool allowEnforce) {
   // VEHICLE MODE: CAN detected -> enforce safety
 
   // SAFETY CHECK 1: Vehicle MUST be stationary
-  if (received_vehicle_speed > 0) {
+  if (receivedVehicleSpeed > 0) {
 #if enableDebug || detailedDebugWiFi
-    DEBUG("[OTA SAFETY] Vehicle moving: %d kmh - OTA BLOCKED", received_vehicle_speed);
+    DEBUG("[OTA SAFETY] Vehicle moving: %d kmh - OTA BLOCKED", receivedVehicleSpeed);
 #endif
     return false;
   }
@@ -249,23 +322,21 @@ bool isSystemSafeForOTA(bool allowEnforce) {
   }
 
   // SAFETY CHECK 3: Outputs safe
-  // If controller is disabled, we're safe. Otherwise, either force STOCK
-  // (real update about to start) or report not-safe without touching mode
-  // (a status probe - the mode is left exactly as the user set it).
-  if (!disableController) {
-    if (state.mode != MODE_STOCK) {
-      if (!allowEnforce) {
-        return false;
-      }
+  // The update itself switches to STOCK (no forced lock) before anything is
+  // written, so the mode is never a reason to refuse. V11.00.12: the status probe
+  // (allowEnforce false) used to report "not safe" for any mode but Stock - and
+  // standalone never sits in Stock - so the page refused updates in FWD on the
+  // bench. The probe now leaves the mode alone and says yes; the real update
+  // still switches to Stock.
+  if (!disableController && state.mode != MODE_STOCK && allowEnforce) {
 #if enableDebug || detailedDebugWiFi
-      DEBUG("[OTA SAFETY] Controller active in non-stock mode - auto-switching to STOCK for OTA safety");
+    DEBUG("[OTA SAFETY] Controller active in non-stock mode - auto-switching to STOCK for OTA safety");
 #endif
-      state.mode = MODE_STOCK;
-    }
+    state.mode = MODE_STOCK;
   }
 
   // SAFETY CHECK 4: No active Haldex faults (temp protection)
-  if (received_temp_protection) {
+  if (receivedTempProtection) {
 #if enableDebug || detailedDebugWiFi
     DEBUG("[OTA SAFETY] Haldex temperature protection active - OTA BLOCKED");
 #endif
@@ -285,15 +356,15 @@ bool isSystemSafeForOTA(bool allowEnforce) {
 // Call this early in setup() to check if we booted from a new OTA partition
 // ============================================================================
 bool needsFirmwareConfirmation() {
-  esp_ota_img_states_t ota_state;
-  esp_err_t err = esp_ota_get_state_partition(esp_ota_get_running_partition(), &ota_state);
+  esp_ota_img_states_t otaState;
+  esp_err_t err = esp_ota_get_state_partition(esp_ota_get_running_partition(), &otaState);
 
   if (err != ESP_OK) {
     return false;
   }
 
   // If state is ESP_OTA_IMG_PENDING_VERIFY, firmware needs confirmation
-  return (ota_state == ESP_OTA_IMG_PENDING_VERIFY);
+  return (otaState == ESP_OTA_IMG_PENDING_VERIFY);
 }
 
 // ============================================================================
@@ -308,38 +379,6 @@ bool needsFirmwareConfirmation() {
 // recorded here and sent by the request handler once the body has ended;
 // the first outcome recorded wins, later chunks are just drained.
 // ============================================================================
-struct OtaResult {
-  bool set = false;
-  int code = 0;
-  String msg;
-};
-static OtaResult fwResult, fsResult;
-static bool fwRebootPending = false;
-
-static void otaSetResult(OtaResult &r, int code, const String &msg) {
-  if (r.set) return;
-  r.set = true;
-  r.code = code;
-  r.msg = msg;
-  OTA_DEBUG("[OTA] result %d: %s", code, msg.c_str());
-}
-
-static void otaSendResult(AsyncWebServerRequest *request, OtaResult &r, const char *noFileMsg) {
-  if (!r.set) { r.code = 400; r.msg = noFileMsg; }
-  request->send(r.code, "text/plain", r.msg);
-  r.set = false;
-}
-
-// The UI sends the file size as ?size=. An image bigger than the target
-// partition is refused before anything is erased: since the BLE release moved
-// to bigger app slots / a smaller LittleFS, old-layout images (e.g. a 0xB0000
-// littlefs.bin) and new firmware on an old-layout device are both possible.
-static bool otaImageTooBig(AsyncWebServerRequest *request, const esp_partition_t *p, size_t *size) {
-  *size = 0;
-  if (!p || !request->hasParam("size")) return false;
-  *size = (size_t)strtoul(request->getParam("size")->value().c_str(), nullptr, 10);
-  return *size > p->size;
-}
 
 // ============================================================================
 // OTA Update Handler - SAFETY-CRITICAL: Blocks unsafe updates
@@ -413,32 +452,6 @@ void handleOTAUpdate(AsyncWebServerRequest *request, String filename, size_t ind
   }
 }
 
-// Runs after the body: send the outcome, then reboot if a firmware image was
-// just installed.
-static void finishFirmwareRequest(AsyncWebServerRequest *request) {
-  if (fwRebootPending && !isSystemSafeForOTA()) {
-    // Installed and set as the boot image, but not safe to restart right now
-    // (e.g. the car started moving during the upload): it takes over at the
-    // next power-on instead.
-    fwRebootPending = false;
-    otaUpdateInProgress = false;
-    fwResult.set = false;
-    otaSetResult(fwResult, 200, "Firmware installed, but the car is not in a safe state to restart now. It will start at the next power-on.");
-  }
-  otaSendResult(request, fwResult, "No file received - pick firmware.bin first.");
-  if (!fwRebootPending) return;
-  delay(1000); // let the response leave
-  for (int i = 0; i <= 8; i++) {
-    strip.setLedColorData(led_channel, ledBrightness / 2, ledBrightness / 2, ledBrightness / 2);
-    strip.show();
-    delay(50);
-    strip.setLedColorData(led_channel, 0, 0, 0);
-    strip.show();
-    delay(50);
-  }
-  ESP.restart();
-}
-
 // ============================================================================
 // Filesystem (LittleFS) Update Handler - writes littlefs.bin to the "spiffs"
 // data partition via the Arduino Update library (U_SPIFFS). Same safety gate
@@ -453,18 +466,6 @@ static void finishFirmwareRequest(AsyncWebServerRequest *request) {
 // fsInvalidate(), leaving a partition that cannot be mounted rather than a
 // hybrid of two images; the web server then serves the recovery page.
 // ============================================================================
-static size_t fsBytesReceived = 0;
-static uint8_t fsHeadRx[32]; // first bytes as received - compared with the flash read-back on failure
-static size_t fsHeadRxLen = 0;
-
-// `wipe` = false only when nothing has been written yet (the old image is
-// intact, so put it back rather than erase it).
-static void fsUpdateFail(int code, const String &msg, bool wipe = true) {
-  Update.abort();
-  if (wipe) fsInvalidate(); else fsMountSafe();
-  otaUpdateInProgress = false;
-  otaSetResult(fsResult, code, msg);
-}
 
 void handleFSUpdate(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
   otaNoteWebActivity();
@@ -553,10 +554,10 @@ void handleFSUpdate(AsyncWebServerRequest *request, String filename, size_t inde
 
     // brief green confirmation flash
     for (int i = 0; i <= 4; i++) {
-      strip.setLedColorData(led_channel, 0, ledBrightness / 2, 0);
+      strip.setLedColorData(ledChannel, 0, ledBrightness / 2, 0);
       strip.show();
       delay(40);
-      strip.setLedColorData(led_channel, 0, 0, 0);
+      strip.setLedColorData(ledChannel, 0, 0, 0);
       strip.show();
       delay(40);
     }
@@ -584,10 +585,10 @@ void setupOTA() {
   // Info endpoint
   webServer.on("/ota/info", HTTP_GET, [](AsyncWebServerRequest *request) {
     const esp_partition_t *running = esp_ota_get_running_partition();
-    esp_app_desc_t app_info;
+    esp_app_desc_t appInfo;
 
     if (running != NULL) {
-      esp_ota_get_partition_description(running, &app_info);
+      esp_ota_get_partition_description(running, &appInfo);
     }
 
     webServedOk = true; // a client reached the UI on this image - see otaRollbackTick()
@@ -606,9 +607,9 @@ void setupOTA() {
     json += "\"fsSize\":" + String(fsPartition() ? fsPartition()->size : 0) + ",";
     if (running != NULL) {
       json += "\"partition\":\"" + String(running->label) + "\",";
-      json += "\"appVersion\":\"" + String(app_info.version) + "\",";
-      json += "\"appDate\":\"" + String(app_info.date) + "\",";
-      json += "\"appTime\":\"" + String(app_info.time) + "\"";
+      json += "\"appVersion\":\"" + String(appInfo.version) + "\",";
+      json += "\"appDate\":\"" + String(appInfo.date) + "\",";
+      json += "\"appTime\":\"" + String(appInfo.time) + "\"";
     }
     json += "}";
     request->send(200, "application/json", json);
@@ -678,19 +679,18 @@ void setupOTA() {
     bool safe = isSystemSafeForOTA(false);
     String json = "{";
     json += "\"allowed\":" + String(safe ? "true" : "false") + ",";
-    json += "\"speed\":" + String(received_vehicle_speed) + ",";
+    json += "\"speed\":" + String(receivedVehicleSpeed) + ",";
     json += "\"canInitialized\":" + String((hasCANChassis || isStandalone) && (hasCANHaldex || isStandalone) ? "true" : "false") + ",";
     json += "\"busFailure\":" + String(isBusFailure ? "true" : "false") + ",";
     json += "\"controllerDisabled\":" + String(disableController ? "true" : "false") + ",";
-    json += "\"mode\":\"" + String(get_openhaldex_mode_string(state.mode)) + "\"";
+    json += "\"mode\":\"" + String(getOpenhaldexModeString(state.mode)) + "\"";
 
     if (!safe) {
       json += ",\"reason\":\"";
-      if (received_vehicle_speed > 0) json += "Vehicle moving. ";
-      if (!hasCANChassis && !isStandalone) json += "Chassis CAN not initialized. ";
-      if (!hasCANHaldex) json += "Haldex CAN not initialized. ";
+      // V11.00.12: only what isSystemSafeForOTA() really checks
+      if (receivedVehicleSpeed > 0) json += "Vehicle moving. ";
       if (isBusFailure) json += "CAN bus failure. ";
-      if (!disableController && state.mode != MODE_STOCK) json += "Controller active. ";
+      if (receivedTempProtection) json += "Haldex over-temperature protection on. ";
       json += "\"";
     } else {
       json += ",\"reason\":\"System safe for OTA update\"";
@@ -806,6 +806,4 @@ bool isOTAUpdateInProgress() {
 String getFirmwareVersion() {
   return String(FW_VERSION);
 }
-
-
 

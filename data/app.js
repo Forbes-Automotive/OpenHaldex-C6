@@ -76,20 +76,64 @@ var currentLock = [
   [10, 20, 30, 40, 40, 40, 40],
 ];
 
+// Expert PT (pass-through) cells (V11.00.12): same 7x7 layout as currentLock, 1 = PT.
+// A PT cell keeps its number in currentLock, so clearing PT brings it back.
+function blankPT() {
+  return Array.from({ length: throttleHeader.length }, () => new Array(speedHeader.length).fill(0));
+}
+function normalisePT(pt) {
+  const out = blankPT();
+  if (!Array.isArray(pt)) return out; // older firmware / backup: no PT cells
+  for (let t = 0; t < out.length; t++)
+    for (let sp = 0; sp < out[t].length; sp++) out[t][sp] = pt[t] && pt[t][sp] ? 1 : 0;
+  return out;
+}
+var currentPT = blankPT();
+
 // Steering-angle lock scale (third axis): breakpoints (deg) -> lock multiplier (%)
 var steeringHeader = [0, 45, 90, 180, 360]; // steering-wheel angle breakpoints (deg)
 var steeringScale = [100, 100, 80, 50, 20]; // lock multiplier at each breakpoint (%)
 var defaultSteeringHeader = [0, 45, 90, 180, 360];
 var defaultSteeringScale = [100, 100, 80, 50, 20];
 
+// Throttle override for the steering scale: off by default, starts at 40 % pedal, complete at 75 %
+var steeringThrottleOverrideEnabled = false;
+var steeringThrottleOverrideStart = 40; // pedal % where the override starts
+var steeringThrottleOverrideFull = 75;  // pedal % where the steering reduction is fully cancelled
+
 // once the document is loaded, start running the script - start with getting settings
 // await doesn't seem to work well - so if settings aren't captured first, the page draws WHILE settings are being grabbed.
 // this is possible a hack, but I can't think of a better way to do it(!)
-document.addEventListener("DOMContentLoaded", initStoredSettings);
+document.addEventListener("DOMContentLoaded", () => {
+  paintDashboardEarly(); // the saved layout first, so the page doesn't rearrange when settings land
+  initStoredSettings();
+});
+
+// The dashboard layout (gauge tiles, arc or bar, lock graph) lives in this
+// browser, not on the controller, so it can be drawn before /api/settings
+// answers. Without this the page showed the HTML defaults, then switched to the
+// gauges and graph a moment later, then swept. Which tiles a generation can show
+// uses the generation this browser saw last time; initApp() redraws it all.
+const LAST_GEN_KEY = "oh_lastGeneration";
+function rememberGeneration(gen) {
+  try { localStorage.setItem(LAST_GEN_KEY, String(gen)); } catch (e) { /* storage blocked */ }
+}
+function paintDashboardEarly() {
+  try {
+    const gen = parseInt(localStorage.getItem(LAST_GEN_KEY), 10);
+    if (gen > 0) _haldexGeneration = gen;
+  } catch (e) { /* storage blocked: generation 1 until settings arrive */ }
+  try {
+    applyGaugePrefs();
+    renderLockTrace(Date.now());
+    updateEngagementGauge(null, null, true); // empty arc - the intro sweep starts from here
+  } catch (e) { /* initApp draws it all again */ }
+}
 
 // once settings are stored, start applying data where required
 function initApp() {
   //initStoredSettings(); // old
+  initTouchGuards(); // first: before any slider or long-press is used
   initNavigation();
   initDashboard();
   initModeButtons();
@@ -103,12 +147,122 @@ function initApp() {
   initWifiSta("wifiSta");    // Diagnostics
   initWifiSta("otaWifiSta"); // OTA tab copy - gets the phone online for the GitHub check
   initBackupRestore();
+  initCanTest();
   initOtaPage();
   initUpdateCheck();
   initCollapsibleCards();
   initGaugeUI();
   drawTuneChart();
   startIntroSweep(); // last: everything above is drawn; sweeps once the window has loaded and the first poll is in
+}
+
+// ===== CAN Test (Diagnostics > CAN Status, V11.00.12) =====
+// Which IDs each bus is receiving (so a tick can always be traced to its frames),
+// and a loop test for a unit with CHS wired to HDX: each bus sends one frame and
+// the other must hear it. Refreshed once a second while Diagnostics is open.
+function initCanTest() {
+  const chs = document.getElementById("canIdsChassis");
+  const hdx = document.getElementById("canIdsHaldex");
+  const loopBtn = document.getElementById("canLoopTestBtn");
+  const clearBtn = document.getElementById("canIdsClearBtn");
+  const result = document.getElementById("canLoopResult");
+  if (!chs || !hdx) return;
+
+  const showIds = (el, bus) => {
+    if (!bus || !Array.isArray(bus.ids) || bus.ids.length === 0) {
+      el.textContent = "none";
+      return;
+    }
+    const ids = bus.ids.slice().sort((x, y) => x.ageMs - y.ageMs); // most recent first
+    el.innerHTML = ids.map((e) => `<span class="${e.ageMs > 3000 ? "old" : ""}">${e.id} ×${e.count}</span>`).join(", ") +
+      (bus.moreIds ? ` <span class="old">+more</span>` : "");
+  };
+  const refresh = async () => {
+    const d = await fetchJson("/api/cantest");
+    if (!d || !Array.isArray(d.buses)) return null;
+    showIds(chs, d.buses[0]);
+    showIds(hdx, d.buses[1]);
+    return d;
+  };
+
+  setInterval(() => {
+    const page = document.getElementById("diagnostics-page");
+    if (page && page.classList.contains("active")) refresh();
+  }, 1000);
+
+  if (clearBtn) clearBtn.addEventListener("click", async () => {
+    await fetchJson("/api/cantest/clear", { method: "POST" });
+    refresh();
+  });
+
+  if (loopBtn) loopBtn.addEventListener("click", async () => {
+    loopBtn.disabled = true;
+    result.hidden = false;
+    result.textContent = "Testing…";
+    const start = await fetchJson("/api/cantest/loop", { method: "POST" });
+    if (!start || !start.ok) {
+      result.textContent = (start && start.error) || "Couldn't start the test";
+      loopBtn.disabled = false;
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 400));
+    const d = await refresh();
+    loopBtn.disabled = false;
+    if (!d || !d.loop) { result.textContent = "No answer from the controller"; return; }
+    const seen = d.loop.seen, sent = d.loop.sent;
+    const mark = (ok) => (ok ? "✓" : "✗");
+    let text = `CHS → HDX ${mark(seen & 1)}   HDX → CHS ${mark(seen & 2)}`;
+    if (!(sent & 1) || !(sent & 2)) text += ` (couldn't send on ${!(sent & 1) ? "CHS" : "HDX"})`;
+    if (seen & 12) text += " - a bus heard its own frame: fault";
+    result.textContent = text;
+  });
+}
+
+// ===== Phone touch guards (V11.00.12) =====
+// 1. A scroll that starts on a slider must never move it (from SpeedPulser's
+//    initSliderTouchGuard): a slider only changes on a sideways drag (> 10 px and
+//    more than 1.5x the up / down move). Otherwise its input / change events are
+//    stopped and the value put back. CSS gives every range touch-action: pan-y.
+// 2. No long-press copy / context menu: the page uses long presses for real
+//    actions (Expert PT cells, chart points). Text boxes, select, pre, code and
+//    .allow-select keep it. The no-select / no-callout CSS is in style.css.
+function initTouchGuards() {
+  let guard = null; // { el, x, y, value, drag }
+  const rangeAt = (target) => target && target.closest && target.closest('input[type="range"]');
+  document.addEventListener("touchstart", (event) => {
+    const el = rangeAt(event.target);
+    if (!el || el.disabled) return;
+    const touch = event.touches[0];
+    guard = { el, x: touch.clientX, y: touch.clientY, value: el.value, drag: false };
+  }, { passive: true, capture: true });
+  document.addEventListener("touchmove", (event) => {
+    if (!guard || guard.drag) return;
+    const touch = event.touches[0];
+    const dx = Math.abs(touch.clientX - guard.x);
+    const dy = Math.abs(touch.clientY - guard.y);
+    if (dx > 10 && dx > dy * 1.5) guard.drag = true;
+  }, { passive: true, capture: true });
+  const hold = (event) => {
+    if (!guard || guard.drag || event.target !== guard.el) return;
+    event.stopImmediatePropagation(); // no display update, no request
+    guard.el.value = guard.value;
+  };
+  document.addEventListener("input", hold, true);
+  document.addEventListener("change", hold, true);
+  const end = () => {
+    const ended = guard;
+    if (!ended) return;
+    if (!ended.drag) ended.el.value = ended.value;
+    setTimeout(() => { if (guard === ended) guard = null; }, 100); // the change event comes after touchend
+  };
+  document.addEventListener("touchend", end, true);
+  document.addEventListener("touchcancel", end, true);
+
+  document.addEventListener("contextmenu", (event) => {
+    const t = event.target;
+    if (t && t.closest && t.closest('input, textarea, select, pre, code, [contenteditable], .allow-select')) return;
+    event.preventDefault();
+  });
 }
 
 // Collapse configuration-style cards by default so pages open compact and
@@ -140,10 +294,11 @@ async function fetchJson(url, options) {
 }
 
 // Volvo / SAAB generations (V10.00.0) and the CAN bus speed each one needs
+const DRIVE_MODE_GENS = [50, 51, 52]; // Gen5 VW (MQB): the car's drive mode select is read
 const VOLVO_SAAB_GENERATIONS = [21, 3, 31, 43, 44, 53]; // 53 = Volvo Gen5 SPC (V11.00.0), 31 = Volvo P1 (V11.00.1)
 let _canSpeedKbps = 500; // speed the controller is running at (from /api/settings)
 
-// 250 kbit/s for Volvo P2 (Pre-Facelift), 500 kbit/s for everything else - matches the firmware
+// 250 kbit/s for Volvo P2 (Pre-Facelift), 500 kbit/s for everything else (incl. 46 Land Rover) - matches the firmware
 function canSpeedForGeneration(gen) {
   if (gen === 21) return 250;
   return 500;
@@ -154,6 +309,9 @@ function updateVolvoSaabHint(gen) {
   const hint = document.getElementById("genVolvoSaabHint");
   if (!hint) return;
   hint.style.display = VOLVO_SAAB_GENERATIONS.includes(gen) ? "" : "none";
+  // Land Rover FL2 / Evoque (V11.00.13): untested note
+  const lrHint = document.getElementById("genLandRoverHint");
+  if (lrHint) lrHint.style.display = gen === 46 ? "" : "none";
   const speed = document.getElementById("canSpeedKbps");
   if (speed) speed.textContent = canSpeedForGeneration(gen);
 
@@ -166,6 +324,19 @@ function updateVolvoSaabHint(gen) {
       p1Card.style.display = "none";
     }
   }
+  // Wheel Slip card (V11.00.12): only where the car's wheel speeds are decoded
+  const slipCard = document.getElementById("wheelSlipCard");
+  if (slipCard) slipCard.style.display = SLIP_GENS.includes(gen) ? "" : "none";
+  // Gen 5 Lock Calibration card (V11.00.12): 0CQ / VAQ only
+  const gen5Card = document.getElementById("gen5CalibrationCard");
+  if (gen5Card) gen5Card.style.display = (gen === 50 || gen === 52) ? "" : "none";
+  // Drive mode select (MQB Charisma frames): the firmware only reads it for the
+  // Gen5 VW generations (isMqbDriveModeGeneration in CHS.cpp)
+  const mqbDriveMode = DRIVE_MODE_GENS.includes(gen);
+  ["driveModeForceBlock", "driveModeDiagCard"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = mqbDriveMode ? "" : "none";
+  });
   // Frame Editing card: what ticked / unticked means for the P1 in Standalone
   const p1FrameHint = document.getElementById("frameEditP1Hint");
   if (p1FrameHint) {
@@ -266,14 +437,7 @@ async function initStoredSettings() {
     document.getElementById("ledBrightnessRange").value = ledBrightPct;
     document.getElementById("ledBrightnessValue").textContent = ledBrightPct;
 
-    const geomFields = [
-      ["slipWheelbaseMm", 2505], ["slipTrackFrontMm", 1572],
-      ["slipTrackRearMm", 1543], ["slipSteeringRatio", 15.0],
-    ];
-    geomFields.forEach(([id, def]) => {
-      const el = document.getElementById(id);
-      if (el) el.value = data[id] !== undefined ? data[id] : def;
-    });
+    showVehicleGeometry(data);
 
     const lockRateRange = document.getElementById("lockReleaseRateRange");
     const lockRateVal   = document.getElementById("lockReleaseRateValue");
@@ -317,7 +481,7 @@ async function initStoredSettings() {
 
     document.getElementById("FW_VERSION").textContent = data.FW_VERSION || "--";
     const boardRevEl = document.getElementById("BOARD_REV");
-    if (boardRevEl) boardRevEl.textContent = data.boardRev ? `rev ${data.boardRev}` : "--";
+    if (boardRevEl) boardRevEl.textContent = data.boardVersion ? `V${data.boardVersion}` : "V1.0"; // older firmware didn't send it: only V1.0 boards exist
 
     //document.getElementById('mode').value = data.mode || 1;
 
@@ -426,19 +590,15 @@ async function initStoredSettings() {
     _extBtnForceMode = data.extButtonForceMode || false;
     _forceModesPriority = data.forceModesPriority ?? 0;
     _haldexGeneration = data.haldexGeneration || 1;
+    rememberGeneration(_haldexGeneration);
     _isStandalone = data.isStandalone || false;
     _useCANifAvailable = data.useCANifAvailable || false;
     _disableController = data.disableController || false;
     setTimeout(() => maybeOfferSleepSetup(_haldexGeneration), 1000);
 
-    // parse speed/throttle/lock array from the ESP
-    speedHeader = data.speedArray;
-    throttleHeader = data.throttleArray;
-    currentLock = data.lockArray;
-
-    // parse steering-angle lock-scale curve from the ESP
-    if (Array.isArray(data.steeringArray)) steeringHeader = data.steeringArray;
-    if (Array.isArray(data.steeringLockScaleArray)) steeringScale = data.steeringLockScaleArray;
+    // parse speed/throttle/lock array + PT cells, and the steering curve, from the ESP
+    applyTuneFromSettings(data);
+    applySteeringFromSettings(data);
 
     // parse the mode button
     if (data.mode !== undefined) {
@@ -486,9 +646,9 @@ async function refreshStatus() {
     document.getElementById("coolantTemp").textContent = displayValue(data.coolantTemp); // PQ Kombi_2 (V11.00.4)
     document.getElementById("oilTemp").textContent = displayValue(data.oilTemp);
 
-    document.getElementById("lockTarget").textContent = displayValue(
-      data.lockTarget,
-    );
+    document.getElementById("lockTarget").textContent = data.expertPT
+      ? "PT " + displayValue(data.lockTarget) // V11.00.12: Expert PT area - the car's own strategy
+      : displayValue(data.lockTarget);
     document.getElementById("lockActual").textContent = displayValue(
       data.lockActual,
     );
@@ -515,7 +675,12 @@ async function refreshStatus() {
         }
         if (noteEl) {
           noteEl.style.display = "";
-          noteEl.textContent = `Steering reduction: ${req}% \u2192 ${cap}% (\u2212${req - cap}%)`;
+          let noteText = `Steering reduction: ${req}% \u2192 ${cap}% (\u2212${req - cap}%)`;
+          // the throttle override is fading part of the steering reduction back out
+          if (data.steeringThrottleOverride > 0) {
+            noteText += ` - throttle override ${data.steeringThrottleOverride}%`;
+          }
+          noteEl.textContent = noteText;
         }
       } else {
         if (redEl) redEl.style.display = "none";
@@ -557,7 +722,10 @@ async function refreshStatus() {
     const canStatus = document.getElementById("canStatus");
     const chassisOk = data.chassisCAN;
     const haldexOk = data.haldexCAN;
-    canStatus.textContent = `CAN: ${chassisOk ? "✓" : "X"} Chassis | ${haldexOk ? "✓" : "X"} Haldex`;
+    // V11.00.14: two dots, so the banner stays on one line on a phone
+    const canDot = (ok) => `<i class="can-dot${ok ? " ok" : ""}"></i>`;
+    canStatus.innerHTML = `${canDot(chassisOk)}CHS ${canDot(haldexOk)}HDX`;
+    canStatus.title = `Chassis CAN ${chassisOk ? "OK" : "no frames"}, Haldex CAN ${haldexOk ? "OK" : "no frames"}`;
 
     if (data.bleCodeRequired !== undefined) renderBlePairing(data.bleCodeRequired);
 
@@ -648,7 +816,33 @@ async function refreshStatus() {
     const haldexDataCard = document.getElementById("haldexDataCard");
     const udsCard = document.getElementById("udsDataCard");
     const kwpCard = document.getElementById("kwpDataCard");
-    if (data.uds) {
+    const fordCard = document.getElementById("fordDataCard");
+    if (fordCard) fordCard.style.display = data.ford ? "" : "none";
+    if (data.ford) {
+      // Ford Kuga (gen 45) KWP live data (V11.00.10). Bar only for the 8V41 DID set (provisional
+      // scale); the 9V4N shows the raw DID value.
+      if (haldexDataCard) haldexDataCard.style.display = "none";
+      if (udsCard) udsCard.style.display = "none";
+      if (kwpCard) kwpCard.style.display = "none";
+      const f = data.ford;
+      const fix = (v, d) => (v === null || v === undefined ? "--" : Number(v).toFixed(d));
+      const pBar = f.pressureBar !== null && f.pressureBar !== undefined;
+      const sBar = f.setpointBar !== null && f.setpointBar !== undefined;
+      document.getElementById("fordOilTemp").textContent = fix(f.oilTemp, 1);
+      document.getElementById("fordSupplyV").textContent = fix(f.supplyV, 2);
+      document.getElementById("fordPressure").textContent = pBar ? fix(f.pressureBar, 2) : fix(f.pressureRaw, 0);
+      document.getElementById("fordPressureUnit").textContent = pBar ? "bar" : "raw";
+      document.getElementById("fordSetpoint").textContent = sBar ? fix(f.setpointBar, 2) : fix(f.setpointRaw, 0);
+      document.getElementById("fordSetpointUnit").textContent = sBar ? "bar" : "raw";
+      document.getElementById("fordValveCurrent").textContent = fix(f.valveCurrent, 3);
+      document.getElementById("fordPumpCurrent").textContent = fix(f.pumpCurrent, 3);
+      const fordStatus = document.getElementById("fordStatus");
+      if (fordStatus) {
+        fordStatus.textContent = data.diagToolActive
+          ? "Paused — external diagnostic tool detected"
+          : (f.connected ? "Connected" + (f.variant ? " (" + f.variant + ")" : "") + " — bar scale provisional" : "Connecting…");
+      }
+    } else if (data.uds) {
       if (haldexDataCard) haldexDataCard.style.display = "none";
       if (kwpCard) kwpCard.style.display = "none";
       if (udsCard) {
@@ -659,8 +853,11 @@ async function refreshStatus() {
         document.getElementById("udsCoolingFinTemp").textContent = data.uds.coolingFinTemp?.toFixed(1) ?? "--";
         document.getElementById("udsClutchCurrent").textContent = data.uds.clutchCurrent?.toFixed(3) ?? "--";
         document.getElementById("udsClutchPWM").textContent = displayValue(data.uds.clutchPWM);
-        document.getElementById("udsClutchVoltage").textContent = data.uds.clutchVoltage?.toFixed(3) ?? "--";
-        document.getElementById("udsBlockagePct").textContent = displayValue(data.uds.blockagePct);
+        document.getElementById("udsClutchVoltage").textContent = data.uds.clutchVoltage?.toFixed(1) ?? "--";
+        document.getElementById("udsClutchTorquePct").textContent = data.uds.clutchTorquePct?.toFixed(0) ?? "--";
+        const axleTile = document.getElementById("udsAxleSpeedDiffTile");
+        if (axleTile) axleTile.style.display = data.uds.axleSpeedDiff === undefined ? "none" : ""; // VAQ has none
+        document.getElementById("udsAxleSpeedDiff").textContent = data.uds.axleSpeedDiff?.toFixed(1) ?? "--";
         const udsStatus = document.getElementById("udsStatus");
         if (udsStatus) udsStatus.textContent = data.diagToolActive ? "Paused — external diagnostic tool detected" : "";
       }
@@ -670,18 +867,53 @@ async function refreshStatus() {
       if (udsCard) udsCard.style.display = "none";
       if (kwpCard) {
         kwpCard.style.display = "";
-        document.getElementById("kwpOilTemp").textContent = data.kwp.oilTemp?.toFixed(1) ?? "--";
-        document.getElementById("kwpPlateTemp").textContent = data.kwp.plateTemp?.toFixed(1) ?? "--";
-        document.getElementById("kwpSupplyVoltage").textContent = data.kwp.supplyVoltage?.toFixed(2) ?? "--";
-        document.getElementById("kwpOilPressure").textContent = data.kwp.oilPressure?.toFixed(0) ?? "--";
-        document.getElementById("kwpEstTorque").textContent = data.kwp.estTorque?.toFixed(0) ?? "--";
-        document.getElementById("kwpClutchDuty").textContent = data.kwp.clutchDuty?.toFixed(0) ?? "--";
-        document.getElementById("kwpClutchValveCurrent").textContent = data.kwp.clutchValveCurrent?.toFixed(3) ?? "--";
+        // V11.00.10: a tile shows only when this generation reports it (Gen2 has no plate temp,
+        // torque, valve or pump values in its login-free groups).
+        const kwpTile = (id, value, digits) => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          const tile = el.closest(".gauge");
+          if (tile) tile.style.display = value === undefined ? "none" : "";
+          el.textContent = value === undefined || value === null ? "--" : Number(value).toFixed(digits);
+        };
+        kwpTile("kwpOilTemp", data.kwp.oilTemp, 1);
+        kwpTile("kwpPlateTemp", data.kwp.plateTemp, 1);
+        kwpTile("kwpSupplyVoltage", data.kwp.supplyVoltage, 2);
+        kwpTile("kwpOilPressure", data.kwp.oilPressure, 0);
+        kwpTile("kwpEstTorque", data.kwp.estTorque, 0);
+        kwpTile("kwpClutchDuty", data.kwp.clutchDuty, 0);
+        kwpTile("kwpClutchValveCurrent", data.kwp.clutchValveCurrent, 2);
+        kwpTile("kwpPumpDuty", data.kwp.pumpDuty, 0);
+        kwpTile("kwpPumpCurrent", data.kwp.pumpCurrent, 2);
+        const pLabel = document.getElementById("kwpOilPressureLabel");
+        if (pLabel) pLabel.textContent = data.kwp.pressureIsTarget === false ? "Oil Pressure" : "Pressure Target";
         const kwpStatus = document.getElementById("kwpStatus");
         if (kwpStatus) {
-          kwpStatus.textContent = data.diagToolActive
+          let text = data.diagToolActive
             ? "Paused — external diagnostic tool detected"
             : (data.kwp.connected ? "Connected" : "Connecting…");
+          if (!data.diagToolActive && data.kwp.connected && data.kwp.canStatus) {
+            // Gen2: brake switch (group 1) + CAN status (group 7D)
+            const cs = data.kwp.canStatus;
+            const st = (v) => (v === null || v === undefined ? "?" : (v ? "OK" : "no comms"));
+            const brake = data.kwp.brakeSwitch === null || data.kwp.brakeSwitch === undefined
+              ? "?" : (data.kwp.brakeSwitch ? "pressed" : "off");
+            text += " · Brake switch " + brake + " · CAN: engine " + st(cs.engine) + ", ABS " + st(cs.abs) +
+              ", cluster " + st(cs.cluster) + ", steering " + st(cs.steering) +
+              (data.kwp.loggedIn === false ? " · pump / valve groups locked (login refused)" : "");
+          }
+          kwpStatus.textContent = text;
+        }
+        // Gen2: a refused security key is saved on the controller - highlight it (V11.00.10)
+        const lfBox = document.getElementById("kwpLoginFault");
+        if (lfBox) {
+          const lf = data.kwp.loginFault;
+          lfBox.hidden = !lf;
+          if (lf) {
+            document.getElementById("kwpLoginFaultText").textContent =
+              "Module answered 7F 27 " + lf.nrc + " to key " + lf.key + " for seed " + lf.seed +
+              " (expected key = seed + 762B).";
+          }
         }
       }
     } else {
@@ -745,8 +977,9 @@ function updateBannerSubtitle(data) {
   let text = modeName;
 
   const force = getActiveForceMode(data);
-  if (force) text += ` (${force.source}>${MODE_NAMES[force.mode] ?? "Unknown"})`;
+  if (force) text += ` ▸ ${force.source} ${MODE_NAMES[force.mode] ?? "Unknown"}`;
   el.textContent = text;
+  el.title = text; // the pill cuts a long one short with "…"
 }
 
 // The drive mode select's force, as a banner trigger ("Sport" forcing 60:40), or null.
@@ -846,6 +1079,33 @@ function renderHaldexStateLegend(stateByte, gen) {
       `<table><tr><th>Field</th><th>Value</th></tr>` +
       `<tr><td>Status (byte 5)</td><td>${statusText}</td></tr>` +
       `</table>`;
+  } else if (gen === 45) {
+    // Ford Kuga (V11.00.9): 0x260 byte 1 - the AWD module's own firmware (trackF / trackH)
+    const st = (val >> 6) & 0x03;
+    const stText = ["Active", "Released for ABS / ESP", "No demand / engine not running / test override", "Fault (monitor)"][st];
+    el.innerHTML =
+      `<table><tr><th>Field</th><th>Value</th></tr>` +
+      `<tr><td>Status (byte 1 bits 6-7)</td><td>${stText}</td></tr>` +
+      `<tr><td>ABS torque ceiling (bit 2)</td><td>${(val & 0x04) ? "On" : "Off"}</td></tr>` +
+      `</table>`;
+  } else if (gen === 46) {
+    // Land Rover FL2 / Evoque (V11.00.13): 0x310 / 0x301 byte 6 bits 5-7 = status (the unit's own firmware,
+    // audit_landrover #45). Bits 0-4 are the top of the commanded torque, not status. Untested on a car.
+    const st = (val >> 5) & 0x07;
+    const stText = [
+      "Active",
+      "ABS / DSC open or ramp-down",
+      "Not ready (base demand off: engine not running / inhibit)",
+      "Fault",
+      "Temperature limit",
+      "Limit flag (temperature / monitor)",
+      "ABS / DSC full lock",
+      "Unknown (7)",
+    ][st];
+    el.innerHTML =
+      `<table><tr><th>Field</th><th>Value</th></tr>` +
+      `<tr><td>Status (byte 6 bits 5-7)</td><td>${stText} (${st})</td></tr>` +
+      `</table><p style="margin:4px 0 0;">Engagement = the torque the unit COMMANDS (byte 6-7), not a measurement - this unit puts no pressure on CAN.</p>`;
   } else if (VOLVO_SAAB_GENERATIONS.includes(gen)) {
     el.innerHTML = `<em>Volvo / SAAB: this is byte 0 of the Haldex reply, shown raw. Its bits aren't decoded yet - logs needed.</em>`;
   } else {
@@ -864,10 +1124,12 @@ async function saveLockTable() {
         speedArray: speedHeader,
         throttleArray: throttleHeader,
         lockArray: currentLock.map((r) => r),
+        lockPT: currentPT.map((r) => r),
       }),
     });
 
     if (response.ok) {
+      rememberSavedTune();
       showNotification("Map Saved");
     } else {
       showNotification("Failed to Save", "error");
@@ -888,6 +1150,90 @@ function renderSteeringTable() {
     scaleRow += `<td><input type="number" min="0" max="100" class="steering-scale-input" data-idx="${i}" value="${steeringScale[i]}"></td>`;
   }
   table.innerHTML = angleRow + "</tr>" + scaleRow + "</tr>";
+
+  // typing in the table moves the curve straight away (still only sent on Save)
+  table.querySelectorAll("input").forEach((el) => {
+    el.addEventListener("input", () => {
+      const i = Number(el.dataset.idx);
+      if (el.classList.contains("steering-angle-input")) steeringHeader[i] = Math.max(0, Number(el.value) || 0);
+      else steeringScale[i] = Math.max(0, Math.min(100, Number(el.value) || 0));
+      drawSteerChart();
+      updateUnsaved();
+    });
+  });
+
+  // throttle override boxes under the curve
+  const overrideEnabledElem = document.getElementById("steeringThrottleOverrideEnabled");
+  const overrideStartElem = document.getElementById("steeringThrottleOverrideStart");
+  const overrideFullElem = document.getElementById("steeringThrottleOverrideFull");
+  if (overrideEnabledElem) overrideEnabledElem.checked = steeringThrottleOverrideEnabled;
+  if (overrideStartElem) overrideStartElem.value = steeringThrottleOverrideStart;
+  if (overrideFullElem) overrideFullElem.value = steeringThrottleOverrideFull;
+  dimSteeringThrottleOverride();
+  drawSteerChart();
+  updateUnsaved();
+}
+
+// grey out the throttle override Start/Full boxes when the override is off
+function dimSteeringThrottleOverride() {
+  const overrideTable = document.getElementById("steeringThrottleOverrideTable");
+  if (!overrideTable) return;
+  if (steeringThrottleOverrideEnabled) {
+    overrideTable.style.opacity = "";
+  } else {
+    overrideTable.style.opacity = "0.4";
+  }
+}
+
+// read the throttle override boxes into the variables.
+// Returns false (and warns) if Full % isn't above Start %.
+function readSteeringThrottleOverrideInputs() {
+  const overrideEnabledElem = document.getElementById("steeringThrottleOverrideEnabled");
+  const overrideStartElem = document.getElementById("steeringThrottleOverrideStart");
+  const overrideFullElem = document.getElementById("steeringThrottleOverrideFull");
+  if (!overrideEnabledElem || !overrideStartElem || !overrideFullElem) return true; // page without the boxes
+
+  const newStart = Math.max(0, Math.min(100, Number(overrideStartElem.value) || 0));
+  const newFull = Math.max(0, Math.min(100, Number(overrideFullElem.value) || 0));
+  if (newFull <= newStart) {
+    showNotification("Throttle override: Full % must be above Start %", "error");
+    return false;
+  }
+  steeringThrottleOverrideEnabled = overrideEnabledElem.checked;
+  steeringThrottleOverrideStart = newStart;
+  steeringThrottleOverrideFull = newFull;
+  return true;
+}
+
+// the throttle override toggle saves straight away, like the other toggles
+async function saveSteeringThrottleOverride() {
+  if (!readSteeringThrottleOverrideInputs()) {
+    // put the toggle back to how it was, since nothing was saved
+    const overrideEnabledElem = document.getElementById("steeringThrottleOverrideEnabled");
+    if (overrideEnabledElem) overrideEnabledElem.checked = steeringThrottleOverrideEnabled;
+    return;
+  }
+  dimSteeringThrottleOverride();
+
+  try {
+    const response = await fetch("/api/tune", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        steeringThrottleOverrideEnabled: steeringThrottleOverrideEnabled,
+        steeringThrottleOverrideStart: steeringThrottleOverrideStart,
+        steeringThrottleOverrideFull: steeringThrottleOverrideFull,
+      }),
+    });
+
+    if (response.ok) {
+      showNotification("Throttle Override Saved");
+    } else {
+      showNotification("Failed to Save", "error");
+    }
+  } catch (error) {
+    console.error("Error saving throttle override:", error);
+  }
 }
 
 // save the steering-angle lock-scale curve back to the ESP
@@ -898,6 +1244,8 @@ async function saveSteeringTable() {
   document.querySelectorAll(".steering-scale-input").forEach((el) => {
     steeringScale[Number(el.dataset.idx)] = Math.max(0, Math.min(100, Number(el.value) || 0));
   });
+  if (!readSteeringThrottleOverrideInputs()) return; // bad Start/Full pair - nothing saved
+  dimSteeringThrottleOverride();
 
   try {
     const response = await fetch("/api/tune", {
@@ -906,10 +1254,14 @@ async function saveSteeringTable() {
       body: JSON.stringify({
         steeringArray: steeringHeader,
         steeringLockScaleArray: steeringScale,
+        steeringThrottleOverrideEnabled: steeringThrottleOverrideEnabled,
+        steeringThrottleOverrideStart: steeringThrottleOverrideStart,
+        steeringThrottleOverrideFull: steeringThrottleOverrideFull,
       }),
     });
 
     if (response.ok) {
+      rememberSavedSteering();
       showNotification("Steering Scale Saved");
     } else {
       showNotification("Failed to Save", "error");
@@ -923,6 +1275,8 @@ async function saveSteeringTable() {
 function restoreSteeringDefaults() {
   steeringHeader = [...defaultSteeringHeader];
   steeringScale = [...defaultSteeringScale];
+  steeringThrottleOverrideStart = 40; // throttle override points back to 40 / 75 (on/off left as it is)
+  steeringThrottleOverrideFull = 75;
   renderSteeringTable();
 }
 
@@ -1151,6 +1505,18 @@ function renderFrameBlocks(blocks) {
   });
 }
 
+// V11.00.10: Gen2 SecurityAccess - forget the saved key refusal so the login is tried once more.
+document.addEventListener("click", async (e) => {
+  if (!e.target || e.target.id !== "kwpLoginRetryBtn") return;
+  try {
+    const response = await fetchJson("/api/kwp/gen2login/reset", { method: "POST" });
+    if (response && response.ok) showNotification("Gen2 login will be tried once more", "success");
+    else showNotification("Could not reset the Gen2 login", "error");
+  } catch (error) {
+    showNotification("Error resetting the Gen2 login", "error");
+  }
+});
+
 // Toggle a single frame-edit block for the current generation.
 async function saveFrameEdit(bit, on) {
   try {
@@ -1285,7 +1651,9 @@ async function refreshLiveData() {
       document.getElementById("boost").textContent = displayValue(data.boost);
       document.getElementById("coolantTemp").textContent = displayValue(data.coolantTemp);
       document.getElementById("oilTemp").textContent = displayValue(data.oilTemp);
-      document.getElementById("lockTarget").textContent = displayValue(data.lockTarget);
+      document.getElementById("lockTarget").textContent = data.expertPT
+        ? "PT " + displayValue(data.lockTarget) // V11.00.12: Expert PT area - the car's own strategy
+        : displayValue(data.lockTarget);
       document.getElementById("lockActual").textContent = displayValue(data.lockActual);
       document.getElementById("engagementFill").style.width = `${data.lockActual ?? 0}%`;
 
@@ -1364,6 +1732,7 @@ function initSettings() {
         // Generation change alters which frames are editable — refresh the list.
         if (id === "haldexGeneration") {
           _haldexGeneration = parseInt(elem.value);
+          rememberGeneration(_haldexGeneration);
           updateVolvoSaabHint(_haldexGeneration);
           // Volvo P2 (Pre-Facelift) needs 250 kbit/s: the controller saves and
           // restarts ~2 s after the change, so warn and reload once it is back.
@@ -1372,6 +1741,8 @@ function initSettings() {
             setTimeout(() => location.reload(), 10000);
           }
           refreshFrameBlocks();
+          // untouched vehicle geometry follows the generation (firmware): show the new figures
+          fetchJson("/api/settings").then((data) => { if (data) showVehicleGeometry(data); });
           maybeOfferSleepSetup(_haldexGeneration, true); // picking Gen5 always asks again
         }
       });
@@ -1405,7 +1776,6 @@ function initSettings() {
     }
   });
 
-  // LED brightness: UI is 0-100%, firmware stores 0-255
   ["slipWheelbaseMm", "slipTrackFrontMm", "slipTrackRearMm", "slipSteeringRatio"].forEach((id) => {
     const el = document.getElementById(id);
     if (el) {
@@ -1414,7 +1784,17 @@ function initSettings() {
       });
     }
   });
+  const vehicleDefaultsBtn = document.getElementById("vehicleDefaultsBtn");
+  if (vehicleDefaultsBtn) {
+    vehicleDefaultsBtn.addEventListener("click", async () => {
+      if (!(await saveSetting("vehicleDefaults", true))) return;
+      const data = await fetchJson("/api/settings");
+      if (data) showVehicleGeometry(data);
+      showNotification("Vehicle geometry set to " + (data && data.vehicleDefaults ? data.vehicleDefaults.car : "the defaults"));
+    });
+  }
 
+  // LED brightness: UI is 0-100%, firmware stores 0-255
   const ledBrightElem = document.getElementById("ledBrightnessRange");
   if (ledBrightElem) {
     ledBrightElem.addEventListener("input", () => {
@@ -1677,13 +2057,16 @@ function initExpertEditor() {
       cell.setAttribute("lock", String("true")); // make a new attribute for row
       cell.min = 0;
       cell.max = 100;
-      cell.textContent = String(currentLock[throttle][speed]); // update the cell text with the value in currentLock
+      paintLockCell(cell, throttle, speed); // number + colour, or the dark PT shade
 
-      cell.addEventListener("click", () => {
+      // tap = edit the number, long press = PT on / off (V11.00.12)
+      attachLongPress(cell, MAP_PT_HOLD_MS, () => {
+        if (currentPT[throttle][speed]) {
+          showNotification("PT cell - long-press it to bring back " + currentLock[throttle][speed] + "%");
+          return;
+        }
         openEditValue(cell);
-      });
-
-      updateCellColor(cell, currentLock[throttle][speed]); // update the colour (low/medium/high)
+      }, () => togglePT(throttle, speed));
 
       mapGrid.appendChild(cell);
     }
@@ -1695,6 +2078,18 @@ function initExpertEditor() {
   document
     .getElementById("restoreDefaults")
     .addEventListener("click", restoreDefaults);
+  const restoreSavedMapBtn = document.getElementById("restoreSavedMap");
+  if (restoreSavedMapBtn) restoreSavedMapBtn.addEventListener("click", restoreSavedTune);
+  const restoreSavedSteerBtn = document.getElementById("restoreSavedSteering");
+  if (restoreSavedSteerBtn) restoreSavedSteerBtn.addEventListener("click", restoreSavedSteering);
+  ["steeringThrottleOverrideStart", "steeringThrottleOverrideFull"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("input", updateUnsaved);
+  });
+
+  // hold a point on either chart, slide up / down, release to set (V11.00.12)
+  initTuneChartDrag();
+  initSteerChartDrag();
 
   // Steering-angle lock-scale editor
   renderSteeringTable();
@@ -1703,6 +2098,8 @@ function initExpertEditor() {
   const restoreSteerBtn = document.getElementById("restoreSteeringScale");
   if (restoreSteerBtn)
     restoreSteerBtn.addEventListener("click", restoreSteeringDefaults);
+  const overrideToggle = document.getElementById("steeringThrottleOverrideEnabled");
+  if (overrideToggle) overrideToggle.addEventListener("change", saveSteeringThrottleOverride);
 }
 
 // find array position from a value
@@ -1778,7 +2175,11 @@ function openEditValue(cell) {
     modalTitle.textContent = "Edit Lock %";
   }
 
-  input.value = cell.textContent;
+  if (cell.getAttribute("lock") === "true") {
+    input.value = currentLock[Number(cell.getAttribute("throttle"))][Number(cell.getAttribute("speed"))];
+  } else {
+    input.value = cell.textContent;
+  }
   input.focus();
   input.select();
 
@@ -1822,36 +2223,613 @@ function confirmEdit() {
       return;
     }
     currentLock[throttlePos][speedPos] = Number(value);
-    updateCellColor(currentEditCell, value);
+    paintLockCell(currentEditCell, throttlePos, speedPos);
+  } else {
+    currentEditCell.textContent = value;
   }
 
-  currentEditCell.textContent = value;
   cancelEdit();
   drawTuneChart(); // keep the 3D surface in sync with the edited cell/axis
+  updateUnsaved();
 }
 // end tune edit
 
 function restoreDefaults() {
-  // todo - redraw the map-grid
-  for (let throttle = 0; throttle < arrayRows; throttle++) {
-    throttleHeader[throttle] = defaultThrottleHeader[throttle];
-  }
+  for (let throttle = 0; throttle < arrayRows; throttle++) throttleHeader[throttle] = defaultThrottleHeader[throttle];
+  for (let speed = 0; speed < arrayColumns; speed++) speedHeader[speed] = defaultSpeedHeader[speed];
+  currentLock = defaultLock.map((row) => row.slice());
+  currentPT = blankPT(); // defaults have no PT cells
+  renderMapGrid(); // axis headers too (they used to stay on the old values until a reload)
+}
 
-  for (let speed = 0; speed < arrayColumns; speed++) {
-    speedHeader[speed] = defaultSpeedHeader[speed];
-  }
+// ===== Expert PT cells, chart dragging, unsaved changes, Restore (V11.00.12) =====
 
-  const cell = [...document.querySelectorAll(".map-cell")];
-  let i = 0;
-  for (let throttle = 0; throttle < arrayRows; throttle++) {
-    for (let speed = 0; speed < arrayColumns; speed++) {
-      currentLock[throttle][speed] = defaultLock[throttle][speed];
-      cell[i].textContent = String(currentLock[throttle][speed]);
-      updateCellColor(cell[i], currentLock[throttle][speed]);
-      i++;
-    }
+const MAP_PT_HOLD_MS = 550; // long press on a grid cell = PT on / off
+const CHART_HOLD_MS = 450;  // hold a chart point this long before it can be dragged
+
+// Tune / steering curve from /api/settings (page load and the Restore buttons).
+function applyTuneFromSettings(data) {
+  if (Array.isArray(data.speedArray)) speedHeader = data.speedArray.slice();
+  if (Array.isArray(data.throttleArray)) throttleHeader = data.throttleArray.slice();
+  if (Array.isArray(data.lockArray)) currentLock = data.lockArray.map((row) => row.slice());
+  currentPT = normalisePT(data.lockPT);
+  rememberSavedTune();
+}
+
+function applySteeringFromSettings(data) {
+  if (Array.isArray(data.steeringArray)) steeringHeader = data.steeringArray.slice();
+  if (Array.isArray(data.steeringLockScaleArray)) steeringScale = data.steeringLockScaleArray.slice();
+  // the throttle override (older firmware doesn't send it - keep the defaults)
+  if (typeof data.steeringThrottleOverrideEnabled === "boolean") steeringThrottleOverrideEnabled = data.steeringThrottleOverrideEnabled;
+  if (typeof data.steeringThrottleOverrideStart === "number") steeringThrottleOverrideStart = data.steeringThrottleOverrideStart;
+  if (typeof data.steeringThrottleOverrideFull === "number") steeringThrottleOverrideFull = data.steeringThrottleOverrideFull;
+  rememberSavedSteering();
+}
+
+// What the controller has saved, to tell when the page differs from it.
+let savedTuneJson = null;
+let savedSteeringJson = null;
+const tuneJson = () => JSON.stringify([speedHeader, throttleHeader, currentLock, currentPT]);
+function steeringJson(fromInputs) {
+  const box = (id, fallback) => {
+    const el = document.getElementById(id);
+    return fromInputs && el ? Number(el.value) : fallback;
+  };
+  return JSON.stringify([steeringHeader, steeringScale,
+    box("steeringThrottleOverrideStart", steeringThrottleOverrideStart),
+    box("steeringThrottleOverrideFull", steeringThrottleOverrideFull)]);
+}
+function rememberSavedTune() { savedTuneJson = tuneJson(); updateUnsaved(); }
+function rememberSavedSteering() { savedSteeringJson = steeringJson(false); updateUnsaved(); }
+
+// Save buttons stand out and Restore is usable only while something isn't saved.
+function updateUnsaved() {
+  const mark = (saveId, restoreId, noteId, dirty) => {
+    const save = document.getElementById(saveId);
+    const restore = document.getElementById(restoreId);
+    const note = document.getElementById(noteId);
+    if (save) save.classList.toggle("btn-unsaved", dirty);
+    if (restore) restore.disabled = !dirty;
+    if (note) note.hidden = !dirty;
+  };
+  mark("saveMap", "restoreSavedMap", "mapUnsaved", savedTuneJson !== null && tuneJson() !== savedTuneJson);
+  mark("saveSteeringScale", "restoreSavedSteering", "steeringUnsaved",
+    savedSteeringJson !== null && steeringJson(true) !== savedSteeringJson);
+}
+
+// Restore = back to what's saved on the controller (not the defaults): every
+// change since the last save goes - typed, long-pressed or dragged.
+async function restoreSavedTune() {
+  const data = await fetchJson("/api/settings");
+  if (!data || !Array.isArray(data.lockArray)) {
+    showNotification("Couldn't reach the controller", "error");
+    return;
   }
+  applyTuneFromSettings(data);
+  renderMapGrid();
+  showNotification("Tune restored from the controller");
+}
+
+async function restoreSavedSteering() {
+  const data = await fetchJson("/api/settings");
+  if (!data || !Array.isArray(data.steeringLockScaleArray)) {
+    showNotification("Couldn't reach the controller", "error");
+    return;
+  }
+  applySteeringFromSettings(data);
+  renderSteeringTable(); // table, override boxes and the curve
+  showNotification("Steering scale restored from the controller");
+}
+
+// Redraw every grid cell and axis header from the current state.
+function renderMapGrid() {
+  document.querySelectorAll("#mapGrid .map-cellHeader").forEach((header) => {
+    if (header.getAttribute("lock") !== "false") return; // the corner marker
+    if (header.getAttribute("throttle") === "100") header.textContent = String(speedHeader[Number(header.getAttribute("speed"))]);
+    else header.textContent = String(throttleHeader[Number(header.getAttribute("throttle"))]);
+  });
+  document.querySelectorAll("#mapGrid .map-cell").forEach((cell) =>
+    paintLockCell(cell, Number(cell.getAttribute("throttle")), Number(cell.getAttribute("speed"))));
   drawTuneChart();
+  updateUnsaved();
+}
+
+// A lock cell: its number and colour, or (PT) a dark shade of that colour with
+// "PT" and the kept number faded underneath.
+function paintLockCell(cell, throttle, speed) {
+  const value = currentLock[throttle][speed];
+  updateCellColor(cell, value);
+  const pt = !!currentPT[throttle][speed];
+  cell.classList.toggle("pt", pt);
+  if (pt) cell.innerHTML = `<span class="pt-label">PT</span><span class="pt-kept">${value}</span>`;
+  else cell.textContent = String(value);
+}
+
+function togglePT(throttle, speed) {
+  currentPT[throttle][speed] = currentPT[throttle][speed] ? 0 : 1;
+  const cell = document.querySelector(`#mapGrid .map-cell[throttle="${throttle}"][speed="${speed}"]`);
+  if (cell) paintLockCell(cell, throttle, speed);
+  buzz();
+  drawTuneChart();
+  updateUnsaved();
+}
+
+function buzz() {
+  try { if (navigator.vibrate) navigator.vibrate(30); } catch (e) { /* not supported */ }
+}
+
+// Tap / long press on one element. Moving more than 10 px before the hold
+// completes is a scroll: nothing happens. The cell darkens while held.
+function attachLongPress(el, holdMs, onTap, onLong) {
+  let timer = null;
+  let startX = 0;
+  let startY = 0;
+  let fired = false;
+  const stop = () => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    el.classList.remove("pressing");
+  };
+  el.addEventListener("pointerdown", (event) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    fired = false;
+    startX = event.clientX;
+    startY = event.clientY;
+    el.style.setProperty("--hold-ms", holdMs + "ms");
+    el.classList.add("pressing");
+    timer = setTimeout(() => {
+      timer = null;
+      el.classList.remove("pressing");
+      fired = true;
+      onLong();
+    }, holdMs);
+  });
+  el.addEventListener("pointermove", (event) => {
+    if (timer && Math.hypot(event.clientX - startX, event.clientY - startY) > 10) stop();
+  });
+  ["pointerup", "pointercancel", "pointerleave"].forEach((name) => el.addEventListener(name, stop));
+  el.addEventListener("contextmenu", (event) => event.preventDefault()); // Android: no menu / pointer cancel mid-hold
+  el.addEventListener("click", (event) => {
+    if (fired) { // the long press already acted: this click is its tail
+      fired = false;
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    onTap();
+  });
+}
+
+// The draw functions write their SVG into this child, so the touch overlay that
+// attachCurveDrag puts over the chart survives every redraw (a touch whose
+// target is removed from the page stops reaching our listeners).
+function chartLayer(host) {
+  let layer = host.querySelector(":scope > .chart-svg");
+  if (!layer) {
+    layer = document.createElement("div");
+    layer.className = "chart-svg";
+    host.prepend(layer);
+  }
+  return layer;
+}
+
+let dragBubble = null;
+function showDragBubble(x, y, text) {
+  if (!dragBubble) {
+    dragBubble = document.createElement("div");
+    dragBubble.className = "drag-bubble";
+    document.body.appendChild(dragBubble);
+  }
+  dragBubble.textContent = text;
+  dragBubble.style.left = x + "px";
+  dragBubble.style.top = y + "px";
+  dragBubble.hidden = false;
+}
+function hideDragBubble() { if (dragBubble) dragBubble.hidden = true; }
+
+// Hold a point on a chart, slide up / down to change it, release to set it.
+// Sliding off the chart cancels (the point snaps back). Until the hold completes
+// a touch is left alone, so an up / down swipe over the chart scrolls the page;
+// once it has, touchmove is cancelled so the page stays put while you drag.
+// opts:
+//   pick(x, y, radius) -> node {value, locked} or null  (SVG units)
+//   unitsPerPct(node)  -> SVG units the finger moves for 1 %
+//   show(node, value, active) -> put value in the model and redraw
+//   done(node)         -> after a release that set a value (table, unsaved)
+//   label(node, from, to) -> bubble text
+//   lockedText(node)   -> message for a point that can't be dragged
+function attachCurveDrag(host, opts) {
+  host.classList.add("chart-drag");
+  const overlay = document.createElement("div");
+  overlay.className = "chart-touch";
+  overlay.addEventListener("contextmenu", (event) => event.preventDefault()); // a long hold is ours, not the browser's
+  host.appendChild(overlay);
+
+  let grab = null; // { node, x, y, lx, ly, k, timer, armed, cancelled, from, value }
+  let frame = 0;
+  let lastTouchMs = 0;
+
+  // Full screen on a phone held upright, or with rotation locked: the chart is
+  // turned 90° by CSS (chart-rotated) so it still gets the long side of the
+  // screen. Touches arrive in screen coordinates, so everything below works in
+  // the chart's own ("local") frame: its top-left corner, its x across, its y down.
+  const rotated = () => host.classList.contains("chart-rotated");
+  const toLocal = (x, y) => (rotated() ? { x: y, y: window.innerWidth - x } : { x, y });
+  const rectToLocal = (r) => (rotated()
+    ? { left: r.top, top: window.innerWidth - r.right, width: r.height, height: r.width }
+    : { left: r.left, top: r.top, width: r.width, height: r.height });
+
+  // Where the drawing really is on screen. Full screen letterboxes it (the SVG
+  // keeps its shape, centred), so work from the viewBox, not the element box.
+  // A pinch zoom scales the layer, which the rect already includes.
+  const svgBox = () => {
+    const svg = host.querySelector("svg");
+    if (!svg) return null;
+    const rect = rectToLocal(svg.getBoundingClientRect());
+    const vb = svg.viewBox && svg.viewBox.baseVal;
+    const vbW = vb && vb.width ? vb.width : rect.width;
+    const vbH = vb && vb.height ? vb.height : rect.height;
+    const scale = Math.min(rect.width / vbW, rect.height / vbH) || 1; // screen px per SVG unit
+    const left = rect.left + (rect.width - vbW * scale) / 2;
+    const top = rect.top + (rect.height - vbH * scale) / 2;
+    return { left, top, right: left + vbW * scale, bottom: top + vbH * scale, k: 1 / scale }; // k = SVG units per px
+  };
+  const offChart = (x, y) => { // local coordinates
+    const box = svgBox();
+    if (!box) return true;
+    const margin = 10;
+    // zoomed in, the drawing runs past the screen: the screen edge is the limit
+    const vis = rectToLocal(host.getBoundingClientRect());
+    const left = Math.max(box.left, vis.left), right = Math.min(box.right, vis.left + vis.width);
+    const top = Math.max(box.top, vis.top), bottom = Math.min(box.bottom, vis.top + vis.height);
+    return x < left - margin || x > right + margin || y < top - margin || y > bottom + margin;
+  };
+
+  // Full screen (V11.00.12, V11.00.14 rotate + zoom): a bigger chart = finer
+  // steps and easier picking. On a phone it asks the browser for real full
+  // screen locked sideways (Android); where that isn't possible (iPhone, rotation
+  // lock) and the screen is still upright, the chart is drawn turned 90° - turn
+  // the phone to the left to read it. Two fingers pinch / pan; one finger on
+  // empty space pans once zoomed. Same hold / slide / release on the points.
+  const isPhone = () => window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+  const expanded = () => host.classList.contains("chart-expanded");
+  const expandBtn = document.createElement("button");
+  expandBtn.type = "button";
+  expandBtn.className = "chart-expand";
+  host.appendChild(expandBtn);
+
+  let view = { z: 1, tx: 0, ty: 0 }; // pinch zoom of the drawing (full screen only)
+  let gesture = null;                  // { d0, m0, z0, cx, cy } while pinching / panning
+  const ZOOM_MAX = 4;
+  const applyView = () => {
+    const layer = host.querySelector(":scope > .chart-svg");
+    if (!layer) return;
+    layer.style.transform = view.z === 1 ? "" : `translate(${view.tx}px, ${view.ty}px) scale(${view.z})`;
+  };
+  const resetView = () => { view = { z: 1, tx: 0, ty: 0 }; gesture = null; applyView(); };
+
+  const layout = () => {
+    const rot = expanded() && isPhone() && window.innerHeight > window.innerWidth;
+    host.classList.toggle("chart-rotated", rot);
+    document.body.classList.toggle("chart-rotated", rot);
+    host.style.width = rot ? window.innerHeight + "px" : "";
+    host.style.height = rot ? window.innerWidth + "px" : "";
+    host.style.left = rot ? window.innerWidth + "px" : "";
+    resetView();
+  };
+
+  let openedFs = false; // this chart asked for browser full screen
+  const enterFullscreen = async () => {
+    const el = document.documentElement;
+    const req = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (!isPhone() || !req || document.fullscreenElement || document.webkitFullscreenElement) return;
+    try {
+      await req.call(el, { navigationUI: "hide" }); // must start inside the tap
+      openedFs = true;
+    } catch (e) { return; } // not allowed: the CSS rotation still applies
+    try {
+      if (screen.orientation && screen.orientation.lock) await screen.orientation.lock("landscape");
+    } catch (e) { /* no lock here: rotated by CSS while upright */ }
+    layout();
+  };
+  const leaveFullscreen = () => {
+    try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch (e) { /* none */ }
+    if (!openedFs) return;
+    openedFs = false;
+    const exit = document.exitFullscreen || document.webkitExitFullscreen;
+    if (exit && (document.fullscreenElement || document.webkitFullscreenElement)) {
+      try { const p = exit.call(document); if (p && p.catch) p.catch(() => {}); } catch (e) { /* already out */ }
+    }
+  };
+
+  const setExpanded = (on) => {
+    host.classList.toggle("chart-expanded", on);
+    document.body.classList.toggle("chart-open", on);
+    expandBtn.textContent = on ? "✕" : "⤢";
+    expandBtn.setAttribute("aria-label", on ? "Close full screen" : "Full screen");
+    if (!on) leaveFullscreen();
+    layout();
+  };
+  setExpanded(false);
+  expandBtn.addEventListener("click", () => {
+    const on = !expanded();
+    setExpanded(on);
+    if (on) enterFullscreen();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && expanded()) setExpanded(false);
+  });
+  // Android back / swipe out of browser full screen: close the chart too
+  ["fullscreenchange", "webkitfullscreenchange"].forEach((name) => document.addEventListener(name, () => {
+    if (!document.fullscreenElement && !document.webkitFullscreenElement && openedFs) {
+      openedFs = false;
+      if (expanded()) setExpanded(false);
+    } else if (expanded()) layout();
+  }));
+  window.addEventListener("resize", () => { if (expanded()) layout(); });
+  window.addEventListener("orientationchange", () => { if (expanded()) setTimeout(layout, 250); });
+
+  // Pinch / pan: keep the drawing point that was under the fingers under them.
+  // Local coordinates; the layer's own top-left (inside the padding) is its origin.
+  const layerOrigin = () => {
+    const layer = host.querySelector(":scope > .chart-svg");
+    return layer ? { x: layer.offsetLeft, y: layer.offsetTop, w: layer.offsetWidth, h: layer.offsetHeight } : null;
+  };
+  const touchesLocal = (touches) => Array.from(touches).slice(0, 2).map((t) => toLocal(t.clientX, t.clientY));
+  const gestureStart = (pts) => {
+    const o = layerOrigin();
+    if (!o) return;
+    const m = pts.length > 1 ? { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 } : pts[0];
+    const d0 = pts.length > 1 ? Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) : 0;
+    gesture = {
+      d0, z0: view.z,
+      cx: (m.x - o.x - view.tx) / view.z, // drawing point under the fingers (unzoomed px)
+      cy: (m.y - o.y - view.ty) / view.z,
+    };
+  };
+  const gestureMove = (pts) => {
+    const o = layerOrigin();
+    if (!gesture || !o) return;
+    const m = pts.length > 1 ? { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 } : pts[0];
+    let z = gesture.z0;
+    if (gesture.d0 > 20 && pts.length > 1) z = gesture.z0 * Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) / gesture.d0;
+    z = Math.max(1, Math.min(ZOOM_MAX, z));
+    // never pull the drawing's edge inside the screen
+    const tx = Math.min(0, Math.max(o.w * (1 - z), m.x - o.x - z * gesture.cx));
+    const ty = Math.min(0, Math.max(o.h * (1 - z), m.y - o.y - z * gesture.cy));
+    view = { z, tx: z === 1 ? 0 : tx, ty: z === 1 ? 0 : ty };
+    applyView();
+  };
+  const redraw = () => {
+    if (frame) return;
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      if (grab && grab.armed && !grab.cancelled) opts.show(grab.node, grab.value, true);
+    });
+  };
+
+  const arm = () => {
+    if (!grab) return;
+    grab.timer = null;
+    if (grab.node.locked) {
+      showNotification(opts.lockedText(grab.node));
+      grab = null;
+      return;
+    }
+    grab.armed = true;
+    buzz();
+    opts.show(grab.node, grab.value, true);
+    showDragBubble(grab.x, grab.y, opts.label(grab.node, grab.from, grab.value));
+  };
+  // x, y = screen coordinates (the bubble goes there); the maths is local
+  const start = (x, y) => {
+    const box = svgBox();
+    if (!box) return false;
+    const p = toLocal(x, y);
+    const node = opts.pick((p.x - box.left) * box.k, (p.y - box.top) * box.k, 22 * box.k);
+    if (!node) return false; // not on a point: an ordinary touch
+    grab = { node, x, y, lx: p.x, ly: p.y, k: box.k, armed: false, cancelled: false, from: node.value, value: node.value };
+    grab.timer = setTimeout(arm, CHART_HOLD_MS);
+    return true;
+  };
+  // true = this move belongs to a drag (the page must not scroll)
+  const move = (x, y) => {
+    if (!grab) return false;
+    if (!grab.armed) {
+      if (Math.hypot(x - grab.x, y - grab.y) > 10) { // moved before the hold: a scroll
+        clearTimeout(grab.timer);
+        grab = null;
+      }
+      return false;
+    }
+    if (grab.cancelled) return true;
+    const p = toLocal(x, y);
+    if (offChart(p.x, p.y)) {
+      grab.cancelled = true;
+      opts.show(grab.node, grab.from, false); // snap back
+      showDragBubble(x, y, "Cancelled");
+      buzz();
+      return true;
+    }
+    const value = Math.max(0, Math.min(100, Math.round(grab.from + ((grab.ly - p.y) * grab.k) / opts.unitsPerPct(grab.node))));
+    if (value !== grab.value) {
+      grab.value = value;
+      redraw();
+    }
+    showDragBubble(x, y, opts.label(grab.node, grab.from, grab.value));
+    return true;
+  };
+  const end = (keep) => {
+    if (!grab) return;
+    if (grab.timer) clearTimeout(grab.timer);
+    const ended = grab;
+    grab = null;
+    if (frame) { cancelAnimationFrame(frame); frame = 0; }
+    if (!ended.armed) return;
+    if (ended.cancelled || !keep) {
+      opts.show(ended.node, ended.from, false);
+      setTimeout(hideDragBubble, ended.cancelled ? 600 : 0);
+      return;
+    }
+    hideDragBubble();
+    opts.show(ended.node, ended.value, false);
+    opts.done(ended.node);
+  };
+
+  overlay.addEventListener("touchstart", (event) => {
+    lastTouchMs = Date.now();
+    if (event.touches.length !== 1) { // a second finger: pinch / scroll, not a drag
+      end(false);
+      if (expanded()) gestureStart(touchesLocal(event.touches));
+      return;
+    }
+    gesture = null;
+    const t = event.touches[0];
+    if (!start(t.clientX, t.clientY) && expanded() && view.z > 1) gestureStart(touchesLocal(event.touches)); // pan
+  }, { passive: true });
+  overlay.addEventListener("touchmove", (event) => {
+    if (gesture) {
+      gestureMove(touchesLocal(event.touches));
+      if (event.cancelable) event.preventDefault();
+      return;
+    }
+    const touch = event.touches[0];
+    const hadGrab = !!grab;
+    if (move(touch.clientX, touch.clientY) && event.cancelable) event.preventDefault();
+    // zoomed in: a swipe that began on a point (before the hold) pans instead
+    if (hadGrab && !grab && expanded() && view.z > 1) gestureStart(touchesLocal(event.touches));
+  }, { passive: false });
+  overlay.addEventListener("touchend", (event) => {
+    lastTouchMs = Date.now();
+    if (gesture) { // one of two fingers lifted: carry on panning with the other
+      gesture = null;
+      if (event.touches.length === 1 && view.z > 1) gestureStart(touchesLocal(event.touches));
+      return;
+    }
+    end(true);
+  });
+  overlay.addEventListener("touchcancel", () => { lastTouchMs = Date.now(); gesture = null; end(false); });
+
+  // Mouse (desktop): same hold, then drag. Phones also send mouse events after a
+  // touch - ignore those.
+  overlay.addEventListener("mousedown", (event) => {
+    if (event.button !== 0 || grab || Date.now() - lastTouchMs < 800) return;
+    if (start(event.clientX, event.clientY)) event.preventDefault();
+  });
+  window.addEventListener("mousemove", (event) => { if (grab && Date.now() - lastTouchMs >= 800) move(event.clientX, event.clientY); });
+  window.addEventListener("mouseup", () => { if (Date.now() - lastTouchMs >= 800) end(true); });
+}
+
+// Lock Map Surface: hold a grid point, slide up / down.
+let tuneNodes = [];      // screen positions from the last drawTuneChart()
+let tuneDragNode = null; // { r, c } while dragging - drawn bigger
+
+function initTuneChartDrag() {
+  const host = document.getElementById("tuneChart");
+  if (!host) return;
+  attachCurveDrag(host, {
+    pick: (x, y, radius) => {
+      let best = null;
+      tuneNodes.forEach((n) => {
+        const d = Math.hypot(n.x - x, n.y - y);
+        if (d > radius) return;
+        // closest wins; where two overlap (within 3 units) the one nearer the viewer wins
+        if (!best || d < best.d - 3 || (Math.abs(d - best.d) <= 3 && n.depth < best.n.depth)) best = { n, d };
+      });
+      if (!best) return null;
+      const { r, c } = best.n;
+      return { r, c, value: currentLock[r][c], locked: !!currentPT[r][c] };
+    },
+    unitsPerPct: (node) => {
+      const units = (tuneProject(node.c, node.r, 0).y - tuneProject(node.c, node.r, 100).y) / 100;
+      return units > 0.05 ? units : 0.05;
+    },
+    show: (node, value, active) => {
+      currentLock[node.r][node.c] = value;
+      tuneDragNode = active ? node : null;
+      drawTuneChart();
+    },
+    done: (node) => {
+      const cell = document.querySelector(`#mapGrid .map-cell[throttle="${node.r}"][speed="${node.c}"]`);
+      if (cell) paintLockCell(cell, node.r, node.c);
+      updateUnsaved();
+    },
+    label: (node, from, to) => `${throttleHeader[node.r]}% / ${speedHeader[node.c]} km/h: ${from} → ${to}%`,
+    lockedText: () => "PT cell - long-press it in the table to bring back its number",
+  });
+}
+
+// Steering-angle lock scale curve: the five points evenly spaced across (each
+// labelled with its angle), lock % up. The firmware blends in a straight line
+// between neighbouring points, so straight lines here are exact - and the small
+// angles, where most points sit, don't bunch up.
+let steerNodes = [];
+let steerDragIdx = -1;
+let steerPlotH = 128;
+
+function drawSteerChart() {
+  const host = document.getElementById("steerChart");
+  if (!host) return;
+  const c = themeColors();
+  const W = 340, H = 170, mL = 34, mR = 14, mT = 14, mB = 28;
+  const plotW = W - mL - mR, plotH = H - mT - mB;
+  steerPlotH = plotH;
+  const lastIdx = Math.max(1, steeringHeader.length - 1);
+  const xOf = (i) => mL + (i / lastIdx) * plotW;
+  const yOf = (pct) => mT + (1 - Math.max(0, Math.min(100, pct)) / 100) * plotH;
+
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Steering-angle lock scale curve">`;
+  [0, 50, 100].forEach((pct) => {
+    const y = yOf(pct).toFixed(1);
+    svg += `<line x1="${mL}" y1="${y}" x2="${W - mR}" y2="${y}" stroke="${c.line}" stroke-width="1"/>`;
+    svg += `<text x="${mL - 6}" y="${(yOf(pct) + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="${c.muted}">${pct}%</text>`;
+  });
+
+  const pts = steeringScale.map((pct, i) => `${xOf(i).toFixed(1)},${yOf(pct).toFixed(1)}`);
+  if (pts.length) {
+    const floorY = yOf(0).toFixed(1);
+    svg += `<polygon points="${xOf(0).toFixed(1)},${floorY} ${pts.join(" ")} ${xOf(pts.length - 1).toFixed(1)},${floorY}" fill="${c.accent}" fill-opacity="0.10"/>`;
+    svg += `<polyline points="${pts.join(" ")}" fill="none" stroke="${c.accent}" stroke-width="2" stroke-linejoin="round"/>`;
+  }
+
+  steerNodes = [];
+  steeringHeader.forEach((angle, i) => {
+    const x = xOf(i);
+    const y = yOf(steeringScale[i]);
+    steerNodes.push({ i, x, y });
+    const active = i === steerDragIdx;
+    svg += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${active ? 7 : 4.5}" fill="${active ? c.accent : c.panel}" stroke="${c.accent}" stroke-width="2"/>`;
+    svg += `<text x="${x.toFixed(1)}" y="${H - 10}" text-anchor="middle" font-size="9" fill="${c.muted}">${angle}°</text>`;
+    if (active) svg += `<text x="${x.toFixed(1)}" y="${(y - 12).toFixed(1)}" text-anchor="middle" font-size="11" font-weight="700" fill="${c.text}">${steeringScale[i]}%</text>`;
+  });
+  svg += `</svg>`;
+  chartLayer(host).innerHTML = svg;
+}
+
+function initSteerChartDrag() {
+  const host = document.getElementById("steerChart");
+  if (!host) return;
+  drawSteerChart();
+  attachCurveDrag(host, {
+    pick: (x, y, radius) => {
+      let best = null;
+      steerNodes.forEach((n) => {
+        const d = Math.hypot(n.x - x, n.y - y);
+        if (d <= radius && (!best || d < best.d)) best = { n, d };
+      });
+      return best ? { i: best.n.i, value: steeringScale[best.n.i], locked: false } : null;
+    },
+    unitsPerPct: () => steerPlotH / 100,
+    show: (node, value, active) => {
+      steeringScale[node.i] = value;
+      steerDragIdx = active ? node.i : -1;
+      const input = document.querySelector(`.steering-scale-input[data-idx="${node.i}"]`);
+      if (input) input.value = value; // the table follows the curve
+      drawSteerChart();
+    },
+    done: () => updateUnsaved(),
+    label: (node, from, to) => `${steeringHeader[node.i]}°: ${from} → ${to}%`,
+    lockedText: () => "",
+  });
 }
 
 // initialise Learn Haldex UI
@@ -1913,7 +2891,8 @@ function initLearn() {
     if (!data.active) {
       stopPolling();
       if (data.progress === 102) {
-        statusText.textContent = "No Haldex CAN data recorded - check connection";
+        // V11.00.5: CAN was fine (the tick) - the clutch just never engaged during the sweep
+        statusText.textContent = "Learn finished, but the Haldex never reported any engagement - check it locks in 50:50 (no fault / limp, no missing frames), then run Learn again";
         statusText.style.color = "var(--danger)";
       } else if (data.tableValid) {
         statusText.textContent = "Learn complete \u2713 - calibration table active";
@@ -1972,25 +2951,62 @@ function initLearn() {
 // ---- Long Learn (Settings > Long Learn) -----------------------------------
 // Drives /api/longlearn/*: polls status while a run is active, renders the
 // tracker + per-block verdicts, keeps the chassis notes on the unit, and
-// exports a plain-text report of the car, calibration, block set and sweeps.
-const LL_PHASE_NAMES = ["Idle", "Reference (all blocks on)", "BPK Adjust (hunting)",
-                        "Testing blocks (one off, point reads)", "Confirmation sweep", "Complete", "Cancelled", "Failed"];
-const LL_RESULT = { 0: ["untested", ""], 1: ["core", "core"], 2: ["needed", "needed"],
-                    3: ["no effect", "removed"], 4: ["affects (higher without)", "harmful"] };
-const LL_SWEEP_KIND = ["reference", "reference points", "block", "final", "bpk"];
-const LL_FAIL = ["", "no Haldex data with all blocks on",
-                 "all blocks on is not a smooth 100% - fix that first, nothing to compare blocks against",
-                 "the two all-on point reads disagree too much (noisy) to judge blocks"];
-// Block-off sweep for a bit -> " (dev N%)" suffix, or "" if not tested yet.
-function llDev(data, bit) {
+// exports a plain-text report. V11.00.7: "ours" = our whole standalone frame,
+// "the car's" = the car's own frame passed through (or none if it doesn't send it).
+const LL_PHASE_NAMES = ["Idle", "All ours (the bench bus)", "All ours - retry (0CQ: Fix Hunting / torque ceiling)", "Swapping blocks to the car's frame",
+                        "Confirmation sweep", "Complete", "Cancelled", "Failed", "Unknown car IDs"];
+const LL_SWEEP_KIND = ["all ours", "all ours (quick read)", "block", "confirmation", "all ours (retry)", "unknown IDs"];
+const LL_FAIL = ["", "no Haldex feedback with every frame ours",
+                 "with every frame ours (the bench bus) the unit did not reach a smooth full lock, even on the retry - so it isn't a missing frame: check the unit, wiring and hydraulics",
+                 "the all-ours held read at 100 % was below full lock - not stable enough to judge the swaps",
+                 "the car moved - Long Learn only runs with the car stopped"];
+const LL_UNLISTED = ["not reached", "none seen", "no effect", "found", "together only"];
+const LLST = { BRAKE_CAN: 1, HANDBRAKE_CAN: 2, ABS_CAN: 4, BRAKE_WIRE: 8, HANDBRAKE_WIRE: 16, CHASSIS: 128 };
+
+// The 100 % read of the swap test for a block (or null)
+function llSwapRead(data, bit) {
   const sw = (data.sweeps || []).find((x) => x.kind === 2 && x.bit === bit);
-  return sw ? ` (dev ${sw.dev}%)` : "";
+  return sw && Array.isArray(sw.pts) ? sw.pts[sw.pts.length - 1] : null;
+}
+
+// [text, css class] for a block
+function llVerdict(data, b) {
+  const read = llSwapRead(data, b.bit);
+  const at = read === null ? "" : ` (${read}% with the car's)`;
+  switch (b.result) {
+    case 1: return ["core - ours", "core"];
+    case 2: return [b.carSent === false ? `KEEP OURS - car doesn't send it${at}` : `KEEP OURS - car's frame cuts the lock${at}`, "needed"];
+    case 3: return [b.carSent === false ? "car doesn't send it - not needed, off" : `car's frame OK${at}`, "removed"];
+    default: return [b.core ? "core" : (data.phase === 0 ? (b.enabled ? "ours" : "car's") : "queued"), b.core ? "core" : ""];
+  }
+}
+
+function llStateText(st) {
+  if (!st) return "--";
+  if (!(st.flags & LLST.CHASSIS)) return "no car CAN (bench)";
+  const on = [];
+  if (st.flags & LLST.BRAKE_CAN) on.push("brake");
+  if (st.flags & LLST.HANDBRAKE_CAN) on.push("handbrake");
+  if (st.flags & LLST.ABS_CAN) on.push("ABS braking");
+  if (st.flags & LLST.BRAKE_WIRE) on.push("brake (wire)");
+  if (st.flags & LLST.HANDBRAKE_WIRE) on.push("handbrake (wire)");
+  return `${on.length ? on.join(", ") + " ON" : "brake / handbrake off"} · ${st.speed} km/h · ${st.rpm} rpm`;
+}
+
+function llUnlistedText(data) {
+  const r = data.unlistedResult || 0, n = data.unlistedSeen || 0;
+  const more = data.unlistedOverflow ? "+" : "";
+  if (r === 0) return "--";
+  if (r === 1) return "none seen";
+  if (r === 2) return `${n}${more} seen - all through together: still full lock, nothing missing`;
+  if (r === 3) return `${(data.unlistedHits || []).map((h) => h.id).join(", ")} cut the lock - held back from the Haldex`;
+  return `${n}${more} seen - together they cut the lock, but no single one does (not narrowed down)`;
 }
 
 function llScoreText(sc) {
   if (!sc) return "--";
-  const eng = sc.engageCF > 100 ? "never engaged" : `engage @CF${sc.engageCF} \u2192 ${sc.engageJump}%`;
-  return `${sc.smooth ? "smooth" : "NOT smooth"} \u00b7 reach ${sc.reach}% \u00b7 max step ${sc.maxStep}% \u00b7 ${eng} \u00b7 score ${sc.score}`;
+  const eng = sc.engageCF > 100 ? "never engaged" : `engage @CF${sc.engageCF} → ${sc.engageJump}%`;
+  return `${sc.smooth ? "smooth" : "NOT smooth"} · reach ${sc.reach}% · max step ${sc.maxStep}% · ${eng}`;
 }
 
 function llFmtElapsed(sec) {
@@ -2008,20 +3024,19 @@ function initLongLearn() {
   const results      = document.getElementById("longLearnResults");
   const btnStart     = document.getElementById("longLearnStart");
   const btnCancel    = document.getElementById("longLearnCancel");
+  const btnClearHeld = document.getElementById("longLearnClearHeld");
   const btnExport    = document.getElementById("longLearnExport");
   const testAll      = document.getElementById("longLearnTestAll");
   const notes        = document.getElementById("longLearnNotes");
   if (!statusText || !btnStart) return;
 
   let pollTimer = null;
-  let lastStatus = null; // last /api/longlearn/status payload (used by export)
 
   function setText(id, v) { const e = document.getElementById(id); if (e) e.textContent = v; }
 
   function renderBlocks(data) {
     if (!results) return;
     const blocks = Array.isArray(data.blocks) ? data.blocks : [];
-    if (blocks.length === 0) { results.innerHTML = ""; return; }
     results.innerHTML = "";
     blocks.forEach((b) => {
       const row = document.createElement("div");
@@ -2030,13 +3045,8 @@ function initLongLearn() {
       name.className = "ll-block-name" + (b.enabled ? "" : " off");
       name.textContent = b.name;
       const tag = document.createElement("span");
-      let cls = "", txt = "";
-      if (data.active && data.currentBit === b.bit) { cls = "testing"; txt = "testing\u2026"; }
-      else {
-        const r = LL_RESULT[b.result] || LL_RESULT[0];
-        txt = r[0] + llDev(data, b.bit); cls = r[1];
-        if (b.result === 0) txt = b.core ? "core" : (data.phase === 0 ? (b.enabled ? "on" : "off") : "queued");
-      }
+      let [txt, cls] = llVerdict(data, b);
+      if (data.active && data.currentBit === b.bit) { cls = "testing"; txt = "car's frame now…"; }
       tag.className = "ll-tag " + cls;
       tag.textContent = txt;
       row.appendChild(name);
@@ -2046,40 +3056,40 @@ function initLongLearn() {
   }
 
   function render(data) {
-    lastStatus = data;
     const running = !!data.active;
+    const done = !running && data.phase >= 5 && data.phase !== 8;
     btnStart.style.display  = running ? "none" : "";
     btnCancel.style.display = running ? "" : "none";
+    if (btnClearHeld) btnClearHeld.style.display = !running && (data.heldBack || []).length ? "" : "none";
     if (testAll) testAll.disabled = running;
 
-    const showTracker = running || data.phase >= 5;
     progressWrap.style.display = running ? "" : "none";
-    tracker.style.display = showTracker ? "" : "none";
+    tracker.style.display = running || done ? "" : "none";
 
     const total = data.sweepTotal || 0, idx = data.sweepIdx || 0;
-    const pct = total ? Math.min(100, Math.round((idx / total) * 100)) : 0;
-    progressFill.style.width = pct + "%";
+    progressFill.style.width = (total ? Math.min(100, Math.round((idx / total) * 100)) : 0) + "%";
     progressLbl.textContent = `${idx}/${total}`;
 
     setText("llPhase", LL_PHASE_NAMES[data.phase] || "--");
-    setText("llSweep", total ? `${Math.min(idx + (running ? 1 : 0), total)} of ${total}` : "--");
+    setText("llSweep", total ? `${Math.min(idx + (running ? 1 : 0), total)} of ~${total}` : "--");
     let testing = "--";
     if (running && data.currentBit >= 0 && Array.isArray(data.blocks)) {
       const b = data.blocks.find((x) => x.bit === data.currentBit);
-      testing = b ? `without ${b.name}` : `bit ${data.currentBit}`;
-    } else if (running && data.phase === 1) {
-      testing = "all blocks on";
-    } else if (running && data.phase === 2) {
-      testing = `BPK packing / torque ceiling (${data.bpkNow} Nm)`;
+      testing = `${b ? b.name : "bit " + data.currentBit}: the car's frame`;
+    } else if (running && (data.phase === 1 || data.phase === 2)) {
+      testing = "every frame ours, every car ID held back";
+    } else if (running && data.phase === 8) {
+      testing = "letting the car's unknown IDs through";
     } else if (running && data.phase === 4) {
-      testing = "final block set";
+      testing = "final set";
     }
     setText("llTesting", testing);
+    setText("llBaseline", llScoreText(data.baseline));
     const isGen5 = data.generation === 50 || data.generation === 52;
-    setText("llFloor", isGen5 ? `${data.floorNow}%` + (data.phase >= 2 ? ` (was ${data.floorStart}%)` : "") : "n/a (Gen5 only)");
-    setText("llBpk", isGen5 ? `${data.bpkNow} Nm, Fix Hunting ${data.fixHunting ? "on" : "off"}` +
-      (data.bpkAdjusted ? ` (was ${data.bpkStart} Nm)` : "") : "n/a (Gen5 only)");
-    setText("llBaseline", llScoreText(data.baseline) + (data.phase >= 3 && data.phase !== 7 ? ` · noise ${data.noise}%, threshold ${data.tol}%` : ""));
+    setText("llFix", isGen5 ? `${data.fixHunting ? "on" : "off"}${data.fixHuntingSet ? " (turned on by the retry, kept)" : ""}, ceiling ${data.bpkNow} Nm` +
+      (data.bpkAdjusted ? ` (was ${data.bpkStart} Nm)` : "") : "n/a (0CQ only)");
+    setText("llCarState", llStateText(data.startState));
+    setText("llUnlisted", llUnlistedText(data));
     setText("llElapsed", llFmtElapsed(data.elapsedS));
 
     const cf = data.cf ?? 0, eng = data.eng ?? 0;
@@ -2090,25 +3100,23 @@ function initLongLearn() {
     setText("llEngValue", running ? eng + "%" : "--");
 
     if (running) {
-      statusText.textContent = `Long Learn running \u2014 ${LL_PHASE_NAMES[data.phase] || ""}`;
+      statusText.textContent = `Long Learn running — ${LL_PHASE_NAMES[data.phase] || ""}`;
       statusText.style.color = "var(--text-dim)";
     } else if (data.phase === 5) {
-      const f = data.final;
-      const kept = (data.blocks || []).filter((b) => b.enabled).length;
-      statusText.textContent = `Long Learn complete \u2713 \u2014 ${kept} of ${(data.blocks || []).length} blocks enabled, ` +
-        (isGen5 ? `PWM floor ${data.floorResult}%, ` : "") +
-        (isGen5 && data.bpkAdjusted ? `BPK kept: Fix Hunting ${data.fixHunting ? "on" : "off"}, ceiling ${data.bpkNow} Nm, ` : "") +
-        (data.interaction ? "the no-effect blocks changed the curve when off TOGETHER, so all were left on, " : "") +
-        `final: ${llScoreText(f)}`;
-      statusText.style.color = f && f.smooth && !data.interaction ? "var(--success)" : "var(--warning)";
+      const kept = (data.blocks || []).filter((b) => b.result === 2).map((b) => b.name);
+      const parts = [kept.length ? `kept ours: ${kept.join(", ")}` : "no extra block needed (every non-core block's car frame is fine)"];
+      if (data.unlistedResult === 3) parts.push(llUnlistedText(data));
+      if (data.interaction) parts.push("BUT the final set together did not reach full lock, so every block was left ours");
+      statusText.textContent = `Long Learn complete ✓ — ${parts.join("; ")}. Final: ${llScoreText(data.final)}`;
+      statusText.style.color = data.final && data.final.smooth && !data.interaction ? "var(--success)" : "var(--warning)";
     } else if (data.phase === 6) {
-      statusText.textContent = "Long Learn cancelled \u2014 previous blocks, floor, torque ceiling and learn table restored";
+      statusText.textContent = "Long Learn cancelled — previous blocks, Fix Hunting, torque ceiling, held-back IDs and learn table restored";
       statusText.style.color = "var(--warning)";
     } else if (data.phase === 7) {
-      statusText.textContent = `Long Learn stopped \u2014 ${LL_FAIL[data.failReason] || "sweep failed"}. Previous settings restored`;
+      statusText.textContent = `Long Learn stopped — ${LL_FAIL[data.failReason] || "read failed"}. Previous settings restored`;
       statusText.style.color = "var(--danger)";
     } else {
-      statusText.textContent = "Not run yet";
+      statusText.textContent = (data.heldBack || []).length ? `Not run yet — held back from the Haldex: ${data.heldBack.join(", ")}` : "Not run yet";
       statusText.style.color = "var(--text-dim)";
     }
     renderBlocks(data);
@@ -2122,11 +3130,8 @@ function initLongLearn() {
     if (!data.active && wasRunning) {
       clearInterval(pollTimer);
       pollTimer = null;
-      // The run changed the mask / floor / learn table - refresh dependents.
+      // The run changed the mask / Fix Hunting / learn table - refresh dependents.
       refreshFrameBlocks();
-      const esp14Range = document.getElementById("esp14MinFloorRange");
-      const esp14Val = document.getElementById("esp14MinFloorValue");
-      if (esp14Range) { esp14Range.value = data.floorNow; if (esp14Val) esp14Val.textContent = data.floorNow; }
       fetchJson("/api/learn/status").then((ls) => { if (ls && ls.tableValid) renderLearnChart(ls.table); });
     }
   }
@@ -2138,7 +3143,7 @@ function initLongLearn() {
   }
 
   btnStart.addEventListener("click", async () => {
-    statusText.textContent = "Starting Long Learn\u2026";
+    statusText.textContent = "Starting Long Learn…";
     statusText.style.color = "var(--text-dim)";
     const resp = await fetchJson("/api/longlearn/start", {
       method: "POST",
@@ -2155,9 +3160,17 @@ function initLongLearn() {
 
   btnCancel.addEventListener("click", async () => {
     await fetchJson("/api/longlearn/cancel", { method: "POST" });
-    statusText.textContent = "Cancelling\u2026";
+    statusText.textContent = "Cancelling…";
     statusText.style.color = "var(--warning)";
   });
+
+  if (btnClearHeld) {
+    btnClearHeld.addEventListener("click", async () => {
+      const resp = await fetchJson("/api/longlearn/clearheld", { method: "POST" });
+      if (resp && resp.ok) showNotification("Every car ID goes through to the Haldex again", "success");
+      poll();
+    });
+  }
 
   if (notes) {
     notes.addEventListener("change", () => saveSetting("longLearnNotes", notes.value.slice(0, 200)));
@@ -2170,7 +3183,7 @@ function initLongLearn() {
       ]);
       if (!settings || !ll) { showNotification("Could not read data for export", "error"); return; }
       const txt = buildLongLearnReport(settings, ll, learn, notes ? notes.value : "");
-      const gen = settings.haldexGeneration;
+      const gen = longLearnReportGen(settings, ll);
       const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
       const blob = new Blob([txt], { type: "text/plain" });
       const a = document.createElement("a");
@@ -2190,65 +3203,106 @@ function initLongLearn() {
   });
 }
 
-// Plain-text report: car notes, calibration, recommended block set (with a
-// ready-to-edit checklist + mask), the sweep log and the stored learn table.
+// Vehicle Geometry card (V11.00.14): the figures and which car this
+// generation's defaults are. Older firmware sent no vehicleDefaults.
+function showVehicleGeometry(data) {
+  [["slipWheelbaseMm", 2505], ["slipTrackFrontMm", 1572],
+    ["slipTrackRearMm", 1543], ["slipSteeringRatio", 15.0]].forEach(([id, def]) => {
+    const el = document.getElementById(id);
+    const v = data[id] !== undefined ? Number(data[id]) : def;
+    if (el) el.value = id === "slipSteeringRatio" ? Math.round(v * 10) / 10 : v; // a float 15.6 arrives as 15.6000003
+  });
+  const car = document.getElementById("vehicleDefaultsCar");
+  if (car) car.textContent = data.vehicleDefaults && data.vehicleDefaults.car ? data.vehicleDefaults.car : "Audi TT Mk3";
+  const btn = document.getElementById("vehicleDefaultsBtn");
+  if (btn) btn.hidden = !data.vehicleDefaults; // the firmware can't do it before V11.00.14
+}
+
+// The generation a Long Learn run used (0 = no run yet: the current one).
+function longLearnReportGen(settings, ll) {
+  return ll && ll.generation ? ll.generation : settings.haldexGeneration;
+}
+
+// Plain-text report: car notes, the car's state, all ours, every block's
+// verdict with the car's bytes vs ours, the unknown car IDs, the read log and
+// the stored learn table.
 function buildLongLearnReport(settings, ll, learn, notesText) {
-  const genSel = document.getElementById("haldexGeneration");
-  const genName = genSel && genSel.selectedOptions[0] ? genSel.selectedOptions[0].textContent : String(settings.haldexGeneration);
-  const isGen5 = settings.haldexGeneration === 50 || settings.haldexGeneration === 52;
+  // the generation the run used (the blocks below are that generation's), not
+  // whatever is selected now
+  const runGen = longLearnReportGen(settings, ll);
+  const genOpt = document.querySelector(`#haldexGeneration option[value="${runGen}"]`);
+  const genName = genOpt ? genOpt.textContent : String(runGen);
   const pad = (v, n) => String(v).padEnd(n);
+  const onOff = (v) => (v ? "on" : "off");
   const L = [];
   L.push("OpenHaldex-C6 Long Learn Report");
   L.push("=".repeat(60));
   L.push(`Firmware:   ${settings.FW_VERSION || "--"}`);
-  L.push(`Board:      rev ${settings.boardRev || "?"}`);
+  L.push(`Board:      V${settings.boardVersion || "1.0"}`);
   L.push(`Exported:   ${new Date().toISOString()}`);
-  L.push(`Generation: ${settings.haldexGeneration} (${genName})`);
-  L.push(`Mode:       ${settings.isStandalone ? "Standalone" : "Normal (passthrough)"}`);
+  L.push(`Generation: ${runGen} (${genName})` +
+    (runGen !== settings.haldexGeneration ? ` - now set to ${settings.haldexGeneration}` : ""));
+  L.push(`Run in:     ${ll.runStandalone ? "Standalone" : "Normal (car connected)"}`);
   L.push("");
   L.push("Chassis / car notes:");
   L.push("  " + ((notesText || "").trim() || "(none entered)").replace(/\n/g, "\n  "));
   L.push("");
-  L.push("Calibration:");
-  L.push(`  Fix Hunting (BPK packing): ${settings.fixHunting ? "on" : "off"}`);
-  L.push(`  Lock Calibration (BPK ceiling): ${settings.bpkCeilingNm} Nm`);
-  L.push(`  Launch PWM Floor: ${settings.esp14MinFloorPct} %` +
-         (ll.phase === 5 && isGen5 ? `  (Long Learn: ${ll.floorStart} % -> ${ll.floorResult} %)` : ""));
-  if (ll.phase === 5 && isGen5 && ll.bpkAdjusted) {
-    L.push(`  BPK set by Long Learn (kept): Fix Hunting ${ll.fixHunting ? "on" : "off"}, ceiling ${ll.bpkStart} Nm -> ${ll.bpkNow} Nm`);
-  }
+  L.push("The car when the run started:");
+  L.push(`  ${llStateText(ll.startState)}`);
+  L.push(`  Follow Brake ${onOff(ll.followBrake)}, Follow Handbrake ${onOff(ll.followHandbrake)}, Follow ABS ${onOff(ll.followABS)}`);
+  L.push(`  Fix Hunting ${onOff(ll.fixHunting)}${ll.fixHuntingSet ? " (turned on by the retry and kept)" : ""}, torque ceiling ${ll.bpkNow} Nm` +
+         (ll.bpkAdjusted ? ` (was ${ll.bpkStart} Nm - raised by the retry and kept)` : ""));
   L.push("");
   L.push(`Long Learn: ${LL_PHASE_NAMES[ll.phase] || "--"}` +
-         (ll.phase >= 5 ? `  (${ll.sweepIdx} sweeps, ${llFmtElapsed(ll.elapsedS)}, test-all ${ll.testAll ? "on" : "off"})` : ""));
-  if (ll.phase === 7) L.push(`  Stopped: ${LL_FAIL[ll.failReason] || "sweep failed"}`);
-  if (ll.baseline) L.push(`  Reference (all on): ${llScoreText(ll.baseline)}`);
-  if (ll.phase === 5) L.push(`  Reference noise ${ll.noise}%, block threshold ${ll.tol}% (worst of the points CF ${(ll.ptCF || []).join("/")})`);
-  if (ll.final)    L.push(`  Final (kept set):   ${llScoreText(ll.final)}`);
-  if (ll.interaction) L.push("  INTERACTION: the no-effect blocks changed the curve when off together - all left on");
+         (ll.phase >= 5 && ll.phase !== 8 ? `  (${ll.sweepIdx} reads, ${llFmtElapsed(ll.elapsedS)}, test core blocks ${onOff(ll.testAll)})` : ""));
+  if (ll.phase === 7) L.push(`  STOPPED: ${LL_FAIL[ll.failReason] || "read failed"}`);
+  if (ll.baseline) L.push(`  1. All ours (bench bus):  ${llScoreText(ll.baseline)}`);
+  if (Array.isArray(ll.refPts) && ll.refPts.some((v) => v > 0))
+    L.push(`  2. All ours, quick read: ${ll.refPts.map((v, k) => `@${(ll.ptCF || [])[k]} ${v}%`).join("  ")}`);
+  L.push(`  Full lock = ${ll.reachMin || 90} % or more at CF 100`);
   L.push("");
-  L.push(`Frame blocks (mask ${ll.mask || "--"}) - [x] = enabled. Edit and re-apply under Diagnostics > Frame Editing:`);
+  L.push(`3. Blocks - each swapped to the car's frame on its own (mask ${ll.mask || "--"}, [x] = ours now):`);
   (ll.blocks || []).forEach((b) => {
-    const r = LL_RESULT[b.result] || LL_RESULT[0];
-    const verdict = b.result === 0 ? (ll.phase === 0 ? "" : "untested") : r[0];
-    L.push(`  [${b.enabled ? "x" : " "}] ${pad(b.name, 22)} bit ${pad(b.bit, 3)} ${pad(b.core ? "core" : "static", 8)} ${verdict}${llDev(ll, b.bit)}`);
+    const [txt] = llVerdict(ll, b);
+    L.push(`  [${b.enabled ? "x" : " "}] ${pad(b.name, 30)} bit ${pad(b.bit, 3)} ${pad(b.core ? "core" : "", 5)} ${txt}`);
+    if (b.result === 2 || (b.result === 3 && b.carSent)) {
+      if (b.carSent) L.push(`        car's:  ${b.car || "--"}`);
+      L.push(`        ours:   ${b.ours || "--"}`);
+      if (b.state) L.push(`        car:    ${llStateText(b.state)}`);
+    }
   });
   L.push("");
+  L.push(`4. Car IDs we have no block for: ${llUnlistedText(ll)}`);
+  (ll.unlistedHits || []).forEach((h) => L.push(`  ${h.id}${h.car ? "  car's: " + h.car : ""}`));
+  if (Array.isArray(ll.unlistedIds) && ll.unlistedIds.length) L.push(`  seen: ${ll.unlistedIds.join(" ")}${ll.unlistedOverflow ? " (+ more)" : ""}`);
+  if (Array.isArray(ll.heldBack) && ll.heldBack.length) L.push(`  held back from the Haldex now: ${ll.heldBack.join(", ")}`);
+  L.push("");
+  if (ll.final) L.push(`5. Confirmation (final set): ${llScoreText(ll.final)}`);
+  if (ll.interaction) L.push("  INTERACTION: the final set together did not reach full lock - every block left ours, all-ours table stored");
+  L.push("");
   if (Array.isArray(ll.sweeps) && ll.sweeps.length) {
-    L.push("Sweep log:");
+    L.push("Read log:");
     ll.sweeps.forEach((sw, i) => {
       let what = LL_SWEEP_KIND[sw.kind] || "?";
       if (sw.kind === 2) {
         const b = (ll.blocks || []).find((x) => x.bit === sw.bit);
-        what = `without ${b ? b.name : "bit " + sw.bit}`;
-      } else if (sw.kind === 4) {
-        what = `bpk ${sw.bpk} Nm`;
+        what = `car's ${b ? b.name : "bit " + sw.bit}`;
+      } else if (sw.kind === 5) {
+        what = `${sw.bit} unknown ID${sw.bit === 1 ? "" : "s"} through`;
+      } else if (sw.kind === 4 && sw.bit === 254) {
+        what = `ceiling ${sw.bpk} Nm, held at 100 %`;
       }
-      const pts = Array.isArray(sw.pts) ? sw.pts : null; // point reads, not a curve
-      const verdict = sw.kind === 2 ? ((LL_RESULT[sw.verdict] || ["?"])[0]) : sw.kind === 1 ? "" : (sw.verdict ? "smooth" : "NOT smooth");
-      const dev = sw.kind === 2 || sw.kind === 3 ? ` dev ${pad(sw.dev, 3)} mean ${pad((sw.dMean > 0 ? "+" : "") + sw.dMean, 4)}` : "";
-      L.push(`  #${pad(i + 1, 3)} ${pad(what, 28)} ` + (pts ? pts.map((v, k) => `@${(ll.ptCF || [])[k]} ${pad(v, 4)}`).join("") :
-             `reach ${pad(sw.reach, 4)} step ${pad(sw.maxStep, 3)} engage@${pad(sw.engageCF > 100 ? "--" : sw.engageCF, 3)}->${pad(sw.engageJump, 3)} score ${pad(sw.score, 3)}`) +
-             `${dev}${verdict ? " => " + verdict : ""}`);
+      if (sw.fixHunting) what += ` [FH ${sw.bpk} Nm]`;
+      const pts = Array.isArray(sw.pts) ? sw.pts : null;
+      const body = pts
+        ? pts.map((v, k) => `@${(ll.ptCF || [])[k]} ${pad(v === 255 ? "--" : v, 4)}`).join("")
+        : `reach ${pad(sw.reach, 4)} step ${pad(sw.maxStep, 3)} engage@${pad(sw.engageCF > 100 ? "--" : sw.engageCF, 3)}->${pad(sw.engageJump, 3)}`;
+      let verdict = "";
+      if (sw.kind === 2) verdict = sw.verdict === 2 ? "KEEP OURS" : "car's OK";
+      else if (sw.kind === 5) verdict = sw.verdict ? "full lock" : "CUT";
+      else if (sw.kind === 4 && sw.bit === 254) verdict = sw.verdict ? "full lock" : "short";
+      else if (sw.kind !== 1) verdict = sw.verdict ? "smooth" : "NOT smooth";
+      L.push(`  #${pad(i + 1, 3)} ${pad(what, 34)} ${body}${verdict ? " => " + verdict : ""}`);
     });
     L.push("");
   }
@@ -2366,7 +3420,13 @@ function initBle() {
       return;
     }
     showNotification("Paired phones forgotten, new pairing code - the next phone pairs without it");
-    initStoredSettings(); // refresh the pairing line
+    // Refresh only the pairing line. V11.00.8: this called initStoredSettings(), which
+    // ends in initApp() and added every listener / timer a second time.
+    const d = await fetchJson("/api/settings");
+    if (d) {
+      blePasskeyCache = d.blePasskey;
+      renderBlePairing(d.bleCodeRequired);
+    }
   });
 }
 
@@ -3429,15 +4489,24 @@ function initBackupRestore() {
       fetchJson("/api/settings"), fetchJson("/api/wifi/ssid"), fetchJson("/api/wifi"), fetchJson("/api/wifi/sta"),
     ]);
     if (!settings) { setStatus("Export failed - couldn't reach the device", false); return; }
+    // V11.00.14: frame edits of every generation in both modes, held-back IDs,
+    // learn table. Older firmware has no /api/backup: the file then has only
+    // settings.frameBlocks (current generation), as before.
+    const extra = settings.backupLayout ? await fetchJson("/api/backup") : null;
+    if (settings.backupLayout && !extra) { setStatus("Export failed - couldn't read the frame edits / learn table", false); return; }
     const stamp = new Date().toISOString();
+    const saved = Object.assign({}, settings);
+    delete saved.blePasskey;      // the pairing code is a password: never in a file
+    delete saved.bleCodeRequired; // live state, not a setting
     const backup = {
       _product: "OpenHaldex-C6",
       _exportedAt: stamp,
       _fwVersion: settings.FW_VERSION,
-      settings: settings,
+      settings: saved,
       wifi: { ssid: ssidData ? ssidData.ssid : null, passwordSet: !!(pwData && pwData.passwordSet) },
       wifiSta: { ssid: staData && staData.ssid ? staData.ssid : null, passwordSet: !!(staData && staData.passwordSet) },
     };
+    if (extra) backup.extra = extra; // an older page ignores it and uses settings.frameBlocks
     const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -3446,7 +4515,7 @@ function initBackupRestore() {
     document.body.appendChild(a);
     a.click();
     a.remove();
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000); // iOS Safari reads it after the click returns
     setStatus("Exported ✓ " + stamp, true);
     showNotification("Config exported");
   });
@@ -3464,54 +4533,144 @@ function initBackupRestore() {
       setStatus("Not a valid backup file (bad JSON)", false); fileInput.value = ""; return;
     }
     const s = backup.settings || {};
+    const stopWith = (msg) => { setStatus(msg, false); fileInput.value = ""; };
+    if (backup._product && backup._product !== "OpenHaldex-C6") {
+      stopWith("This file is a " + backup._product + " backup, not OpenHaldex-C6"); return;
+    }
     if (!Array.isArray(s.throttleArray) || !Array.isArray(s.speedArray) || !Array.isArray(s.lockArray)) {
-      setStatus("Backup file is missing the tune table", false); fileInput.value = ""; return;
+      stopWith("Backup file is missing the tune table"); return;
     }
     if (!confirm("Restore settings from " + file.name + (backup._fwVersion ? " (exported from v" + backup._fwVersion + ")" : "") +
       "?\n\nThis replaces the Expert tune, steering scale, frame edits and settings on the controller.")) { fileInput.value = ""; return; }
 
-    // 1. Generation first, so the frame-edit mask below lands on the right table.
-    if (typeof s.haldexGeneration === "number") await post("/api/settings", { haldexGeneration: s.haldexGeneration });
+    // V11.00.14: every step is checked - a refused step stops the import and
+    // says why, instead of reporting "Restored" over a half-done restore.
+    const step = async (what, url, body) => {
+      const r = await post(url, body);
+      if (r && r.ok !== false) return true;
+      stopWith(what + " failed: " + (r && r.error ? r.error : "no answer from the controller") +
+        ". Nothing after this step was restored.");
+      return false;
+    };
 
-    // 2. Tune table (+ steering scale if the backup has it).
+    // What the controller has now: decides the generation order and which WiFi steps are needed.
+    const [cur, curSsid, curSta] = await Promise.all([
+      fetchJson("/api/settings"), fetchJson("/api/wifi/ssid"), fetchJson("/api/wifi/sta"),
+    ]);
+    if (!cur) { stopWith("Couldn't reach the controller"); return; }
+    const newGen = typeof s.haldexGeneration === "number" ? s.haldexGeneration : cur.haldexGeneration;
+    const genChanges = newGen !== cur.haldexGeneration;
+    // Into or out of Volvo P2 (Pre-Facelift) the CAN speed changes and the
+    // controller restarts 2 s later: that generation goes in LAST, and the
+    // frame edits (they belong to the new generation's table) need a second run.
+    const restartsForSpeed = genChanges && canSpeedForGeneration(newGen) !== canSpeedForGeneration(cur.haldexGeneration);
+
+    // 1. Generation first (no restart), so the frame-edit mask lands on the right table.
+    if (genChanges && !restartsForSpeed) {
+      setStatus("Setting the generation…", true);
+      if (!(await step("Setting the generation", "/api/settings", { haldexGeneration: newGen }))) return;
+      const check = await fetchJson("/api/settings");
+      if (!check || check.haldexGeneration !== newGen) {
+        stopWith("This firmware doesn't know generation " + newGen + " from the backup - update the firmware first"); return;
+      }
+    }
+
+    // 2. Tune table (+ steering scale if the backup has it). /api/tune checks it all before writing.
     setStatus("Restoring Expert tune…", true);
     const tune = { throttleArray: s.throttleArray, speedArray: s.speedArray, lockArray: s.lockArray };
+    if (Array.isArray(s.lockPT)) tune.lockPT = normalisePT(s.lockPT); // a backup from before V11.00.12 has none: keep the unit's PT cells
+
     if (Array.isArray(s.steeringArray) && Array.isArray(s.steeringLockScaleArray)) {
       tune.steeringArray = s.steeringArray;
       tune.steeringLockScaleArray = s.steeringLockScaleArray;
     }
-    const tuneResp = await post("/api/tune", tune);
-    if (!tuneResp || !tuneResp.ok) { setStatus("Failed to restore the tune table - is the device reachable?", false); fileInput.value = ""; return; }
+    // steering throttle override (backups from before V11.00.6 don't have it)
+    if (typeof s.steeringThrottleOverrideEnabled === "boolean") {
+      tune.steeringThrottleOverrideEnabled = s.steeringThrottleOverrideEnabled;
+    }
+    if (typeof s.steeringThrottleOverrideStart === "number" && typeof s.steeringThrottleOverrideFull === "number") {
+      tune.steeringThrottleOverrideStart = s.steeringThrottleOverrideStart;
+      tune.steeringThrottleOverrideFull = s.steeringThrottleOverrideFull;
+    }
+    if (!(await step("Restoring the Expert tune", "/api/tune", tune))) return;
 
-    // 3. General settings.
+    // 3. General settings (generation handled above / below).
     setStatus("Restoring settings…", true);
     const general = {};
-    BACKUP_GENERAL_KEYS.forEach((k) => { if (k in s) general[k] = s[k]; });
-    await post("/api/settings", general);
+    BACKUP_GENERAL_KEYS.forEach((k) => { if (k in s && k !== "haldexGeneration") general[k] = s[k]; });
+    if (!(await step("Restoring the settings", "/api/settings", general))) return;
 
-    // 4. Frame edits for this generation, one bit at a time (that's the API).
-    if (Array.isArray(s.frameBlocks)) {
+    // 4. Frame edits.
+    //  a) V11.00.14 file + firmware: every generation's masks in both modes, the
+    //     held-back IDs and the learn table in one request. They don't depend on
+    //     the selected generation, so this works before a CAN-speed restart too.
+    //  b) otherwise (an older file, or older firmware): the current generation,
+    //     one bit at a time, as before.
+    const extraOk = !!(backup.extra && cur.backupLayout);
+    let extraNote = "";
+    if (extraOk) {
+      setStatus("Restoring frame edits and the learn table…", true);
+      if (!(await step("Restoring frame edits / learn table", "/api/backup", backup.extra))) return;
+    } else if (backup.extra) {
+      extraNote = " This firmware can't take the other generations' frame edits, held-back IDs or learn table - update it and import again for those.";
+    }
+    const frameEditsLater = !extraOk && restartsForSpeed && Array.isArray(s.frameBlocks) && s.frameBlocks.length > 0;
+    if (!extraOk && Array.isArray(s.frameBlocks) && !restartsForSpeed) {
+      setStatus("Restoring frame edits…", true);
       for (const fb of s.frameBlocks) {
         if (typeof fb.bit === "number" && typeof fb.enabled === "boolean") {
-          await post("/api/settings", { frameEditBit: fb.bit, frameEditOn: fb.enabled });
+          if (!(await step("Restoring frame edit " + fb.bit, "/api/settings", { frameEditBit: fb.bit, frameEditOn: fb.enabled }))) return;
         }
       }
     }
 
-    // 5. WiFi identity (names only - passwords are never in the file).
+    // 5. WiFi names (passwords are never in the file), only where they differ:
+    // a changed name restarts the WiFi, and re-sending the home WiFi name with
+    // no password would wipe the password the unit already has.
+    // With a CAN-speed restart coming these wait for the second run as well.
     const wifi = backup.wifi || {};
-    if (wifi.ssid) await post("/api/wifi/ssid", { ssid: wifi.ssid });
     const wifiSta = backup.wifiSta || {};
-    if (wifiSta.ssid) await post("/api/wifi/sta", { ssid: wifiSta.ssid, password: "" });
+    const staChanges = !restartsForSpeed && !!wifiSta.ssid && !(curSta && curSta.ssid === wifiSta.ssid);
+    const apChanges = !restartsForSpeed && !!wifi.ssid && !(curSsid && curSsid.ssid === wifi.ssid);
+    if (staChanges) {
+      setStatus("Setting the home WiFi name…", true);
+      if (!(await step("Setting the home WiFi name", "/api/wifi/sta", { ssid: wifiSta.ssid, password: "" }))) return;
+      if (apChanges) { // the WiFi restarts now (same AP name, the phone rejoins): wait for it
+        setStatus("WiFi restarting - waiting for the controller…", true);
+        await new Promise((r) => setTimeout(r, 2500));
+        let back = false;
+        for (let i = 0; i < 10 && !back; i++) {
+          back = !!(await fetchJson("/api/wifi/ssid"));
+          if (!back) await new Promise((r) => setTimeout(r, 1500));
+        }
+        if (!back) { stopWith("Settings restored, but the controller didn't come back after the WiFi restart - set the WiFi name by hand"); return; }
+      }
+    }
+    // a new AP name drops this phone off the controller's WiFi: always the last step
+    if (apChanges) setStatus("Setting the WiFi name - rejoin the controller's WiFi under its new name…", true);
+    if (apChanges && !(await step("Setting the WiFi name", "/api/wifi/ssid", { ssid: wifi.ssid }))) return;
 
-    const needsApPw = !!(wifi.passwordSet && pwSection);
-    const needsStaPw = !!(wifiSta.passwordSet && staPwSection);
+    // 6. A CAN-speed generation change last: the controller restarts on it.
+    if (restartsForSpeed) {
+      // writeEEP saves every 2 s: let it run once so the steps above are in flash before the restart
+      setStatus("Saving before the restart…", true);
+      await new Promise((r) => setTimeout(r, 3000));
+      if (!(await step("Setting the generation", "/api/settings", { haldexGeneration: newGen }))) return;
+    }
+
+    const needsApPw = !!(apChanges && wifi.passwordSet && pwSection);
+    const needsStaPw = !!(staChanges && wifiSta.passwordSet && staPwSection);
     if (needsApPw) pwSection.style.display = "";
     if (needsStaPw) staPwSection.style.display = "";
+    const restartNote = restartsForSpeed
+      ? " The controller is restarting for the new CAN speed - once it's back, import the same file again to finish" +
+        (frameEditsLater ? " (frame edits and WiFi names)." : " (WiFi names).")
+      : "";
+    const doneNote = restartNote + extraNote;
     if (needsApPw || needsStaPw) {
-      setStatus("Tune + settings restored ✓. Enter the password(s) below to finish.", true);
+      setStatus("Tune + settings restored ✓. Enter the password(s) below to finish." + doneNote, true);
     } else {
-      setStatus("Restored ✓ - reload the page to see the new values.", true);
+      setStatus("Restored ✓ - reload the page to see the new values." + doneNote, true);
       showNotification("Config imported");
     }
     fileInput.value = "";
@@ -3603,6 +4762,11 @@ function themeColors() {
 // Catalogue of tiles that can render as a dial gauge: id -> range/unit. The id
 // matches the .gauge-value element the poll already writes, so the gauge reads
 // its value straight from that text and needs no extra plumbing.
+// Generations whose wheel speeds give per-corner slip: PQ Bremse_3 (V11.00.12) and MQB ESP_19
+// (46 Land Rover: wheel speeds only give road speed, no per-corner slip - not listed, V11.00.13)
+const SLIP_GENS = [1, 2, 4, 50, 51, 52];
+// "gens" = the generations that can fill that tile (V11.00.12); no list = every generation.
+const tileForGen = (t) => !t.gens || t.gens.includes(_haldexGeneration);
 const GAUGE_TILES = [
   { id: "speed",            label: "Speed",        min: 0, max: 260,  unit: "km/h" },
   { id: "throttle",         label: "Throttle",     min: 0, max: 100,  unit: "%" },
@@ -3613,16 +4777,19 @@ const GAUGE_TILES = [
   { id: "haldexEngagement", label: "Engagement",   min: 0, max: 100,  unit: "%" },
   { id: "clutch1Report",    label: "Clutch 1",     min: 0, max: 255,  unit: "" },
   { id: "clutch2Report",    label: "Clutch 2",     min: 0, max: 255,  unit: "" },
-  { id: "udsClutchTemp",    label: "Clutch Temp",  min: 0, max: 150,  unit: "\u00b0C" },
-  { id: "udsModuleTemp",    label: "Module Temp",  min: 0, max: 150,  unit: "\u00b0C" },
-  { id: "udsCoolingFinTemp",label: "Fin Temp",     min: 0, max: 150,  unit: "\u00b0C" },
-  { id: "udsClutchCurrent", label: "Clutch Cur.",  min: 0, max: 5,    unit: "A" },
-  { id: "udsClutchPWM",     label: "PWM",          min: 0, max: 100,  unit: "%" },
-  { id: "udsBlockagePct",   label: "Blockage",     min: 0, max: 100,  unit: "%" },
-  { id: "slipFL",           label: "Slip FL",      min: -50, max: 50, unit: "%" },
-  { id: "slipFR",           label: "Slip FR",      min: -50, max: 50, unit: "%" },
-  { id: "slipRL",           label: "Slip RL",      min: -50, max: 50, unit: "%" },
-  { id: "slipRR",           label: "Slip RR",      min: -50, max: 50, unit: "%" },
+  { id: "udsClutchTemp",    label: "Module Temp 2", min: 0, max: 150,  unit: "\u00b0C", gens: [50, 51, 52] },
+  { id: "udsModuleTemp",    label: "Module Temp 1", min: 0, max: 150,  unit: "\u00b0C", gens: [50, 51, 52] },
+  { id: "udsCoolingFinTemp",label: "Fin Temp",     min: 0, max: 150,  unit: "\u00b0C", gens: [50, 51, 52] },
+  { id: "udsClutchCurrent", label: "Pump Cur.",    min: 0, max: 5,    unit: "A", gens: [50, 51, 52] },
+  { id: "udsClutchPWM",     label: "Pump Duty",    min: 0, max: 100,  unit: "%", gens: [50, 51, 52] },
+  { id: "udsClutchTorquePct", label: "Clutch Torque", min: 0, max: 100, unit: "%", gens: [50, 51, 52] },
+  { id: "kwpPumpCurrent",   label: "Pump Cur.",    min: 0, max: 5,    unit: "A", gens: [2, 4] },
+  { id: "fordPumpCurrent",  label: "Pump Cur.",    min: 0, max: 7,    unit: "A", gens: [45] },
+  { id: "fordValveCurrent", label: "Valve Cur.",   min: 0, max: 2,    unit: "A", gens: [45] },
+  { id: "slipFL",           label: "Slip FL",      min: -50, max: 50, unit: "%", gens: SLIP_GENS },
+  { id: "slipFR",           label: "Slip FR",      min: -50, max: 50, unit: "%", gens: SLIP_GENS },
+  { id: "slipRL",           label: "Slip RL",      min: -50, max: 50, unit: "%", gens: SLIP_GENS },
+  { id: "slipRR",           label: "Slip RR",      min: -50, max: 50, unit: "%", gens: SLIP_GENS },
 ];
 
 // 270-degree dial geometry: a circle stroked over three quarters of its
@@ -3706,7 +4873,7 @@ function applyGaugePrefs() {
     const tile = el.closest(".gauge");
     if (!tile) return;
     ensureTileGauge(tile);
-    const on = gaugePrefs.tiles.includes(t.id);
+    const on = gaugePrefs.tiles.includes(t.id) && tileForGen(t);
     tile.classList.toggle("as-gauge", on);
     if (on) {
       const unitEl = tile.querySelector(".tg-unit");
@@ -4157,6 +5324,9 @@ function drawTuneChart() {
   if (!host) return;
   if (!Array.isArray(currentLock) || !Array.isArray(speedHeader) || !Array.isArray(throttleHeader)) return;
   const c = themeColors();
+  // V11.00.12: a PT cell is drawn on the floor (it asks for no number), in the dark shade
+  const lv = (r, col) => (currentPT[r] && currentPT[r][col] ? 0 : currentLock[r][col]);
+  const isPT = (r, col) => !!(currentPT[r] && currentPT[r][col]);
   const cols = speedHeader.length;
   const rows = throttleHeader.length;
   const W = 340, H = 250;
@@ -4180,9 +5350,10 @@ function drawTuneChart() {
     return { x: x * persp, y: -up * persp, depth };
   };
 
+  // Framed on the whole 0-100 % box (its 8 corners), not on the current heights,
+  // so the view doesn't rescale while a point is being dragged.
   const pts = [];
-  for (let r = 0; r < rows; r++) for (let col = 0; col < cols; col++) pts.push(world(col, r, currentLock[r][col]));
-  pts.push(world(0, 0, 0), world(cols - 1, 0, 0), world(0, rows - 1, 0), world(cols - 1, rows - 1, 0));
+  [0, 100].forEach((lock) => pts.push(world(0, 0, lock), world(cols - 1, 0, lock), world(0, rows - 1, lock), world(cols - 1, rows - 1, lock)));
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   pts.forEach((p) => {
     if (p.x < minX) minX = p.x;
@@ -4203,10 +5374,10 @@ function drawTuneChart() {
   const facets = [];
   for (let r = 0; r < rows - 1; r++) {
     for (let col = 0; col < cols - 1; col++) {
-      const depth = (world(col, r, currentLock[r][col]).depth +
-        world(col + 1, r, currentLock[r][col + 1]).depth +
-        world(col, r + 1, currentLock[r + 1][col]).depth +
-        world(col + 1, r + 1, currentLock[r + 1][col + 1]).depth) / 4;
+      const depth = (world(col, r, lv(r, col)).depth +
+        world(col + 1, r, lv(r, col + 1)).depth +
+        world(col, r + 1, lv(r + 1, col)).depth +
+        world(col + 1, r + 1, lv(r + 1, col + 1)).depth) / 4;
       facets.push({ r, col, depth });
     }
   }
@@ -4214,11 +5385,13 @@ function drawTuneChart() {
   facets.forEach(({ r, col }) => {
     const corners = [[r, col], [r, col + 1], [r + 1, col + 1], [r + 1, col]];
     const poly = corners.map(([rr, cc]) => {
-      const p = tuneProject(cc, rr, currentLock[rr][cc]);
+      const p = tuneProject(cc, rr, lv(rr, cc));
       return `${p.x.toFixed(1)},${p.y.toFixed(1)}`;
     }).join(" ");
-    const avg = (currentLock[r][col] + currentLock[r][col + 1] + currentLock[r + 1][col] + currentLock[r + 1][col + 1]) / 4;
-    svg += `<polygon points="${poly}" fill="rgb(${heatRGB(avg / 100)})" fill-opacity="0.55" stroke="rgba(0,0,0,0.7)" stroke-width="0.5" stroke-linejoin="round"/>`;
+    const avg = (lv(r, col) + lv(r, col + 1) + lv(r + 1, col) + lv(r + 1, col + 1)) / 4;
+    const touchesPT = corners.some(([rr, cc]) => isPT(rr, cc));
+    const fill = touchesPT ? "70,76,84" : heatRGB(avg / 100); // greyed next to a PT point
+    svg += `<polygon points="${poly}" fill="rgb(${fill})" fill-opacity="0.55" stroke="rgba(0,0,0,0.7)" stroke-width="0.5" stroke-linejoin="round"/>`;
   });
 
   const floorPt = (col, r) => tuneProject(col, r, 0);
@@ -4236,10 +5409,28 @@ function drawTuneChart() {
   svg += `<text x="${speedMid.x.toFixed(1)}" y="${(speedMid.y + 16).toFixed(1)}" text-anchor="middle" font-size="8" font-weight="700" fill="${c.muted}">SPEED (KM/H)</text>`;
   svg += `<text x="${(throttleMid.x + 6).toFixed(1)}" y="${(throttleMid.y + 14).toFixed(1)}" text-anchor="start" font-size="8" font-weight="700" fill="${c.muted}">THROTTLE (%)</text>`;
 
+  // the grid points you can hold and drag (V11.00.12)
+  tuneNodes = [];
+  for (let r = 0; r < rows; r++) {
+    for (let col = 0; col < cols; col++) {
+      const p = tuneProject(col, r, lv(r, col));
+      tuneNodes.push({ r, c: col, x: p.x, y: p.y, depth: world(col, r, lv(r, col)).depth });
+      const active = tuneDragNode && tuneDragNode.r === r && tuneDragNode.c === col;
+      if (active) {
+        svg += `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="6" fill="${c.accent}" stroke="${c.text}" stroke-width="1.5"/>`;
+        svg += `<text x="${p.x.toFixed(1)}" y="${(p.y - 10).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="700" fill="${c.text}">${currentLock[r][col]}%</text>`;
+      } else if (isPT(r, col)) {
+        svg += `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.6" fill="rgb(70,76,84)" stroke="${c.muted}" stroke-width="0.6"/>`;
+      } else {
+        svg += `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.2" fill="${c.text}" fill-opacity="0.35"/>`;
+      }
+    }
+  }
+
   svg += `<line id="chartMarkerStem" stroke="${c.text}" stroke-width="1" stroke-dasharray="2 2" visibility="hidden"/>`;
   svg += `<circle id="chartMarker" r="4" fill="${c.danger}" stroke="${c.text}" stroke-width="1.5" visibility="hidden"/>`;
   svg += `</svg>`;
-  host.innerHTML = svg;
+  chartLayer(host).innerHTML = svg; // keeps the drag overlay (attachCurveDrag)
 
   const legend = document.getElementById("tuneChartLegend");
   if (legend) {
@@ -4271,7 +5462,7 @@ function updateChartMarker() {
     x: lerp(lerp(q00.x, q10.x, tc), lerp(q01.x, q11.x, tc), tr),
     y: lerp(lerp(q00.y, q10.y, tc), lerp(q01.y, q11.y, tc), tr),
   });
-  const corner = (cc, rr) => tuneProject(cc, rr, currentLock[rr][cc]);
+  const corner = (cc, rr) => tuneProject(cc, rr, currentPT[rr] && currentPT[rr][cc] ? 0 : currentLock[rr][cc]);
   const top = blend(corner(c0, r0), corner(c1, r0), corner(c0, r1), corner(c1, r1));
   const floor = (cc, rr) => tuneProject(cc, rr, 0);
   const foot = blend(floor(c0, r0), floor(c1, r0), floor(c0, r1), floor(c1, r1));
@@ -4295,7 +5486,7 @@ function initGaugeUI() {
   const host = document.getElementById("gaugeCustomizer");
   if (host) {
     host.innerHTML = "";
-    GAUGE_TILES.forEach((t) => {
+    GAUGE_TILES.filter(tileForGen).forEach((t) => { // only what this generation can show (V11.00.12)
       const label = document.createElement("label");
       label.className = "tile-opt";
       const cb = document.createElement("input");
@@ -4348,3 +5539,65 @@ function initGaugeUI() {
   renderLockTrace(Date.now());
   updateEngagementGauge(null, null, true); // empty arc, drawn instantly - the intro sweep starts from here
 }
+
+// ---- Fault codes (V11.00.5): read / clear the Haldex module's own codes ----
+let _dtcPollTimer = null;
+
+function dtcEscape(text) {
+  return String(text || "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+function dtcRender(data) {
+  if (!data) return;
+  const proto = document.getElementById("dtcProtocol");
+  const status = document.getElementById("dtcStatus");
+  const list = document.getElementById("dtcList");
+  const readBtn = document.getElementById("dtcReadBtn");
+  const clearBtn = document.getElementById("dtcClearBtn");
+  if (proto) proto.textContent = data.supported ? data.protocol : "not available for this generation";
+  const busy = data.state === "busy";
+  if (readBtn) readBtn.disabled = busy || !data.supported;
+  if (clearBtn) clearBtn.disabled = busy || !data.supported;
+  if (status) {
+    if (busy) status.textContent = data.action === "clear" ? "Clearing..." : "Reading...";
+    else if (data.state === "idle") status.textContent = data.supported ? "Not read yet." : "Not available for this generation yet.";
+    else if (data.state === "error") status.textContent = "Failed: " + (data.message || "no answer");
+    else if (data.codes && data.codes.length) status.textContent = data.codes.length + " fault code" + (data.codes.length > 1 ? "s" : "") + " stored:";
+    else status.textContent = data.message || "No fault codes stored";
+  }
+  if (list) {
+    if (data.state === "done" && data.codes && data.codes.length) {
+      list.innerHTML = data.codes.map((c) =>
+        '<div class="diag-item"><span class="diag-label">' + dtcEscape(c.code) + '</span><span class="diag-value">' + dtcEscape(c.detail || "") + "</span></div>").join("");
+    } else if (!busy) {
+      list.innerHTML = "";
+    }
+  }
+}
+
+async function dtcRefresh() {
+  const data = await fetchJson("/api/dtc");
+  dtcRender(data);
+  if (data && data.state === "busy") {
+    clearTimeout(_dtcPollTimer);
+    _dtcPollTimer = setTimeout(dtcRefresh, 400);
+  }
+  return data;
+}
+
+async function dtcStart(action) {
+  if (action === "clear" && !confirm("Clear the Haldex module's fault codes?")) return;
+  const r = await fetchJson("/api/dtc/" + action, { method: "POST" });
+  if (r && r.ok === false && r.error) showNotification(r.error, "error");
+  await dtcRefresh();
+  if (action === "clear") setTimeout(() => dtcStart("read"), 1500); // show what is left (some codes come straight back)
+}
+
+function initDtc() {
+  const readBtn = document.getElementById("dtcReadBtn");
+  const clearBtn = document.getElementById("dtcClearBtn");
+  if (readBtn) readBtn.addEventListener("click", () => dtcStart("read"));
+  if (clearBtn) clearBtn.addEventListener("click", () => dtcStart("clear"));
+  dtcRefresh();
+}
+document.addEventListener("DOMContentLoaded", initDtc);

@@ -39,3 +39,28 @@ uint8_t drivingSettingValueLen(uint8_t id);
 
 // The 14-byte Settings payload (layout in documents/MOBILE_APP_OPENHALDEX.md).
 void buildDrivingSettings(uint8_t *out);
+
+// ---- Vehicle geometry defaults per generation (V11.00.14) -----------------
+// Wheelbase / track / steering ratio feed the per-wheel slip and the
+// steering-angle lock scale. Each generation starts from one representative
+// car (sources in the table in OpenHaldexC6_Settings.cpp); the user types in
+// their own car's figures on the Expert tab.
+struct VehicleGeometry
+{
+  uint16_t wheelbaseMm;
+  uint16_t trackFrontMm;
+  uint16_t trackRearMm;
+  float steeringRatio; // steering wheel : road wheel
+  const char *car;     // shown on the Vehicle Geometry card
+};
+
+// The defaults for a generation (unknown generation: the Gen1 car).
+const VehicleGeometry &vehicleDefaultsForGeneration(uint8_t gen);
+
+// Put a generation's defaults into the live settings (saved by writeEEP).
+void applyVehicleDefaults(uint8_t gen);
+
+// Call after haldexGeneration changes: if the geometry is still the old
+// generation's defaults (nobody typed their car in), move to the new one's.
+// Typed-in figures are never touched.
+void vehicleGeometryFollowGeneration(uint8_t oldGen, uint8_t newGen);

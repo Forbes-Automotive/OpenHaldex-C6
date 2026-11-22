@@ -5,18 +5,7 @@
 #include <OpenHaldexC6_Analyzer.h> // setAnalyzerMode(): enabling the controller leaves analyzer mode
 #include "esp_pm.h"                // release/take the no-light-sleep lock around deliberate sleep
 
-// Light sleep is only allowed while the low-power state machine has
-// deliberately put the module to sleep. No-op when CAN sleep is off (no lock).
-static void pmAllowLightSleep(bool allow)
-{
-  if (pmNoLightSleepLock == nullptr)
-    return;
-  esp_pm_lock_handle_t lk = (esp_pm_lock_handle_t)pmNoLightSleepLock;
-  if (allow)
-    esp_pm_lock_release(lk);
-  else
-    esp_pm_lock_acquire(lk);
-}
+// ---- Defines -------------------------------------------------------------------
 
 // Low-power state: 
 //   WATCHING = WiFi Active, Normal IO
@@ -24,6 +13,8 @@ static void pmAllowLightSleep(bool allow)
 //   using GPIO ISR Wake on the CAN_RX pins.
 #define LP_WATCHING 0
 #define LP_SLEEPING 1
+
+// ---- Statics -------------------------------------------------------------------
 
 static uint8_t  lpState              = LP_WATCHING;
 static uint32_t lpNoClientsSince     = 0;
@@ -53,12 +44,27 @@ static bool     lpTasksSuspended      = false; // background periodic tasks park
 // showHaldexState logs to a serial port that is almost certainly closed.
 // Frame generators are only resumed in standalone mode (they were never
 // running in OEM mode - see setupTasks()).
-struct LpManagedTask { TaskHandle_t *handle; bool standaloneOnly; };
+struct LpManagedTask { TaskHandle_t *handle; };
 static const LpManagedTask lpManagedTasks[] = {
-  { &handle_broadcastOpenHaldex,   false },
-  { &handle_showHaldexState,       false },
-  { &handle_standaloneFrames,      true  },
+  { &handleBroadcastOpenHaldex },
+  { &handleShowHaldexState },
+  { &handleStandaloneFrames }, // runs in both modes, idles itself when not needed (V11.00.7)
 };
+
+// ---- Small helpers -------------------------------------------------------------
+
+// Light sleep is only allowed while the low-power state machine has
+// deliberately put the module to sleep. No-op when CAN sleep is off (no lock).
+static void pmAllowLightSleep(bool allow)
+{
+  if (pmNoLightSleepLock == nullptr)
+    return;
+  esp_pm_lock_handle_t lk = (esp_pm_lock_handle_t)pmNoLightSleepLock;
+  if (allow)
+    esp_pm_lock_release(lk);
+  else
+    esp_pm_lock_acquire(lk);
+}
 
 // GPIO ISRs - fire on the first falling edge of CAN_RX while the
 // transceivers are parked in standby. The TCAN1044 in standby still drives
@@ -69,10 +75,10 @@ static const LpManagedTask lpManagedTasks[] = {
 static void IRAM_ATTR onCanWakeEdge()
 {
   canWakeRequest = true;
-  if (handle_updateTriggers)
+  if (handleUpdateTriggers)
   {
     BaseType_t higherPriorityTaskWoken = pdFALSE;
-    vTaskNotifyGiveFromISR(handle_updateTriggers, &higherPriorityTaskWoken);
+    vTaskNotifyGiveFromISR(handleUpdateTriggers, &higherPriorityTaskWoken);
     portYIELD_FROM_ISR(higherPriorityTaskWoken);
   }
 }
@@ -136,8 +142,6 @@ static void lpResumeBackgroundTasks()
   if (!lpTasksSuspended) return;
   for (uint8_t i = 0; i < sizeof(lpManagedTasks) / sizeof(lpManagedTasks[0]); i++)
   {
-    if (lpManagedTasks[i].standaloneOnly && !isStandalone) continue;
-    
     TaskHandle_t handle = *lpManagedTasks[i].handle;
     if (handle && eTaskGetState(handle) == eSuspended)
     {
@@ -147,13 +151,32 @@ static void lpResumeBackgroundTasks()
   lpTasksSuspended = false;
 }
 
+// ---- Setup ---------------------------------------------------------------------
+
+void setupIO()
+{
+  // using the TCAN1044 for CAN control
+  pinMode(CAN0_RS, OUTPUT);   // gpio for controlling can_0 state - enabled or disabled
+  pinMode(CAN1_RS, OUTPUT);   // gpio for controlling can_0 slope - enabled or disabled
+  digitalWrite(CAN0_RS, LOW); // set chip enable
+  digitalWrite(CAN1_RS, LOW); // set chip enable
+
+  pinMode(gpioHbIn, INPUT_PULLDOWN);    // gpio for handbrake in signal (pulldown so floating harness draws 0mA)
+  pinMode(gpioBrakeIn, INPUT_PULLDOWN); // gpio for brake in signal (pulldown so floating harness draws 0mA)
+  pinMode(gpioHbOut, OUTPUT);    // gpio for handbrake out signal
+  pinMode(gpioBrakeOut, OUTPUT); // gpio for brake out signal
+
+  strip.begin();            // begin RGB LED onboard
+  strip.setBrightness(255); // always full library scale; brightness controlled via color values
+}
+
 // One second of the sleep auto-setup. Counts only while nobody is connected,
 // the car is parked with the ignition off (KL15, where the car sends it) and
 // CAN has been seen this session (not on the bench). Anything else restarts
 // the 15 min window.
 static void sleepCalTick(bool noClients)
 {
-  const bool parked = received_vehicle_speed == 0 && (received_vehicle_rpm == 0 || !hasCANChassis) && !ignitionOn();
+  const bool parked = receivedVehicleSpeed == 0 && (receivedVehicleRpm == 0 || !hasCANChassis) && !ignitionOn();
   if (!noClients || !parked || !everSawCANThisSession)
   {
     sleepCalSum = 0;
@@ -181,45 +204,30 @@ static void sleepCalTick(bool noClients)
         (unsigned)sleepCalAvgFps, (unsigned)lpWakeThresholdFps);
 }
 
-void setupIO()
+// Step to the next mode, as both mode buttons do. Standalone skips Expert and
+// never lands on Stock (Stock = passthrough, which standalone doesn't have).
+// V11.00.8: one copy for both buttons (it was two identical 35-line copies).
+static void cycleToNextMode()
 {
-  // using the TCAN1044 for CAN control
-  pinMode(CAN0_RS, OUTPUT);   // gpio for controlling can_0 state - enabled or disabled
-  pinMode(CAN1_RS, OUTPUT);   // gpio for controlling can_0 slope - enabled or disabled
-  digitalWrite(CAN0_RS, LOW); // set chip enable
-  digitalWrite(CAN1_RS, LOW); // set chip enable
+  if (disableController)
+  {
+    return; // controller disabled: the mode stays Stock (same rule as requestMode)
+  }
 
-  pinMode(gpio_hb_in, INPUT_PULLDOWN);    // gpio for handbrake in signal (pulldown so floating harness draws 0mA)
-  pinMode(gpio_brake_in, INPUT_PULLDOWN); // gpio for brake in signal (pulldown so floating harness draws 0mA)
-  pinMode(gpio_hb_out, OUTPUT);    // gpio for handbrake out signal
-  pinMode(gpio_brake_out, OUTPUT); // gpio for brake out signal
-
-  strip.begin();            // begin RGB LED onboard
-  strip.setBrightness(255); // always full library scale; brightness controlled via color values
-}
-
-void modeChange(void)
-{
-#if enableDebug
-  DEBUG("Internal mode button pressed!");
-#endif
-  if (disableOnboardButton)
-    return; // onboard button disabled, ignore press
-
-  uint8_t next_mode = (uint8_t)state.mode + 1; // Determine the next mode in the sequence.
+  uint8_t nextMode = (uint8_t)state.mode + 1; // Determine the next mode in the sequence.
 
   if (isStandalone)
   {
     // In standalone mode, skip MODE_EXPERT when cycling through modes as it's not used.
-    if (next_mode == MODE_EXPERT)
+    if (nextMode == MODE_EXPERT)
     {
-      next_mode++;
+      nextMode++;
     }
   }
 
-  if (next_mode < (uint8_t)openhaldex_mode_t_MAX)
+  if (nextMode < (uint8_t)openHaldexMode_t_MAX)
   {
-    state.mode = (openhaldex_mode_t)next_mode; // If the next mode is valid, change the current mode to it.
+    state.mode = (openHaldexMode_t)nextMode; // If the next mode is valid, change the current mode to it.
   }
   // On overflow, start over from MODE_STOCK.
   else
@@ -236,23 +244,47 @@ void modeChange(void)
   lastMode = state.mode;
 }
 
+void modeChange(void)
+{
+#if enableDebug
+  DEBUG("Internal mode button pressed!");
+#endif
+  if (disableOnboardButton)
+    return; // onboard button disabled, ignore press
+  cycleToNextMode();
+}
+
 bool requestMode(uint8_t mode)
 {
-  if (mode >= (uint8_t)openhaldex_mode_t_MAX || disableController)
+  if (mode >= (uint8_t)openHaldexMode_t_MAX || disableController)
   {
     return false;
   }
 
   if (isStandalone && mode == MODE_STOCK)
   {
-    state.mode = (openhaldex_mode_t)lastMode; // Stock is passthrough-only: standalone keeps the last driving mode
+    state.mode = (openHaldexMode_t)lastMode; // Stock is passthrough-only: standalone keeps the last driving mode
   }
   else
   {
-    state.mode = (openhaldex_mode_t)mode;
+    state.mode = (openHaldexMode_t)mode;
   }
   lastMode = state.mode;
   return true;
+}
+
+// Standalone on / off (V11.00.12). Stock is passthrough-only and standalone has no
+// car frames to pass through, so switching standalone on while in Stock moves to FWD
+// - the same place the mode button lands when it wraps in standalone. Used by the
+// web UI, the gauges (ESP-NOW) and the serial lab, so they all behave the same.
+void setStandaloneMode(bool on)
+{
+  isStandalone = on; // the frame task follows on its own (ownFramesActive)
+  if (isStandalone && state.mode == MODE_STOCK && !disableController)
+  {
+    state.mode = MODE_FWD;
+    lastMode = state.mode;
+  }
 }
 
 void setControllerDisabled(bool disabled)
@@ -278,35 +310,7 @@ void modeChangeExt(void)
     return; // external button disabled, ignore press
   if (extBtnForceMode)
     return; // Hold mode: short press has no effect; only hold triggers force mode
-
-  uint8_t next_mode = (uint8_t)state.mode + 1; // Determine the next mode in the sequence.
-
-  if (isStandalone)
-  {
-    // In standalone mode, skip MODE_EXPERT when cycling through modes, as it's not used.
-    if (next_mode == MODE_EXPERT)
-    {
-      next_mode++;
-    }
-  }
-
-  if (next_mode < (uint8_t)openhaldex_mode_t_MAX)
-  {
-    state.mode = (openhaldex_mode_t)next_mode; // If the next mode is valid, change the current mode to it
-  }
-  // On overflow, start over from MODE_STOCK.
-  else
-  {
-    if (!isStandalone)
-    {
-      state.mode = MODE_STOCK;
-    }
-    else
-    {
-      state.mode = MODE_FWD;
-    }
-  }
-  lastMode = state.mode;
+  cycleToNextMode();
 }
 
 void modeChangeExtLong(void)
@@ -318,10 +322,13 @@ void modeChangeExtLong(void)
   extButtonForceModeFlag = true;
 }
 
+// Button let go: ends the "hold to force the mode" (V11.00.8 - this was never
+// bound, so one hold forced the mode until reboot). Also fires after a short
+// press, where clearing an already-clear flag does nothing.
 void modeChangeExtLongOff(void)
 {
 #if enableDebug
-  DEBUG("External mode button long pressed!");
+  DEBUG("External mode button released");
 #endif
 
   extButtonForceModeFlag = false;
@@ -334,26 +341,30 @@ void setupButtons()
   btnMode.setMenuLevel(0);           // Use the functions bound to the first menu associated with the button
   btnMode.setMode(Mode_Synchronous); // can be caught in the main loop - no rush
 
-  btnMode_ext.setMenuCount(0);
-  btnMode_ext.setMenuLevel(0);           // Use the functions bound to the first menu associated with the button
-  btnMode_ext.setMode(Mode_Synchronous); // can be caught in the main loop - no rush
+  btnModeExt.setMenuCount(0);
+  btnModeExt.setMenuLevel(0);           // Use the functions bound to the first menu associated with the button
+  btnModeExt.setMode(Mode_Synchronous); // can be caught in the main loop - no rush
 
   // InterruptButton::m_RTOSservicerStackDepth = 4096; // Use larger values for more memory intensive functions if using Asynchronous mode.
   btnMode.bind(Event_KeyPress, 0, &modeChange);            // short press: cycle mode
   btnMode.bind(Event_LongKeyPress, 0, &resetWifi); // long press: clear WiFi password + restore default SSID, restart AP open
 
-  btnMode_ext.bind(Event_KeyPress, 0, &modeChangeExt);         // short press: cycle mode (external button)
-  btnMode_ext.bind(Event_LongKeyPress, 0, &modeChangeExtLong); // long press: force mode (external button)
-  // btnMode.bind(Event_KeyDown, 0, &modeChangeExtLongOff);
+  btnModeExt.bind(Event_KeyPress, 0, &modeChangeExt);         // short press: cycle mode (external button)
+  btnModeExt.bind(Event_LongKeyPress, 0, &modeChangeExtLong); // long press: force mode (external button)
+  btnModeExt.bind(Event_KeyUp, 0, &modeChangeExtLongOff);     // released: stop forcing
 }
+
+// ---- Main code -----------------------------------------------------------------
 
 void updateTriggers(void *arg)
 {
   while (1)
   {
     const uint32_t now = millis();
-    hasCANChassis = (lastCANChassisTick > 0) && ((now - (uint32_t)lastCANChassisTick) <= canHealthTimeoutMs); // 1000ms timeout for CAN health - if we haven't received a message in 1000ms, consider the CAN connection unhealthy
-    hasCANHaldex = (lastCANHaldexTick > 0) && ((now - (uint32_t)lastCANHaldexTick) <= canHealthTimeoutMs);    // 1000ms timeout for CAN health - if we haven't received a message in 1000ms, consider the CAN connection unhealthy
+    const uint32_t lastChassisMs = lastCANChassisTick; // copies: the CAN tasks write these
+    const uint32_t lastHaldexMs = lastCANHaldexTick;
+    hasCANChassis = (lastChassisMs != 0) && ((now - lastChassisMs) <= canHealthTimeoutMs); // healthy = a frame within canHealthTimeoutMs (1000 ms)
+    hasCANHaldex = (lastHaldexMs != 0) && ((now - lastHaldexMs) <= canHealthTimeoutMs);
 
     // Fail safe on signal loss: parseCAN only ever overwrites these on frame
     // arrival, so on bus loss they latch their last value forever. In
@@ -361,21 +372,24 @@ void updateTriggers(void *arg)
     // stale ESP/hazard force flag holding a force mode on) indefinitely. Zero
     // them once the health timeout declares the bus dead so the speed/throttle
     // gates and force triggers see "no input" instead of the last frame.
-    // lastCANChassisTick > 0 keeps the boot state (never seen a frame) as-is.
-    if (!hasCANChassis && lastCANChassisTick > 0)
+    // lastChassisMs != 0 keeps the boot state (never seen a frame) as-is.
+    if (!hasCANChassis && lastChassisMs != 0)
     {
-      received_vehicle_speed = 0;
-      received_pedal_value = 0;
+      receivedVehicleSpeed = 0;
+      receivedPedalValue = 0;
       tcForceModeFlag = false;
       hazardForceModeFlag = false;
       isABSValid = false;
       absBrakingFromCAN = false;  // no ABS frames = no ABS braking release latched on
+      kugaCarTorqueCeiling = 0xFFFF; // V11.00.11: no car ESP ceiling either
+      kugaCar211Valid = false;       // V11.00.13: and no car 0x211 to build our OEM lock request frame on
+      lrCar20AValid = lrCar2B5Valid = lrCar250Valid = false; // V11.00.13 Land Rover: no car lock request frames to build on either
       brakeFromCAN = false;       // same for the brake pedal...
       handbrakeFromCAN = false;   // ...and the handbrake
     }
-    if (!hasCANHaldex && lastCANHaldexTick > 0)
+    if (!hasCANHaldex && lastHaldexMs != 0)
     {
-      received_haldex_engagement = 0; // stale engagement would freeze telemetry and poison a running learn
+      receivedHaldexEngagement = 0; // stale engagement would freeze telemetry and poison a running learn
     }
 
     if (hasCANChassis || hasCANHaldex)
@@ -464,7 +478,7 @@ void updateTriggers(void *arg)
             DEBUG("Low power: no clients + CAN idle (%lu fps) - shutting down WiFi+LED%s",
                   (unsigned long)(isStandalone ? lpHaldexFps : lpChassisFps),
                   canSleepAggressive ? " + transceivers standby (ISR wake)" : "");
-            strip.setLedColorData(led_channel, 0, 0, 0);
+            strip.setLedColorData(ledChannel, 0, 0, 0);
             strip.show();
             // Aggressive: shutdown transceivers immediately and suspend background
             // periodic tasks. Wake is purely ISR-driven on the CAN_RX pins.
@@ -530,32 +544,32 @@ void updateTriggers(void *arg)
     }
 
     btnMode.processSyncEvents();     // Only required if using sync events
-    btnMode_ext.processSyncEvents(); // Only required if using sync events
+    btnModeExt.processSyncEvents(); // Only required if using sync events
 
-    handbrakeSignalActive = digitalRead(gpio_hb_in);
-    brakeSignalActive = digitalRead(gpio_brake_in);
+    handbrakeSignalActive = digitalRead(gpioHbIn);
+    brakeSignalActive = digitalRead(gpioBrakeIn);
 
     if (followHandbrake)
     {
       bool hbOut = invertHandbrake ? !handbrakeSignalActive : handbrakeSignalActive;
-      digitalWrite(gpio_hb_out, hbOut);
+      digitalWrite(gpioHbOut, hbOut);
       handbrakeActive = hbOut;
     }
     else
     {
-      digitalWrite(gpio_hb_out, LOW);
+      digitalWrite(gpioHbOut, LOW);
       handbrakeActive = false;
     }
 
     if (followBrake)
     {
       bool brakeOut = invertBrake ? !brakeSignalActive : brakeSignalActive;
-      digitalWrite(gpio_brake_out, brakeOut);
+      digitalWrite(gpioBrakeOut, brakeOut);
       brakeActive = brakeOut;
     }
     else
     {
-      digitalWrite(gpio_brake_out, LOW);
+      digitalWrite(gpioBrakeOut, LOW);
       brakeActive = false;
     }
 
@@ -567,13 +581,13 @@ void updateTriggers(void *arg)
       switch (state.mode)
       {
       case 0:
-        strip.setLedColorData(led_channel, ledBrightness, 0, 0); // red
+        strip.setLedColorData(ledChannel, ledBrightness, 0, 0); // red
         break;
       case 1:
-        strip.setLedColorData(led_channel, 0, ledBrightness, 0); // green
+        strip.setLedColorData(ledChannel, 0, ledBrightness, 0); // green
         break;
       case 2:
-        strip.setLedColorData(led_channel, 0, 0, ledBrightness); // blue
+        strip.setLedColorData(ledChannel, 0, 0, ledBrightness); // blue
         break;
       case 3:
       {
@@ -581,14 +595,14 @@ void updateTriggers(void *arg)
         uint8_t r = (uint8_t)((255 * ledBrightness) / 255); // 255
         uint8_t g = (uint8_t)((16 * ledBrightness) / 255);
         uint8_t b = (uint8_t)((240 * ledBrightness) / 255);
-        strip.setLedColorData(led_channel, r, g, b); // scaled with brightness
+        strip.setLedColorData(ledChannel, r, g, b); // scaled with brightness
         break;
       }
       case 4:
-        strip.setLedColorData(led_channel, 0, ledBrightness, ledBrightness); // cyan
+        strip.setLedColorData(ledChannel, 0, ledBrightness, ledBrightness); // cyan
         break;
       case 5:
-        strip.setLedColorData(led_channel, ledBrightness, ledBrightness, ledBrightness); // white
+        strip.setLedColorData(ledChannel, ledBrightness, ledBrightness, ledBrightness); // white
         break;
       }
       strip.show(); // Update the LED strip to reflect the new colour settings

@@ -3,6 +3,17 @@
 #include <esp_netif.h>
 #include <dhcpserver/dhcpserver.h>
 
+// ---- Statics -------------------------------------------------------------------
+
+// ---- Bridge mode (PR #39): optionally join a home/garage network as a stati ----
+static const uint32_t STA_INITIAL_WINDOW_MS = 20000;      // keep the core's auto-reconnect for this long after start
+static const uint32_t STA_RETRY_INTERVAL_MS = 5UL * 60000; // then one fresh attempt this often
+static uint32_t staStartedMs = 0;   // when the current connect window opened
+static uint32_t staLastAttemptMs = 0;
+static bool staBackedOff = false;   // auto-reconnect disabled, we're on the slow retry
+
+// ---- Small helpers -------------------------------------------------------------
+
 // Legacy WiFi implementation - now a stub
 // All WiFi functionality has moved to OpenHaldexC6_WebServer.cpp
 // ---------------------------------------------------------------------------
@@ -17,22 +28,6 @@ static void softAPLocalOnly()
   esp_netif_dhcps_option(ap, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER, &offer, sizeof(offer)); // no DNS either
   esp_netif_dhcps_start(ap);
 }
-
-// ---------------------------------------------------------------------------
-// Bridge mode (PR #39): optionally join a home/garage network as a station as
-// well. One radio is shared between AP and STA, and every STA connect attempt
-// scans all channels, pulling the AP off its own channel for a second or two.
-// That is fine when the network is there (one attempt, done), but with the
-// home SSID saved and the car parked anywhere else the core's auto-reconnect
-// would re-scan forever and the AP would stutter for whoever is in the car.
-// So: try hard for a short window after (re)start, then back off to one
-// attempt every few minutes.
-// ---------------------------------------------------------------------------
-static const uint32_t STA_INITIAL_WINDOW_MS = 20000;      // keep the core's auto-reconnect for this long after start
-static const uint32_t STA_RETRY_INTERVAL_MS = 5UL * 60000; // then one fresh attempt this often
-static uint32_t staStartedMs = 0;   // when the current connect window opened
-static uint32_t staLastAttemptMs = 0;
-static bool staBackedOff = false;   // auto-reconnect disabled, we're on the slow retry
 
 static void staBegin()
 {
@@ -58,6 +53,33 @@ static void staStart()
   staBegin();
   DEBUG("WiFi bridge mode: joining \"%s\"...", wifiStaSsid);
 }
+
+// ---- Setup ---------------------------------------------------------------------
+
+void setupWiFi()
+{
+  // WiFi setup is now in main.cpp
+  WiFi.hostname(wifiHostName);
+  DEBUG("Creating Access Point...");
+  startSoftAP();
+  // Print what the AP actually came up on - the old hardcoded "192.168.1.1"
+  // would have hidden a rejected softAPConfig behind the address we wanted.
+  DEBUG("IP address: %s", WiFi.softAPIP().toString().c_str());
+
+  MDNS.begin("openhaldex");           // openhaldex.local
+  MDNS.addService("http", "tcp", 80); // advertise HTTP
+}
+
+// ---------------------------------------------------------------------------
+// Bridge mode (PR #39): optionally join a home/garage network as a station as
+// well. One radio is shared between AP and STA, and every STA connect attempt
+// scans all channels, pulling the AP off its own channel for a second or two.
+// That is fine when the network is there (one attempt, done), but with the
+// home SSID saved and the car parked anywhere else the core's auto-reconnect
+// would re-scan forever and the AP would stutter for whoever is in the car.
+// So: try hard for a short window after (re)start, then back off to one
+// attempt every few minutes.
+// ---------------------------------------------------------------------------
 
 // Called from loop(): tracks the STA connection, picks up its IP, and runs the
 // back-off described above. No-op when bridge mode is off.
@@ -139,20 +161,6 @@ void startSoftAP()
   {
     WiFi.setTxPower(WIFI_POWER_8_5dBm);
   }
-}
-
-void setupWiFi()
-{
-  // WiFi setup is now in main.cpp
-  WiFi.hostname(wifiHostName);
-  DEBUG("Creating Access Point...");
-  startSoftAP();
-  // Print what the AP actually came up on - the old hardcoded "192.168.1.1"
-  // would have hidden a rejected softAPConfig behind the address we wanted.
-  DEBUG("IP address: %s", WiFi.softAPIP().toString().c_str());
-
-  MDNS.begin("openhaldex");           // openhaldex.local
-  MDNS.addService("http", "tcp", 80); // advertise HTTP
 }
 
 void disconnectWifi()

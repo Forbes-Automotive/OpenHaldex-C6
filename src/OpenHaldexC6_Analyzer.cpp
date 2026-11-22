@@ -38,7 +38,8 @@
 
 namespace {
 static const uint16_t kAnalyzerPort = 23;
-static const uint32_t kAnalyzerPollDelayMs = 1;
+static const uint32_t kAnalyzerPollDelayMs = 1;   // while an analyzer output is on
+static const uint32_t kAnalyzerIdleDelayMs = 100; // both off: check 10x a second, not 1000x (the task outranks the CAN tasks)
 static const size_t kAnalyzerQueueDepth = 8;
 
 struct AnalyzerFrame {
@@ -197,13 +198,16 @@ static void gvretSendFrame(const AnalyzerFrame &entry) {
   payload[7] = (uint8_t)((id >> 8) & 0xFF);
   payload[8] = (uint8_t)((id >> 16) & 0xFF);
   payload[9] = (uint8_t)((id >> 24) & 0xFF);
-  payload[10] = (uint8_t)(((entry.bus & 0x0F) << 4) | (entry.frame.data_length_code & 0x0F));
+  // A frame can arrive with DLC 9-15 (not valid on classic CAN, but the driver
+  // passes it): only 8 data bytes exist, so never send or read more (V11.00.8).
+  const uint8_t dlc = (entry.frame.data_length_code > 8) ? 8 : entry.frame.data_length_code;
+  payload[10] = (uint8_t)(((entry.bus & 0x0F) << 4) | dlc);
 
-  for (uint8_t i = 0; i < entry.frame.data_length_code && i < 8; ++i) {
+  for (uint8_t i = 0; i < dlc; ++i) {
     payload[11 + i] = entry.frame.data[i];
   }
 
-  gvretWriteNonBlocking(payload, 11 + entry.frame.data_length_code);
+  gvretWriteNonBlocking(payload, 11 + dlc);
 }
 
 static void gvretTransmitFrameFromHost() {
@@ -230,9 +234,9 @@ static void gvretTransmitFrameFromHost() {
   }
 
   if (bus == 0) {
-    twai_transmit_v2(twai_bus_0, &msg, (5 / portTICK_PERIOD_MS));
+    twai_transmit_v2(twaiBus0, &msg, (5 / portTICK_PERIOD_MS));
   } else if (bus == 1) {
-    twai_transmit_v2(twai_bus_1, &msg, (5 / portTICK_PERIOD_MS));
+    twai_transmit_v2(twaiBus1, &msg, (5 / portTICK_PERIOD_MS));
   }
 }
 
@@ -452,7 +456,7 @@ static void slcanHandleLine() {
     }
   }
 
-  twai_transmit_v2(twai_bus_0, &msg, (5 / portTICK_PERIOD_MS));
+  twai_transmit_v2(twaiBus0, &msg, (5 / portTICK_PERIOD_MS));
   slcanSendAck();
 }
 
@@ -477,16 +481,19 @@ static void slcanSendFrame(const AnalyzerFrame &entry) {
     return;
   }
 
-  char buffer[40];
+  char buffer[40]; // "T" + 8 id + 1 dlc + 16 data + CR + NUL = 28 at most
   char *ptr = buffer;
+  // DLC 9-15 can arrive from the driver; there are only 8 data bytes (V11.00.8:
+  // 15 overran this buffer and read past the frame)
+  const uint8_t dlc = (entry.frame.data_length_code > 8) ? 8 : entry.frame.data_length_code;
 
   if (entry.frame.extd) {
-    ptr += sprintf(ptr, "T%08X%1X", entry.frame.identifier, entry.frame.data_length_code & 0xF);
+    ptr += sprintf(ptr, "T%08X%1X", entry.frame.identifier, dlc);
   } else {
-    ptr += sprintf(ptr, "t%03X%1X", entry.frame.identifier, entry.frame.data_length_code & 0xF);
+    ptr += sprintf(ptr, "t%03X%1X", entry.frame.identifier, dlc);
   }
 
-  for (uint8_t i = 0; i < entry.frame.data_length_code; ++i) {
+  for (uint8_t i = 0; i < dlc; ++i) {
     ptr += sprintf(ptr, "%02X", entry.frame.data[i]);
   }
 
@@ -534,7 +541,7 @@ static void analyzerTask(void *arg) {
         serialStarted = false;
         resetGvretParser();
       }
-      vTaskDelay(kAnalyzerPollDelayMs / portTICK_PERIOD_MS);
+      vTaskDelay(kAnalyzerIdleDelayMs / portTICK_PERIOD_MS);
       continue;
     }
 
