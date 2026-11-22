@@ -1,4 +1,4 @@
-﻿<p align="center">
+<p align="center">
   <a href="https://forbes-automotive.com/?utm_source=github&utm_medium=readme&utm_campaign=openhaldex" target="_blank">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="/Images/FA-logo-white.png">
@@ -435,7 +435,7 @@ If the Wi‑Fi interface becomes unresponsive:
 
 - Long‑press the `Mode` button to clear the WiFi password and restart the AP to an open state.
 
-> The Web UI is built on Forbes Automotive's shared dark theme (the same look used across the Can2Cluster, SpeedPulser, SpeedPulserPro, can2rpm, MQB Steering Wheel Controller and AirLift Controller firmware), so the interface and status conventions stay consistent across the whole product line. Current firmware version: **11.00.8** (beta: fixes from a full code audit - external-button hold now releases, a cancelled Learn keeps the old table, Volvo Gen4 brake / ABS decode, web requests always answered, libraries pinned; 11.00.7: frame blocks work the same in the car as on the bench - a block on sends our whole frame, off passes the car's - and Long Learn rebuilt to find the frame or unknown car ID that holds the lock back in the field; 11.00.6: Throttle Override for the Steering-Angle Lock Scale, holds full lock under hard acceleration / counter-steering, plus the CAN interrupt moved into IRAM so a settings save no longer drops CAN frames; 11.00.5: Volvo Gen4 P3 rewritten from a real unit on the bench - Standalone and OEM mode, no fault codes, proportional lock - plus Read / Clear Fault Codes on the Diagnostics page for the UDS, KWP2000 / TP2.0 and Volvo D2 generations; 11.00.4: coolant and oil temperature on the Live Data card, faster Live Data refresh, OEM-mode lock back to V10 behaviour on Gen1, Gen2, Gen4, 0CQ and 0AY, OTA from 11.00.2 and older fixed), shown in the UI footer and at `/ota/info`.
+> The Web UI is built on Forbes Automotive's shared dark theme (the same look used across the Can2Cluster, SpeedPulser, SpeedPulserPro, can2rpm, MQB Steering Wheel Controller and AirLift Controller firmware), so the interface and status conventions stay consistent across the whole product line. Current firmware version: **11.00.14** (beta), shown in the UI footer and at `/ota/info`. New in 11.00.14: vehicle geometry defaults per generation, a fuller config backup (every generation's frame edits, held-back IDs, learn table), full-screen charts that turn sideways with pinch zoom, and a cleaner one-line banner. The full change history is in [`include/OpenHaldexC6_ver.h`](include/OpenHaldexC6_ver.h).
 
 ---
 
@@ -563,7 +563,7 @@ Endpoints: `GET/POST /api/wifi/sta` `{ssid, password}` (empty `ssid` disables) �
 
 ## Backup & Restore
 
-A firmware + filesystem reflash can wipe the settings stored on the device, and nobody wants to re-type an Expert grid. **Diagnostics → Backup & Restore** exports the Expert tune, steering-angle lock scale, per-generation frame edits, every setting and the WiFi names to a JSON file, and imports them back in one go.
+A firmware + filesystem reflash can wipe the settings stored on the device, and nobody wants to re-type an Expert grid. **Diagnostics → Backup & Restore** exports the Expert tune, steering-angle lock scale, every setting, the frame edits of every generation (both modes), the IDs Long Learn holds back, the learn table and the WiFi names to a JSON file, and imports them back in one go. Older backup files still import. Each step is checked; if the controller refuses one, the import stops and says why.
 
 WiFi passwords are **write-only** on the device and are never written to the file; after an import you're prompted once for any that were set.
 
@@ -591,7 +591,7 @@ The controller also talks **Bluetooth LE** to the **DashCAN** mobile app, so the
 
 - **Live** — mode buttons, controller on/off, lock target / actual, speed, throttle, rpm, boost, steering angle, CAN health and Haldex warnings (temperature protection, coupling open, speed limit).
 - **Settings** — the settings you change per situation: force modes (TC off / hazard lights / external button → mode), release lock on brake / handbrake, no‑lock speed and throttle window, steering‑angle lock scaling, gradual lock release and its rate, live diagnostics, LED brightness. Changes made on the web UI show up in the app and the other way round.
-- **Haldex diagnostics** — clutch / oil / module temperatures, supply voltage, clutch current and duty (and oil pressure / estimated torque on Gen4), from the same [Live Diagnostics](#live-diagnostics) pollers. Needs *Live diagnostics* switched on.
+- **Haldex diagnostics** — oil / plate / module temperatures, supply voltage, pump current and duty (and the pressure target / torque command on Gen4), from the same [Live Diagnostics](#live-diagnostics) pollers. Needs *Live diagnostics* switched on.
 - **Gauges** — `AWD Lock`, `AWD Lock Target`, `Steering` and the Haldex temperatures can be placed on the app's dashboards and in drive recordings.
 
 **Connecting.** With Bluetooth enabled (default), the app finds the controller as `OpenHaldex‑XXXX` and connects to the first one in range by itself; it can also be picked on the app's Bluetooth screen. Live data needs no pairing. The first change from a phone pairs it once:
@@ -912,29 +912,45 @@ OpenHaldex can request data from the Haldex ECU for **live measurement data** an
 
 When enabled, the controller automatically uses the correct protocol for the configured generation — there is nothing else to select.
 
-### Gen5 (MQB `0CQ` / PQ `0AY`) — UDS
+Every value below has been traced back to where the module's own firmware gets it, either from a sensor or from one of its internal models (11.00.10). Each one is labelled for what it really is: measured, commanded or modelled.
+
+### Gen5 (MQB `0CQ` / PQ `0AY` / `0CQ` VAQ) — UDS
 
 Gets data from the Haldex ECU over ISO‑TP / UDS and decodes:
 
-- Terminal voltage
-- Control module temperature
-- Clutch temperature
-- Cooling‑fin temperature
-- Clutch current, PWM and voltage
+- Terminal (supply) voltage
+- **Module temp 1 and 2**: two real temperature sensors in the control unit, on separate inputs, with one used as the other's backup. VCDS calls the second one "clutch temperature", but it isn't in the clutch pack.
+- Cooling‑fin temperature: the module's thermal model, not a sensor
+- Pump motor current (measured), pump PWM duty (commanded) and pump motor voltage (calculated by the module from duty, supply and current)
+- Clutch torque applied (%), the same value the module sends on CAN
+- Front/rear axle speed difference (not on the VAQ)
 
-All scaling has been **confirmed against VCDS** by heat‑soaking a bench module and matching the reported values across the full temperature range.  
+Gen5 has no pressure sensor, valve or oil‑temperature reading, so none of these is shown. The temperature scaling has also been **confirmed against VCDS** by heat‑soaking bench modules across the full range.
 
-### Gen2 (`1K0`) / Gen4 (`0AY`) — KWP2000 over VW TP2.0
+### Gen2 (`7H0` / `1K0`) / Gen4 (`0BR` / `0BS` / `2K0`, also `0AY907554C`) — KWP2000 over VW TP2.0
 
-The PQ‑platform controllers are diagnosed with **KWP2000 tunnelled over VW TP2.0** rather than UDS. OpenHaldex opens the TP2.0 channel, starts a diagnostic session and reads the measuring blocks. Gen4 values are decoded and **confirmed against VCDS**:
+The PQ‑platform controllers are diagnosed with **KWP2000 tunnelled over VW TP2.0** rather than UDS. OpenHaldex opens the TP2.0 channel, starts a diagnostic session and reads the measuring blocks. Gen4 (confirmed against VCDS):
 
-- Oil temperature & clutch plate temperature
+- Oil temperature (sensor) and clutch plate temperature (the module's model)
 - Supply voltage
-- Oil pressure
-- Estimated torque
-- Clutch valve duty (%) and current (A)
+- Clutch pressure **target**: Gen4 reports what it is aiming for, not its pressure sensor
+- Clutch torque command
+- Valve duty (%) and valve current (A, measured)
+- Pump duty (%) and pump motor current (A)
 
-Raw measuring‑block bytes are also exposed so any remaining values can be characterised.
+Gen2:
+
+- Oil temperature and **measured** clutch oil pressure
+- Supply voltage
+- Brake‑light switch and CAN status (engine / ABS / cluster / steering sensor received)
+
+- Pump motor current, valve duty and valve current. These groups sit behind the module's standard security login, which OpenHaldex does itself. If the module ever refuses the key, OpenHaldex saves that, stops trying (even after a reboot) and shows a highlighted warning with the seed and key on the card. **Allow one more try** clears it.
+
+Raw measuring‑block bytes are also exposed.
+
+### Ford Kuga Mk1 — Ford KWP2000
+
+Read from the AWD module on 0x761 / 0x769 in its normal session (OpenHaldex never changes the module's session, because that would stop its normal control): oil temperature, supply voltage, measured clutch pressure, pressure target, valve current and pump motor current. The pressure readings in bar are **provisional** until checked against a gauge on a working coupling. On the newer 9V4N firmware the two pressures show as raw values, and it has no valve‑current reading.
 
 ### Volvo P2 / P3 — Volvo D2
 
@@ -946,7 +962,7 @@ The Volvo AWD module's CAN reply carries the clutch pressure and its fault / lim
   <img src="/Images/ui-live-diag-kwp.png" alt="Dashboard — Live Data (TP2.0) card for Gen2 / Gen4: oil and plate temperature, supply voltage, oil pressure, estimated torque, clutch duty and valve current" width="300">
 </p>
 
-*Dashboard: with Live Diagnostics enabled the standard Haldex Data card is replaced by the **UDS Data (MQB)** card on Gen5 (left) or the **Live Data (TP2.0)** card on Gen2 / Gen4 (right).*
+*Dashboard: with Live Diagnostics enabled the standard Haldex Data card is replaced by the **UDS Data (Gen5)** card on Gen5 (left) or the **Live Data (TP2.0)** card on Gen2 / Gen4 (right).*
 
 > [!NOTE]
 > If VCDS or other scan tools will not connect, turn this setting off as it may not cleanly pick up the VCDS request so it does not block the tool.  Excessive CAN traffic can cause spurious dash errors.

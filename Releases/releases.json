@@ -3,6 +3,23 @@
   "latest": "11.00.6",
   "releases": [
     {
+      "version": "11.00.14",
+      "channel": "beta",
+      "date": "2026-11-22",
+      "ota": true,
+      "notes": "Vehicle geometry defaults per generation, fuller config backup (all frame edits, held-back IDs, learn table) with a safer import, full-screen charts turn sideways with pinch zoom, one-line banner, Drive Mode only on Gen5 VW, board V1.0 in System Info, code tidy.",
+      "firmware": {
+        "path": "V11.00.14/firmware.bin",
+        "size": 1569472,
+        "sha256": "ea7a7642dabb0ff1ef347e371da849d6f068e2c0eddb9e4b96fd6b28391966f2"
+      },
+      "filesystem": {
+        "path": "V11.00.14/littlefs.bin",
+        "size": 458752,
+        "sha256": "f857170c93309fde4fb6a9571ce5fce1d1342afd33a7ad63e7747d262dde65fb"
+      }
+    },
+    {
       "version": "11.00.8",
       "channel": "beta",
       "date": "2026-11-18",
