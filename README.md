@@ -129,7 +129,8 @@ These two high‑side drivers for brake/handbrake could be repurposed for other 
 - Generation 2 - PQ
 - Generation 4 - PQ
 - Generation 4 - GM
-- Generation 4 - Ford (ongoing)
+- Generation 4 - Ford Kuga Mk1 (beta, bench-tested)
+- Generation 4 - Land Rover Freelander 2 / Evoque (new, untested: built from the unit's own firmware, no car log yet)
 - Generation 5 - MQB (0CQ)
 - Generation 5 - PQ (0AY)
 - Generation 5 - MQB (VAQ)
