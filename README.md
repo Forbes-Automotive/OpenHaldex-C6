@@ -231,6 +231,15 @@ The rest of the **Expert** tab draws the same table as a lock-map surface, and a
   <img src="/Images/ui-steering-scale.png" alt="Expert tab — steering-angle lock scale curve" width="300">
 </p>
 
+### PT (pass-through) cells
+
+**Long-press** a cell in the Expert grid to make it **PT**. In that part of the map OpenHaldex steps aside and the car's own Haldex strategy runs, the same as Stock. The rest of the map still applies your numbers. Long-press it again to bring its number back. The number is kept underneath, faded.
+
+- Between cells it blends. PT takes over once the operating point is mostly in PT cells (more than 55%), and hands back below 45%. It changes at most every 0.25 s, so it doesn't flicker on a boundary.
+- In **Standalone** there's no car strategy to pass through, so a PT cell means 0% (no forced lock).
+- On the Lock Map Surface, PT points are grey and sit on the floor. They can't be dragged.
+- PT cells are saved with the tune (**Save Tune**) and are in the config backup.
+
 From 11.00.6 the steering scale has an optional **Throttle Override** (off by default) for rally / hard driving, so the steering scale can't pull lock out under heavy acceleration or counter-steering. Below the **Start %** pedal (default 40%) the steering scale works as normal, keeping low-speed turn-in agility. Between Start % and **Full %** (default 75%) its reduction fades out in a straight line. At Full % and above it is ignored and full requested lock holds. Example: at 180° the curve gives 50%; at 57.5% pedal the override gives back half of the reduction, so 75%; at 75% pedal and above, 100%.
 
 ---

@@ -21,7 +21,7 @@ network when bridge mode is on - then use --host openhaldex.local or its IP):
 Do an export BEFORE re-flashing: a full USB flash / filesystem erase wipes the saved
 settings, and this is how you get them back.
 
-Endpoints used (src/OpenHaldexC6_API.cpp): GET/POST /api/settings, POST /api/tune,
+Endpoints used (src/OpenHaldexC6_API.cpp): GET/POST /api/settings, POST /api/tune, GET/POST /api/backup (V11.00.14),
 GET/POST /api/wifi/ssid, /api/wifi and /api/wifi/sta, plus GET /ota/health.
 """
 import argparse
@@ -108,13 +108,19 @@ def cmd_export(args):
     ap_pw = api(args.host, "/api/wifi")
     sta = api(args.host, "/api/wifi/sta")
 
+    settings = {k: v for k, v in settings.items() if k not in ("blePasskey", "bleCodeRequired")}  # a password, live state
     backup = {
+        "_product": "OpenHaldex-C6",
         "_exportedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "_fwVersion": settings.get("FW_VERSION"),
         "settings": settings,
         "wifi": {"ssid": ap_ssid.get("ssid"), "passwordSet": bool(ap_pw.get("passwordSet"))},
         "wifiSta": {"ssid": sta.get("ssid") or None, "passwordSet": bool(sta.get("passwordSet"))},
     }
+    # V11.00.14: every generation's frame edits (both modes), held-back IDs, learn table.
+    # Older firmware has no /api/backup: the file then carries settings.frameBlocks only.
+    if settings.get("backupLayout"):
+        backup["extra"] = api(args.host, "/api/backup")
     with open(args.file, "w") as f:
         json.dump(backup, f, indent=2)
 
@@ -154,6 +160,12 @@ def cmd_import(args):
 
     # 2. Expert tune (+ steering scale when the backup has it).
     tune = {k: s[k] for k in ("throttleArray", "speedArray", "lockArray")}
+    # Expert PT cells (V11.00.12): 7x7 of 0/1. A backup from before PT has none, so
+    # it clears them - the restored tune is exactly the one that was backed up.
+    pt = s.get("lockPT")
+    rows, cols = len(s["throttleArray"]), len(s["speedArray"])
+    tune["lockPT"] = [[1 if isinstance(pt, list) and r < len(pt) and isinstance(pt[r], list)
+                       and c < len(pt[r]) and pt[r][c] else 0 for c in range(cols)] for r in range(rows)]
     if isinstance(s.get("steeringArray"), list) and isinstance(s.get("steeringLockScaleArray"), list):
         tune["steeringArray"] = s["steeringArray"]
         tune["steeringLockScaleArray"] = s["steeringLockScaleArray"]
@@ -165,9 +177,17 @@ def cmd_import(args):
     general = {k: s[k] for k in BACKUP_GENERAL_KEYS if k in s}
     print(f"  General settings restored: {api(host, '/api/settings', 'POST', general)}")
 
-    # 4. Per-frame edit switches, one bit at a time (that is how the API takes them).
-    frames = [fb for fb in s.get("frameBlocks", [])
-              if isinstance(fb.get("bit"), int) and isinstance(fb.get("enabled"), bool)]
+    # 4. Frame edits. A V11.00.14 file on V11.00.14+ firmware: every generation in both
+    #    modes + held-back IDs + learn table in one go. Otherwise (older file or firmware):
+    #    the current generation's switches, one bit at a time, as before.
+    extra_ok = bool(backup.get("extra")) and bool(api(host, "/api/settings").get("backupLayout"))
+    if extra_ok:
+        print(f"  Frame edits / held-back IDs / learn table restored: {api(host, '/api/backup', 'POST', backup['extra'])}")
+    elif backup.get("extra"):
+        print("  Note: this firmware can't take the other generations' frame edits, held-back IDs or")
+        print("        learn table - update it and import again for those.")
+    frames = [] if extra_ok else [fb for fb in s.get("frameBlocks", [])
+                                  if isinstance(fb.get("bit"), int) and isinstance(fb.get("enabled"), bool)]
     for fb in frames:
         api(host, "/api/settings", "POST", {"frameEditBit": fb["bit"], "frameEditOn": fb["enabled"]})
     if frames:

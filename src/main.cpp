@@ -31,8 +31,8 @@ static void printMemoryReport()
         (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
   twai_status_info_t s0 = {}, s1 = {};
-  twai_get_status_info_v2(twai_bus_0, &s0);
-  twai_get_status_info_v2(twai_bus_1, &s1);
+  twai_get_status_info_v2(twaiBus0, &s0);
+  twai_get_status_info_v2(twaiBus1, &s1);
   DEBUG("MEM: CAN rx missed/overrun chassis %lu/%lu, haldex %lu/%lu",
         s0.rx_missed_count, s0.rx_overrun_count, s1.rx_missed_count, s1.rx_overrun_count);
   const UBaseType_t n = uxTaskGetNumberOfTasks();
@@ -81,16 +81,16 @@ void setup()
   // Power management: when CAN sleep is enabled, scale CPU frequency down
   if (canSleepEnabled)
   {
-    esp_pm_config_t pm_cfg = {
+    esp_pm_config_t pmCfg = {
         .max_freq_mhz = 160,
         // Aggressive: drop CPU lower limit to 10MHz (XTAL/N) for deeper idle.
         .min_freq_mhz = canSleepAggressive ? 10 : 40,
         .light_sleep_enable = true,
     };
-    esp_err_t pm_err = esp_pm_configure(&pm_cfg);
-    if (pm_err != ESP_OK)
+    esp_err_t pmErr = esp_pm_configure(&pmCfg);
+    if (pmErr != ESP_OK)
     {
-      DEBUG("ESP Power Management Failed: %d (continuing without CPU frequency scaling)", (int)pm_err);
+      DEBUG("ESP Power Management Failed: %d (continuing without CPU frequency scaling)", (int)pmErr);
     }
 
     // Automatic light sleep can power down the TWAI domain (sleep_allow_pd in
@@ -130,23 +130,11 @@ void loop()
   }
 #endif
 
-  { // temp counters for debugging, just left in because they can be useful for testing timing of various functions/tasks
+  { // loop counter 0..5 - Gen4.1 standalone sends it in one frame (StandaloneCAN.cpp)
     tempCounter++;
     if (tempCounter > 5)
     {
       tempCounter = 0;
-      tempCounter1++;
-    }
-
-    if (tempCounter1 > 10)
-    {
-      tempCounter1 = 0;
-      tempCounter2++;
-    }
-
-    if (tempCounter2 > 254)
-    {
-      tempCounter2 = 0;
     }
   }
 
@@ -171,10 +159,10 @@ void loop()
     // just here to show a visual indication of the WiFi reboot
     for (int i = 0; i <= 3; i++)
     {
-      strip.setLedColorData(led_channel, ledBrightness, ledBrightness, ledBrightness);
+      strip.setLedColorData(ledChannel, ledBrightness, ledBrightness, ledBrightness);
       strip.show();
       vTaskDelay(pdMS_TO_TICKS(50));
-      strip.setLedColorData(led_channel, 0, 0, 0);
+      strip.setLedColorData(ledChannel, 0, 0, 0);
       strip.show();
       vTaskDelay(pdMS_TO_TICKS(50));
     }

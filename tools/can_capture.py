@@ -55,8 +55,14 @@ def api_get(host):
         return json.load(r)
 
 
-def set_analyzer(host, on):
-    api_post(host, {"analyzerMode": bool(on)})
+def set_analyzer(host, on, controller_was_disabled=None):
+    """Turn analyzer mode on / off. The firmware disables the controller when the
+    analyzer goes ON and doesn't undo that when it goes off, so on the way off we
+    put Disable Controller back to what it was (controller_was_disabled)."""
+    payload = {"analyzerMode": bool(on)}
+    if not on and controller_was_disabled is not None:
+        payload["disableController"] = bool(controller_was_disabled)
+    api_post(host, payload)
     time.sleep(0.5)
     return bool(api_get(host).get("analyzerMode"))
 
@@ -100,6 +106,7 @@ def read_frames(sock, seconds):
 
 def cmd_capture(a):
     os.makedirs(a.out, exist_ok=True)
+    was_disabled = bool(api_get(a.host).get("disableController"))  # put back afterwards
     print(f"analyzer on: {set_analyzer(a.host, True)}")
     try:
         with socket.create_connection((a.host, 23), timeout=8) as s:
@@ -108,7 +115,8 @@ def cmd_capture(a):
             frames = read_frames(s, a.seconds)
     finally:
         if not a.keep:
-            print(f"analyzer on after turning off: {set_analyzer(a.host, False)}")
+            print(f"analyzer on after turning off: {set_analyzer(a.host, False, was_disabled)}")
+            print(f"controller disabled: {bool(api_get(a.host).get('disableController'))} (as before the capture)")
     path = os.path.join(a.out, f"{a.label}.csv")
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
@@ -123,6 +131,9 @@ def cmd_capture(a):
 
 def cmd_off(a):
     print(f"analyzer on: {set_analyzer(a.host, False)}")
+    if api_get(a.host).get("disableController"):
+        print("NOTE: the controller is still DISABLED (analyzer mode turned it off) - "
+              "switch Disable Controller off in the web UI if you want OpenHaldex control back")
 
 
 def load_names(dbc):

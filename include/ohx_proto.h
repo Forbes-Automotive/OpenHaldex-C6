@@ -61,6 +61,7 @@ enum ohxType_t : uint8_t
 #define OHX_F2_LIVE_DIAG 0x80   // live diagnostics on (clutch / oil temperatures, supply)
 // flags[3]
 #define OHX_F3_ASR_OFF 0x01
+#define OHX_F3_USE_CAN 0x02     // standalone: 'Use CAN if Available' is on (the car's CAN is still read, so Expert can run)
 
 enum ohxCmd_t : uint8_t
 {
@@ -72,6 +73,8 @@ enum ohxCmd_t : uint8_t
   OHX_C_LONG_START = 6,     // arg0 = 1: also test the default blocks - car stopped only
   OHX_C_LONG_CANCEL = 7,
   OHX_C_CONTROLLER = 8,     // arg0 = 1 enable, 0 disable (stock)
+  OHX_C_STANDALONE = 9,     // arg0 = 1 on, 0 off - car stopped only (an older OpenHaldex answers OHX_R_INVALID)
+  OHX_C_USE_CAN = 10,       // arg0 = 1 on, 0 off: 'Use CAN if Available' (standalone) - car stopped only
 };
 
 enum ohxResult_t : uint8_t
@@ -103,7 +106,7 @@ struct __attribute__((packed)) OhxStatus
   uint8_t seq;            // +1 per packet
   uint8_t fw[3];          // major, minor, patch
   uint8_t generation;     // haldexGeneration
-  uint8_t mode;           // the mode in force (openhaldex_mode_t)
+  uint8_t mode;           // the mode in force (openHaldexMode_t)
   uint8_t flags[4];       // OHX_F*
   uint8_t lockTarget;     // % requested
   uint8_t lockActual;     // % engagement reported by the Haldex, OHX_NONE8 without Haldex CAN

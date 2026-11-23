@@ -75,6 +75,21 @@ html, body {
 }
 .status .meta { margin-left: 6px; font-variant-numeric: tabular-nums; }
 
+/* V11.00.14: the banner is one line that never wraps, so it can't change height
+   and push the page down. A long mode + force text is cut short with "…". */
+.topbar { gap: 10px; flex-wrap: nowrap; }
+.topbar h1 { flex-shrink: 0; white-space: nowrap; margin: 0; }
+.topbar .status-bar { flex-wrap: nowrap; min-width: 0; justify-content: flex-end; gap: 6px; }
+.topbar #modeStatus { display: block; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar .can-dots { flex-shrink: 0; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; }
+.can-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--danger); box-shadow: 0 0 6px var(--danger);
+}
+.can-dot.ok { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+.can-dots .can-dot:not(:first-child) { margin-left: 4px; }
+@media (max-width: 380px) { .topbar { padding: 8px 12px; } .topbar h1 { font-size: 14px; } }
+
 .dot {
   width: 10px; height: 10px; border-radius: 50%;
   background: var(--danger);
@@ -419,7 +434,8 @@ input[type="range"]::-moz-range-thumb, .slider::-moz-range-thumb, .slider-inline
 .cal-row { padding: 6px 0 2px; }
 .cal-row-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 .cal-row-value { color: var(--accent); font-weight: 600; font-size: 13px; white-space: nowrap; }
-.cal-slider { display: block; width: 100%; touch-action: pan-y; }
+.cal-slider { display: block; width: 100%; touch-action: pan-y; margin: 10px 0 12px; } /* V11.00.12: room for the 18 px thumb, so it doesn't sit on the text above / below */
+input[type="range"] { touch-action: pan-y; } /* every slider: an up / down swipe scrolls the page (initTouchGuards keeps the value) */
 
 /* --- buttons ------------------------------------------------------------ */
 .btn, .btn-secondary, button.btn {
@@ -444,6 +460,11 @@ input[type="range"]::-moz-range-thumb, .slider::-moz-range-thumb, .slider-inline
 .btn.danger { border-color: var(--danger); color: var(--danger); }
 .btn.danger:hover { background: rgba(255, 77, 94, .12); }
 .danger-card { border-color: rgba(255, 77, 94, .35); }
+/* V11.00.10: Gen2 SecurityAccess refusal on the TP2.0 live-data card */
+.login-fault { margin-top: 12px; padding: 10px 12px; border: 1px solid rgba(255,176,46,.6); border-left-width: 4px;
+  border-radius: 8px; background: rgba(255,176,46,.12); color: var(--accent-2); }
+.login-fault p { margin: 6px 0; overflow-wrap: anywhere; }
+.login-fault .hint { color: inherit; opacity: .85; }
 
 /* --- segmented control -------------------------------------------------- */
 .seg {
@@ -683,7 +704,14 @@ input[type="file"]::file-selector-button:hover { background: rgba(36, 209, 196, 
 /* --- OpenHaldex diagnostics rows ---------------------------------------- */
 .diag-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .diag-label { color: var(--muted); font-size: 13px; }
+/* a small note under a diagnostics label (left side, never after the value pill) */
+.diag-sub { display: block; font-size: 11px; opacity: .75; margin-top: 2px; }
+.diag-item > .diag-label { min-width: 0; padding-right: 10px; }
+.diag-item > .diag-value { flex-shrink: 0; }
 .diag-value { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* CAN Test (V11.00.12): received IDs per bus, older than 3 s greyed */
+.can-ids { text-align: right; font-size: 12px; max-width: 70%; word-break: break-word; }
+.can-ids .old { color: var(--muted); font-weight: 400; }
 
 /* --- CAN byte / bit display (MFSW dashboard) ---------------------------- */
 .can-byte-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--line); }
@@ -783,6 +811,64 @@ input[type="file"]::file-selector-button:hover { background: rgba(36, 209, 196, 
 .map-cell.high { background: rgba(255, 77, 94, .16); color: var(--danger); border-color: rgba(255, 77, 94, .4); }
 .map-cell.activeTrace { background: var(--accent); color: var(--bg); border-color: var(--accent); }
 .map-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+.map-controls.three { grid-template-columns: repeat(3, 1fr); }
+.btn-secondary:disabled { opacity: .45; cursor: not-allowed; }
+/* V11.00.12: the tune / steering curve differs from what the controller has saved */
+.btn-unsaved { border-color: var(--accent-2) !important; color: var(--accent-2) !important; box-shadow: 0 0 0 1px var(--accent-2) inset; }
+.unsaved-note { color: var(--accent-2); font-size: 12px; margin: 8px 0 0; }
+.unsaved-note[hidden] { display: none; }
+
+/* --- Expert PT cells (V11.00.12) -----------------------------------------
+   Long press = PT. The cell darkens while it's held, then stays a dark shade of
+   its colour with "PT" and the kept number faded underneath. */
+.map-cell { position: relative; overflow: hidden; -webkit-tap-highlight-color: transparent; }
+.map-cell::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit;
+  background: rgba(0, 0, 0, .6); opacity: 0; pointer-events: none; transition: opacity .1s;
+}
+.map-cell.pressing::after { opacity: 1; transition: opacity var(--hold-ms, 550ms) linear; }
+.map-cell.pt { flex-direction: column; gap: 1px; }
+.map-cell.pt.low { background: rgb(12, 40, 28); border-color: rgba(63, 208, 127, .25); color: rgba(63, 208, 127, .8); }
+.map-cell.pt.medium { background: rgb(48, 35, 12); border-color: rgba(255, 176, 46, .25); color: rgba(255, 176, 46, .8); }
+.map-cell.pt.high { background: rgb(52, 16, 22); border-color: rgba(255, 77, 94, .25); color: rgba(255, 77, 94, .8); }
+.map-cell.pt.activeTrace { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+.map-cell .pt-label { font-weight: 800; letter-spacing: .03em; line-height: 1; }
+.map-cell .pt-kept { font-size: .5rem; font-weight: 500; opacity: .55; line-height: 1; }
+@media (hover: none) { .map-cell:hover { transform: none; } } /* a touch shouldn't leave a cell enlarged */
+
+/* --- Draggable charts (V11.00.12): Lock Map Surface + steering curve ------ */
+.chart-drag { position: relative; }
+.chart-touch { position: absolute; inset: 0; z-index: 1; touch-action: pan-y; cursor: grab; -webkit-tap-highlight-color: transparent; }
+.chart-expand {
+  position: absolute; top: 4px; right: 4px; z-index: 2; width: 32px; height: 32px; padding: 0;
+  border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  font-size: 16px; line-height: 1; cursor: pointer; opacity: .85;
+}
+/* full screen: the chart fills the window, centred, same shape */
+.chart-drag.chart-expanded {
+  position: fixed; inset: 0; z-index: 900; margin: 0; padding: 8px; background: var(--bg);
+  box-sizing: border-box; overflow: hidden; /* a pinch zoom stays inside the screen */
+}
+/* V11.00.14: phone still upright (iPhone / rotation lock) - the chart is turned
+   90° to use the long side. JS sets width = screen height, height = screen
+   width, left = screen width; turn the phone to the left to read it. */
+.chart-drag.chart-expanded.chart-rotated { right: auto; bottom: auto; top: 0; transform: rotate(90deg); transform-origin: 0 0; }
+.chart-expanded .chart-svg { width: 100%; height: 100%; transform-origin: 0 0; }
+body.chart-rotated .drag-bubble { transform-origin: 0 0; transform: rotate(90deg) translate(-50%, calc(-100% - 28px)); }
+.chart-expanded .chart-svg svg { width: 100%; height: 100%; }
+.chart-expanded .chart-touch { touch-action: none; } /* nothing to scroll behind it */
+.chart-expanded .chart-expand { top: 10px; right: 10px; width: 40px; height: 40px; font-size: 18px; }
+body.chart-open { overflow: hidden; }
+.steer-chart { margin: 4px 0 8px; }
+.steer-chart svg { width: 100%; height: auto; display: block; }
+.drag-bubble {
+  position: fixed; z-index: 1000; pointer-events: none; white-space: nowrap;
+  transform: translate(-50%, calc(-100% - 28px));
+  background: var(--panel); color: var(--text); border: 1px solid var(--accent);
+  border-radius: 6px; padding: 4px 8px; font-size: 12px; font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .45);
+}
+.drag-bubble[hidden] { display: none; }
 
 /* --- Steering-angle lock-scale table ------------------------------------ */
 .steering-scale-table { width: 100%; border-collapse: separate; border-spacing: 4px; margin: 8px 0; }
@@ -987,7 +1073,7 @@ body {
 }
 /* ...but keep it where you type, or might want to copy something out:
    text boxes, the monitor / log windows (pre) and repo names / commands (code) */
-input, textarea, select, pre, code, [contenteditable] {
+input, textarea, select, pre, code, [contenteditable], .allow-select {
   -webkit-user-select: text;
   user-select: text;
   -webkit-touch-callout: default;

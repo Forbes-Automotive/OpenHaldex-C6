@@ -2,7 +2,9 @@
 
 #include <OpenHaldexC6_defs.h>
 
-// Periodic frame task: one scheduler for every standalone rate and generation
+// Periodic frame task: one scheduler for every standalone rate and generation.
+// V11.00.7: it runs in both modes - it sends whenever ownFramesActive() says
+// our frames are going to the Haldex (standalone, or normal mode outside Stock).
 void standaloneFramesTask(void *arg);
 
 // Gen1 standalone frames
@@ -57,7 +59,7 @@ void Gen5_0CQ_VAQ_frames100();
 void Gen5_0CQ_VAQ_frames200();
 void Gen5_0CQ_VAQ_frames1000();
 
-// Gen5 (0AY) standalone frames - 0AY is a PQ unit (PQ frame set, Bremse_4 lever, Allrad_1 0x2C0 feedback)
+// Gen5 (0AY) standalone frames - 0AY is a PQ unit (PQ frame set, Bremse_4 lock request, Allrad_1 0x2C0 feedback)
 void Gen5_0AY_frames10();
 void Gen5_0AY_frames20();
 void Gen5_0AY_frames25();
@@ -81,9 +83,12 @@ void VolvoP2Gen2_frames100();
 void VolvoP2Gen3_frames10();
 void VolvoP2Gen3_frames100();
 
-// Volvo Gen4 (P3 family) standalone frames
+// Volvo Gen4 (P3, 29-bit) standalone frames (V11.00.5)
+void FordKuga_frames10();        // Ford Kuga (generation 45): whole receive set; lock request = 0x211 ESP torque ceiling (V11.00.11)
+void LandRover_frames20();       // Land Rover FL2 / Evoque (generation 46, V11.00.13): union receive set; lock request = 0x20A field 4 torque
+void Gen1_releaseCeiling(bool ceilingStillOurs); // V11.00.13: 3 x 0x2A0 b0 = 0x00 when our Gen1 ceiling stops (the 02D holds the last one)
+void FordKuga_releaseOverride(); // re-arms the one-shot 0x6F1 test-channel release - called when our frames stop
 void VolvoGen4_frames10();
-void VolvoGen4_frames20();
 void VolvoGen4_frames100();
 
 // Volvo Gen5 "SPC" 31380867 (generation 53, V11.00.0) standalone frames
