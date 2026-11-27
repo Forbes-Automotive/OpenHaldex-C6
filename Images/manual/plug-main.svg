@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 376" width="560" height="376" font-family="Segoe UI, Roboto, Arial, sans-serif">
 <rect width="100%" height="100%" fill="#ffffff"/>
 <text x="280" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#0b0f14">Main plug (JAE MX23A 12-way)</text>
-<text x="280" y="46" text-anchor="middle" font-size="12" fill="#55606b">Cable plug, looking into the face that mates with the board, latch up</text>
+<text x="280" y="46" text-anchor="middle" font-size="12" fill="#55606b">Pin numbers as on the board&#x27;s header</text>
 <rect x="127" y="78" width="306" height="120" rx="10" fill="#e9edf1" stroke="#0b0f14" stroke-width="2"/>
 <rect x="242" y="62" width="76" height="18" rx="4" fill="#cfd6dd" stroke="#0b0f14" stroke-width="2"/>
 <text x="326" y="75" font-size="11" fill="#55606b">latch</text>
@@ -29,8 +29,8 @@
 <text x="349" y="168" text-anchor="middle" font-size="14" font-weight="700" fill="#0b0f14">11</text>
 <rect x="380" y="148" width="30" height="30" rx="4" fill="#c3cad1" stroke="#0b0f14" stroke-width="1.5"/>
 <text x="395" y="168" text-anchor="middle" font-size="14" font-weight="700" fill="#6b757f">12</text>
-<text x="280" y="224" text-anchor="middle" font-size="11.5" fill="#55606b">Grey cavities are unused. Cavity numbers are moulded on the housing: go by those.</text>
-<text x="70" y="250" font-size="12.5" fill="#0b0f14"><tspan font-weight="700">1</tspan>  +12 V permanent (Term30)</text>
+<text x="280" y="224" text-anchor="middle" font-size="11.5" fill="#55606b">Grey pins are unused. Numbering is the board header&#x27;s: see the header photo for where each pin sits.</text>
+<text x="70" y="250" font-size="12.5" fill="#0b0f14"><tspan font-weight="700">1</tspan>  +12 V (fused)</text>
 <text x="70" y="270" font-size="12.5" fill="#0b0f14"><tspan font-weight="700">2</tspan>  Ground</text>
 <text x="70" y="290" font-size="12.5" fill="#0b0f14"><tspan font-weight="700">3</tspan>  Chassis CAN Low</text>
 <text x="70" y="310" font-size="12.5" fill="#0b0f14"><tspan font-weight="700">4</tspan>  Chassis CAN High</text>

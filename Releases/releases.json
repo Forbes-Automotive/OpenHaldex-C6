@@ -7,16 +7,16 @@
       "channel": "beta",
       "date": "2026-11-22",
       "ota": true,
-      "notes": "Vehicle geometry defaults per generation, fuller config backup (all frame edits, held-back IDs, learn table) with a safer import, full-screen charts turn sideways with pinch zoom, one-line banner, Drive Mode only on Gen5 VW, board V1.0 in System Info, code tidy.",
+      "notes": "Re-released 2026-11-27: Gen1 back to full lock (its essential frame blocks can no longer be switched off; full lock reads 100% again; learn table cleared on a generation change). Also: vehicle geometry defaults per generation, fuller config backup (all frame edits, held-back IDs, learn table) with a safer import, full-screen charts turn sideways with pinch zoom, one-line banner, Drive Mode only on Gen5 VW, board V1.0 in System Info, code tidy.",
       "firmware": {
         "path": "V11.00.14/firmware.bin",
-        "size": 1569472,
-        "sha256": "ea7a7642dabb0ff1ef347e371da849d6f068e2c0eddb9e4b96fd6b28391966f2"
+        "size": 1569872,
+        "sha256": "4e797fefa57bfad8ab83aac074a7d52f88109d148c58f05937a7004ba1d14375"
       },
       "filesystem": {
         "path": "V11.00.14/littlefs.bin",
         "size": 458752,
-        "sha256": "f857170c93309fde4fb6a9571ce5fce1d1342afd33a7ad63e7747d262dde65fb"
+        "sha256": "defa2d7b154b1c987d40cebd322247229876cf84cce699ac8c97d243882a4b30"
       }
     },
     {

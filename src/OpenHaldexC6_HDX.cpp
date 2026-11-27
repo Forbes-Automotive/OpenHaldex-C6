@@ -74,8 +74,8 @@ static void hdxDecodeGen1(const twai_message_t &m)
   {
     // Byte 1 = 0x80 + measured clutch pressure (E038, valve-command coding). 0x7F = released (very common - it
     // used to wrap round to 255 %, D1), 0x80 = no pressure, OEM top 0xDF.
-    // V11.00.13: 100 % = 0xC9 (201) = the lock request's own full scale (0x80 + 0x3700 / 192 = 73.3 steps, audit F9) so the
-    // read-back and gen1LockRequestByte() use the same range in both modes (was 198 = the most our bench unit reported).
+    // 100 % = 198 (0xC6) = the measured full lock (bench and car). V11.00.13 had moved it to the modelled 201 (0xC9, audit F9),
+    // which showed full lock as 95 % and kept Learn below 100 - back to 198 in V11.00.14 (2026-11-27).
     // [KM Allrad_1.Kupplungssteifigkeit_Mitte__Ist (3,-381) Nm/min] [REA audit_gen1_02d #62/#65/#66: 0x7F during release delay, else
     //  0x80 + E038 x 280/3000, linear in E258 with the lock request's 192 step; byte1 - 0x80 ~ E258/192]
     // Byte 2-4 [KM Allrad_1.PNG_* / Schaltung_* / Kupplungssteifigkeit_Hinten__Is] [REA audit_gen1_02d #9: not sent, the 02D's 0x2C0 is DLC 2]
@@ -83,7 +83,7 @@ static void hdxDecodeGen1(const twai_message_t &m)
     int32_t engagementPercent = 0; // worked out in a signed number so it can't wrap
     if (receivedHaldexEngagementRaw >= 0x80)
     {
-      engagementPercent = map(receivedHaldexEngagementRaw, 0x80, GEN1_FEEDBACK_FULL, 0, 100); // 0x80..0xC9 (201)
+      engagementPercent = map(receivedHaldexEngagementRaw, 0x80, GEN1_FEEDBACK_FULL, 0, 100); // 0x80..0xC6 (198)
     }
     if (engagementPercent < 0)
     {
