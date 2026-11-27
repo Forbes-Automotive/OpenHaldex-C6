@@ -86,7 +86,6 @@ void VolvoP2Gen3_frames100();
 // Volvo Gen4 (P3, 29-bit) standalone frames (V11.00.5)
 void FordKuga_frames10();        // Ford Kuga (generation 45): whole receive set; lock request = 0x211 ESP torque ceiling (V11.00.11)
 void LandRover_frames20();       // Land Rover FL2 / Evoque (generation 46, V11.00.13): union receive set; lock request = 0x20A field 4 torque
-void Gen1_releaseCeiling(bool ceilingStillOurs); // V11.00.13: 3 x 0x2A0 b0 = 0x00 when our Gen1 ceiling stops (the 02D holds the last one)
 void FordKuga_releaseOverride(); // re-arms the one-shot 0x6F1 test-channel release - called when our frames stop
 void VolvoGen4_frames10();
 void VolvoGen4_frames100();
