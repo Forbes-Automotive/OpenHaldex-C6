@@ -9,6 +9,7 @@ extern volatile bool haldexLearnActive;
 extern volatile bool haldexLearnCancel;
 extern volatile uint8_t haldexLearnStep;
 extern volatile uint8_t haldexLearnCF;
+void learnTableForget(); // V11.00.15: drop the learn table (generation changed - it was learned on another unit)
 
 float getLockTargetAdjustment();
 

@@ -249,7 +249,7 @@ From 11.00.6 the steering scale has an optional **Throttle Override** (off by de
 
 Allow the controller to learn *your* Haldex by replacing the original methodology of approximating a lock percentage by cycling through all of the available lock percentages.  
 
-Use the 'Learn Haldex' in the Settings page and within one minute the controller will learn how to get EXACTLY the lock percentage you request.  No more approximations, just exact values.
+Use the 'Learn Haldex' in the Settings page, with the car **stationary** and the engine running, and within one minute the controller will learn how to get EXACTLY the lock percentage you request.  No more approximations, just exact values.
 
 <p align="center">
   <img src="/Images/ui-settings.png" alt="Settings — Haldex generation and the Learn Haldex card with Fix Hunting" width="300">
@@ -445,7 +445,7 @@ If the Wi‑Fi interface becomes unresponsive:
 
 - Long‑press the `Mode` button to clear the WiFi password and restart the AP to an open state.
 
-> The Web UI is built on Forbes Automotive's shared dark theme (the same look used across the Can2Cluster, SpeedPulser, SpeedPulserPro, can2rpm, MQB Steering Wheel Controller and AirLift Controller firmware), so the interface and status conventions stay consistent across the whole product line. Current firmware version: **11.00.14** (beta), shown in the UI footer and at `/ota/info`. New in 11.00.14: vehicle geometry defaults per generation, a fuller config backup (every generation's frame edits, held-back IDs, learn table), full-screen charts that turn sideways with pinch zoom, and a cleaner one-line banner. The full change history is in [`include/OpenHaldexC6_ver.h`](include/OpenHaldexC6_ver.h).
+> The Web UI is built on Forbes Automotive's shared dark theme (the same look used across the Can2Cluster, SpeedPulser, SpeedPulserPro, can2rpm, MQB Steering Wheel Controller and AirLift Controller firmware), so the interface and status conventions stay consistent across the whole product line. Current firmware version: **11.00.15** (beta), shown in the UI footer and at `/ota/info`. New in 11.00.15: Gen1 back to full lock (its essential frame blocks can no longer be switched off, and full lock reads 100% again), and the learn table is cleared when the generation changes. 11.00.14 added vehicle geometry defaults per generation, a fuller config backup (every generation's frame edits, held-back IDs, learn table), full-screen charts that turn sideways with pinch zoom, and a cleaner one-line banner. The full change history is in [`include/OpenHaldexC6_ver.h`](include/OpenHaldexC6_ver.h).
 
 ---
 
@@ -629,15 +629,16 @@ The protocol is documented in [`documents/MOBILE_APP_OPENHALDEX.md`](documents/M
 >[!TIP]
 > ### Optional Plug & Play Harness (Recommended)
 >
-> Recommended for quick installation (and removal) — typically **<10 minutes** on Generation 1 Controllers.
-> The latest harnesses for Generation 5 are even simpler and you'll be experiencing your Haldex controller in less than 30 seconds:
+> Recommended for quick installation (and removal) — typically **<10 minutes** on Generation 1, 2 and 4 (8-pin).
+> Harnesses are ordered separately: one harness covers Generation 1 to 4, Generation 5 has its own.
+> The latest harnesses for Generation 5 (6-pin) are even simpler and you'll be experiencing your Haldex controller in less than 30 seconds:
 
 - Lift the rear seat
 - Split the factory 6-pin Haldex connector
 - Install your new harness & OpenHaldexC6 Controller
 - Drive it (you could put the seat back down too, if you want!)
 
-> For Generation 1 Controllers:
+> For Generation 1, 2 and 4 (8-pin):
 
 - Remove original connector and install the long end of the harness onto the differential.
 - Route the long end along with the original connector back into the boot floor via. the OEM grommet
@@ -656,11 +657,11 @@ For full step‑by‑step instructions see the **[OpenHaldex Installation Guide]
 >
 > Modules sold without a harness include connector pins for manual wiring. This is a little harder and more involved than using the optional harness, but following the installation guide above it can still be completed easily. Give us a shout if you need a hand.
 
-Gen1:
+Gen1, Gen2 and Gen4 (8-pin):
 - Chassis Connector: `1J0‑973‑714`
 - Haldex Connector: `1J0‑973‑814`
 
-Gen4 and Gen5:
+Gen5 (6-pin):
 - Haldex Connector — `VW 1J0‑973‑713`
 - Vehicle Connector — `VW 1J0‑973‑813`
 
@@ -671,17 +672,17 @@ Routing summary:
 - **Permanent power (Term30) and ground must also be branched to the OpenHaldex controller**:
   - Term30 -> MX Pin 1
   - Ground -> MX Pin 2
-  - Gen1: the 8-pin connector has no Term30, so take Term15 (pin 1) to MX Pin 1 (the controller then runs with the ignition), or use a separate fused permanent feed
+  - Gen1, Gen2 and Gen4: the 8-pin connector has no Term30, so take Term15 (pin 1) to MX Pin 1 (the controller then runs with the ignition), or use a separate fused permanent feed
   
-- Chassis CAN is taken from the Vehicle side and sent to the controller:
+- Chassis CAN is taken from the Vehicle side and sent to the controller (6-pin pins shown; on the 8-pin it's pins 7 / 8):
   - Vehicle Pin 5 -> MX Pin 3 (Chassis CAN Low)
   - Vehicle Pin 6 -> MX Pin 4 (Chassis CAN High)
 
-- Returned CAN from the controller then goes to the Haldex side:
+- Returned CAN from the controller then goes to the Haldex side (8-pin: pins 7 / 8):
   - MX Pin 5 -> Haldex Pin 5 (Haldex CAN Low)
   - MX Pin 6 -> Haldex Pin 6 (Haldex CAN High)
 
-Generation 1 (8-pin):
+Generation 1, 2 and 4 (8-pin):
 - Vehicle Connector — `VW 1J0‑973‑714`:
 
 | Pin | Signal | Notes |
@@ -708,7 +709,7 @@ Generation 1 (8-pin):
 | 7 | Haldex CAN Low | From MX Pin 5 (Haldex side) |
 | 8 | Haldex CAN High | From MX Pin 6 (Haldex side) |
 
-Generation 4 and 5 (6-pin):
+Generation 5 (6-pin):
 - Vehicle Connector — `VW 1J0‑973‑813`:
 
 | Pin | Signal | Notes |
@@ -731,7 +732,7 @@ Generation 4 and 5 (6-pin):
 | 5 | Haldex Low | From MX Pin 5 (Haldex side) |
 | 6 | Haldex High | From MX Pin 6 (Haldex side) |
 
-![Gen4/Gen5 Y-Branch Harness Diagram](/Images/Gen4_Gen5_Y_Branch_Harness.png)
+![Generation 5 (6-pin) Y-Branch Harness Diagram](/Images/Gen4_Gen5_Y_Branch_Harness.png)
 
 ### MX23A12NF Connector Pinout
 
@@ -1023,9 +1024,9 @@ Gerber files are in the **PCB** folder and enclosure designs are in the **Enclos
 
 Pinout and functionality remain consistent across supported enclosure versions.
 
-The V3 enclosure is a shell and base, held together by 4 × M3 × 10 button head screws that go up through the base and PCB into M3 heat-set inserts in the shell. The mount clip is optional: the finished box snaps into it, and the clip fixes to the car through two 5.5 mm (M5) holes.
+The V3 enclosure is a shell and base, held together by 4 × M3 × 10 button head screws that go up through the base and PCB into M3 heat-set inserts in the shell.
 
-![OpenHaldex-C6 V3 enclosure assembly: button pin, shell, PCB, base, screws and the optional mount clip coming together](/Images/enclosure-assembly.gif)
+![OpenHaldex-C6 V3 enclosure assembly: button pin, shell, PCB, base and screws coming together](/Images/enclosure-assembly.gif)
 
 ![OpenHaldex-C6](/Images/BoardTop.png)
 ![OpenHaldex-C6](/Images/BoardBottom.png)

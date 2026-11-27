@@ -188,14 +188,6 @@ static bool volvoP1NetworkHeartbeat = false; // 0x1BE0493C page 01 bytes 6-7: 02
 // Synthesises the minimum PQ messages the haldex needs while no donor chassis bus is
 // present. All frames go out on the haldex bus (twaiBus1).
 
-// V11.00.13 (audit_gen1_02d F4, raw scan): the 02D keeps the LAST Bremse_4 byte 0 it received for ever -
-// no timeout, no reset path until power-off. So when our ceiling stops (Stock, controller disabled,
-// Bremse_4 block turned off, generation changed) a car that sends no 0x2A0 of its own would keep our
-// last ceiling (0x7F = clutch held open). Gen1_releaseCeiling() sends 3 x 0x2A0 with byte 0 = 0x00
-// (0x00..0x7E = "no ceiling", OEM code) 20 ms apart, then stays quiet. A car's own 0x2A0 overrides it.
-static bool gen1CeilingOnBus = false;   // our Bremse_4 ceiling has been sent since the last release
-static uint8_t gen1ReleaseLeft = 0;      // release frames still to send
-static uint32_t gen1ReleaseLastMs = 0;
 
 // Gen4 Standalone Frames (0BR / 0BS / 2K, PQ frame set).
 // V11.00.0: rebuilt from the OEM code (documents/haldex-binaries/leaf_trace/
@@ -907,35 +899,6 @@ static void standaloneTx(twai_message_t &f)
   twai_transmit_v2(twaiBus1, &f, 0);
 }
 
-void Gen1_releaseCeiling(bool ceilingStillOurs)
-{
-  if (ceilingStillOurs)
-  {
-    gen1ReleaseLeft = 0;
-    return;
-  }
-  if (gen1CeilingOnBus)
-  {
-    gen1CeilingOnBus = false;
-    gen1ReleaseLeft = 3;
-    gen1ReleaseLastMs = millis() - 20;
-  }
-  if (gen1ReleaseLeft == 0 || (uint32_t)(millis() - gen1ReleaseLastMs) < 20)
-  {
-    return;
-  }
-  twai_message_t f = {};
-  f.identifier = BRAKES4_ID; // PQ Bremse_4 0x2A0 (KMatrix vw_pq), DLC 3
-  f.extd = 0;
-  f.data_length_code = 3;
-  f.data[0] = 0x00; // [KM Bremse_4.ABS_Vorgabewert_mitte_Kupplungs 3 Nm/min -381] [REA audit_gen1_02d #57: b0 < 0x7F = no ceiling]
-  f.data[1] = 0x00; // [KM Bremse_4.ABS_Vorgabewert_hinten_Kupplung 0.7874 %] [REA spec_gen1_02d §3: not read]
-  f.data[2] = 0x00; // [KM Bremse_4.Einheit_Kupplungssteifigkeit b2.0, rest Frei] [REA spec_gen1_02d §3: not read]
-  twai_transmit_v2(twaiBus1, &f, 0); // direct: the Bremse_4 block may be off, and Stock sends nothing else
-  gen1ReleaseLastMs = millis();
-  gen1ReleaseLeft--;
-}
-
 void Gen1_frames10()
 {
   // not used in Gen1
@@ -955,10 +918,13 @@ void Gen1_frames20()
   // Motordrehzahl (KMatrix vw_pq Motor_1 b2-3, 0.25 rpm/bit). REA (audit_gen1_02d F2): the 02D's rpm term asks for
   // lock by itself - it needs >~4000 rpm for full lock (pump enable > 400 rpm, off < 200 rpm), so 0x4E21 = 4992 rpm
   // while lock is wanted. V11.00.13 (audit F3): with the Bremse_4 block OFF that rpm alone made the 02D ask ~53 %
-  // in FWD, so at 0 % without the ceiling lock request the rpm drops to 0x0021 (8 rpm = pump off = open, as V10).
-  const bool gen1RpmLow = !gen1CeilingRequestActive() && lockRequestPercent() == 0;
+  // in FWD, so with the block off and no demand the rpm drops to 0x0021 (8 rpm = pump off = open, as V10).
+  // Keyed on the demand bytes (b1 / b5) themselves, so the rpm can never drop while we are sending demand.
+  // (Low rpm is also a trigger of the 02D's latched clutch release E1E2.0 - only armed once Motor_1 b0.3 has
+  // toggled, which ours never does.)
+  const bool gen1RpmLow = !gen1CeilingRequestActive() && gen1DemandValue(0xFE) == 0;
   frame.data[2] = 0x21;                     // same in both cases [KM Motor_1.Motordrehzahl low, 0.25 rpm] [REA audit_gen1_02d #21: rpm E1BC = b2-3, >= 0xFF00 -> 8000]
-  frame.data[3] = gen1RpmLow ? 0x00 : 0x4E; // 0x4E21 = 4992 rpm (lock wanted) / 0x0021 (FWD, no lock request) [KM Motor_1.Motordrehzahl high] [REA audit_gen1_02d #52/F2/F3: pump on > raw 0x640, off <= 0x320; rpm term E1FE + ratio E188]
+  frame.data[3] = gen1RpmLow ? 0x00 : 0x4E; // 0x4E21 = 4992 rpm (lock wanted) / 0x0021 (FWD, block off) [KM Motor_1.Motordrehzahl high] [REA audit_gen1_02d #52/F2/F3: pump on > raw 0x640, off <= 0x320; rpm term E1FE + ratio E188; latch set 0x13008]
   frame.data[4] = 0x00;                     // (spec D10, was mislabelled "pedal") [KM Motor_1.inneres_Motor_Moment_ohne_exter 0.39 % MDI] [REA audit_gen1_02d #23: not read]
   frame.data[5] = gen1DemandValue(0xFE);  // the demand [KM Motor_1.Fahrpedalwert_oder_Drosselklapp 0.4 %] [REA audit_gen1_02d #22/F5: used only once "pedal learned" (<= 30 % for 30 cycles) - harmless]
   appliedTorque = gen1LossTorqueByte(0x00); // mechanisches_Motor_Verlustmoment: the 02D subtracts it from byte 1 (0x00 = max demand)
@@ -993,10 +959,6 @@ void Gen1_frames20()
   frame.data[0] = gen1LockRequestByte(); // 0x7F = open, 0x81..0xC9 = partial (0xA5 ~ 50 %), 0xFD = full [KM Bremse_4.ABS_Vorgabewert_mitte_Kupplungs 3 Nm/min -381] [REA audit_gen1_02d #57/#68: ceiling (b0-0x80) x 192 on E258, 0x7F = 0 at once, sticky #12]
   frame.data[1] = 0x00;              // [KM Bremse_4.ABS_Vorgabewert_hinten_Kupplung 0.7874 %] [REA spec_gen1_02d §3: not read]
   frame.data[2] = 0x00;              // [KM Bremse_4.Einheit_Kupplungssteifigkeit b2.0, rest Frei] [REA spec_gen1_02d §3: not read]
-  if (gen1CeilingRequestActive())
-  {
-    gen1CeilingOnBus = true; // the 02D now holds our ceiling until it sees another 0x2A0 (see Gen1_releaseCeiling)
-  }
   standaloneTx(frame);
 
   // PQ Motor_3 (0x380, DLC 8) - secondary engine ECU broadcast (vw_pq.dbc: Motor_3).
@@ -1036,13 +998,17 @@ void Gen1_frames20()
   standaloneTx(frame);
 
   // PQ Bremse_3 (0x4A0, DLC 8) - per-wheel speeds (vw_pq.dbc: Bremse_3, word >> 1 = 0.01 km/h).
-  // Without this frame the 02D's request is 0 (OEM code §2.1). 0x0A00 = 12.8 km/h on
-  // every wheel; the fronts get up to 1.27 km/h of fake slip to add demand
-  // (fine: the 02D's slip hold only starts at ~3.7 km/h front-over-rear, spec §5).
+  // Without this frame the 02D's request is 0 (OEM code §2.1).
+  // 0x0A00 = 12.8 km/h on every wheel; the fronts get up to 1.27 km/h of fake slip from the demand byte.
+  // Keep it at 12.8 km/h - car test 2026-11-27: 1.28 km/h capped the lock at ~86 %. The 02D divides its
+  // request by E216, which includes E19A = table 0x6062(speed): 0x100 at 0 km/h, 0x80 at 20-100 km/h
+  // (0x11ABE / 0x114E8), so a lower speed = a smaller request (~70 % at 1.28 km/h, under the 0x3700 cap).
+  // The handbrake clutch release (E1E2.0, set at 5-100 km/h) clears again when the handbrake bit falls
+  // (0x12ED0) - same as the car.
   frame.identifier = BRAKES3_ID;
   frame.data_length_code = 8;
   frame.data[0] = gen1DemandValue(0xFE); // front-left low [KM Bremse_3.Radgeschw__VL bits1-15 0.01 km/h, b0.0 Frei] [REA audit_gen1_02d #32/#33/F6: (word>>1); fronts - rears = slip E1BE; fake slip not needed, slows rise ~4x]
-  frame.data[1] = 0x0A;                    // [KM Bremse_3.Radgeschw__VL high] [REA audit_gen1_02d #13: wheel valid while word>>1 < 0x7F80]
+  frame.data[1] = 0x0A;                    // [KM Bremse_3.Radgeschw__VL high] [REA audit_gen1_02d #13: wheel valid while word>>1 < 0x7F80; speed -> E19A T6062, keep 12.8 km/h]
   frame.data[2] = gen1DemandValue(0xFE); // front-right low [KM Bremse_3.Radgeschw__VR bits17-31 0.01 km/h] [REA audit_gen1_02d #33: front avg]
   frame.data[3] = 0x0A;                    // [KM Bremse_3.Radgeschw__VR high] [REA audit_gen1_02d #13: valid < 0x7F80]
   frame.data[4] = 0x00;                                        // rear-left low [KM Bremse_3.Radgeschw__HL bits33-47 0.01 km/h] [REA audit_gen1_02d #33: rear avg]
@@ -6486,8 +6452,6 @@ void standaloneFramesTask(void *arg)
     // standalone, and in normal mode outside Stock (a block ON = our frame, the
     // car's copy is held back in can.cpp). Never in analyzer mode (passive
     // bridge), Stock, or with the controller disabled.
-    // V11.00.13: Gen1 - hand the 02D's sticky Bremse_4 ceiling back when we stop sending it
-    Gen1_releaseCeiling(ownFramesActive() && haldexGeneration == 1 && gen1CeilingRequestActive());
     if (!ownFramesActive())
     {
       FordKuga_releaseOverride(); // V11.00.11: re-arms the Kuga's one-shot 0x6F1 release for the next start

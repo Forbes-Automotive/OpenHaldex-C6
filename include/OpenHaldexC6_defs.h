@@ -377,7 +377,8 @@ bool isSupportedGeneration(uint8_t generation);   // can be picked from the web 
 #define GEN1_REQUEST_FULL 0x3700     // biggest request the 02D makes in normal driving (OEM code: the E2A0 reset value) [REA audit_gen1_02d #47: E2A0 only 0x3700 or lower; valve 785 of 791]
 #define GEN1_REQUEST_STEP 192      // one Bremse_4 byte-0 step = 192 request units (OEM code) [REA audit_gen1_02d #57: 3 x b0 x 64 - 0x6000]
 #define GEN1_REQUEST_FULL_BYTE 0xFD   // 100 %: ceiling 24000, well above 0x3700, so no limit (0xFE/0xFF have no special meaning on the 02D - audit F1 - but avoided as on other PQ units)
-#define GEN1_FEEDBACK_FULL (0x80 + GEN1_REQUEST_FULL / GEN1_REQUEST_STEP) // 0x2C0 b1 at 100 % = 0xC9 (201): same range as the request (audit F9)
+#define GEN1_FEEDBACK_FULL 198 // 0x2C0 b1 at 100 % = 0xC6: MEASURED full lock (bench + car 2026-11-27). V11.00.15: back from 201 (0xC9), which
+                               // was only modelled (0x80 + 0x3700/192, audit F9/#66, round-trip error 3-9 %) - full lock read 95 % and Learn never reached 100
 
 // ----- Gen2 7H0 / 1K0 (2) - Bremse_4 byte 0, (b0 - 0x80) x 28; one range for both units (the 1K0's)
 #define GEN2_REQUEST_FULL 106          // lock request: step = lock % x 106 / 100 -> 99 % = 0xE9 [KM Bremse_4.ABS_Vorgabewert_mitte_Kupplungs] [REA audit_gen2_7h0 #55 §5: 1K0 full > 0xE9 (106 steps), 7H0 > 0xD5 (85)]

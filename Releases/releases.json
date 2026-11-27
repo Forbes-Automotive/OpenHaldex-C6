@@ -3,6 +3,23 @@
   "latest": "11.00.6",
   "releases": [
     {
+      "version": "11.00.15",
+      "channel": "beta",
+      "date": "2026-11-27",
+      "ota": true,
+      "notes": "Gen1 back to full lock: its essential frame blocks (Motor_1, Bremse_1, Bremse_3, Bremse_4, + Motor_2 standalone) can no longer be switched off, full lock reads 100% again (read-back 198), learn table cleared on a generation change.",
+      "firmware": {
+        "path": "V11.00.15/firmware.bin",
+        "size": 1569872,
+        "sha256": "dc8c35c26f31f612f1ad5cdc45534c76247470510729f3d94b632ca7e42f36d1"
+      },
+      "filesystem": {
+        "path": "V11.00.15/littlefs.bin",
+        "size": 458752,
+        "sha256": "c3277bd8c5cb3d1afbfd5ce0a55237e263cb1bbe68071c7349fd2004f7618d1e"
+      }
+    },
+    {
       "version": "11.00.14",
       "channel": "beta",
       "date": "2026-11-22",

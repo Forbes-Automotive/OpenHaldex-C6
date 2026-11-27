@@ -229,6 +229,10 @@ static uint8_t execute(const OhxCommand &c)
     if (haldexLearnActive || longLearnActive)
       return OHX_R_BUSY;
     vehicleGeometryFollowGeneration(haldexGeneration, g); // untouched geometry -> the new generation's car
+    if (g != haldexGeneration)
+    {
+      learnTableForget(); // V11.00.15: the table was learned on the old generation's unit
+    }
     haldexGeneration = g;
     udsApplyDefaultIds();
     return OHX_R_OK;

@@ -930,11 +930,21 @@ bool frameEditKeepRequired()
 {
     const uint64_t gen4OemNeeded = frameEditLockDriven[FE_GEN_VOLVO_GEN4];
     const uint64_t gen4SaNeeded = frameEditLockDriven[FE_GEN_VOLVO_GEN4] | (1ULL << VOLVO_G4_BLOCK_CONFIG);
+    // V11.00.15 Gen1 02D (car test 2026-11-27): with any of these OFF the 02D gets the CAR's frame instead -
+    // ignition-only that is Motor_1 rpm 0 (pump off) / 0 km/h wheel speeds / no ceiling - and there was NO
+    // lock in any mode, Learn included. Both modes: Motor_1 (0), Bremse_1 (2), Bremse_3 (3), Bremse_4 (4);
+    // standalone also Motor_2 (5, the 02D's "all inputs valid"). = the V11.00.8 defaults, bench + car proven.
+    const uint64_t gen1OemNeeded = (1ULL << 0) | (1ULL << 2) | (1ULL << 3) | (1ULL << 4);
+    const uint64_t gen1SaNeeded = gen1OemNeeded | (1ULL << 5);
     if ((frameEditMask[FE_GEN_VOLVO_GEN4] & gen4OemNeeded) == gen4OemNeeded &&
-        (frameEditMaskSA[FE_GEN_VOLVO_GEN4] & gen4SaNeeded) == gen4SaNeeded)
+        (frameEditMaskSA[FE_GEN_VOLVO_GEN4] & gen4SaNeeded) == gen4SaNeeded &&
+        (frameEditMask[FE_GEN_1] & gen1OemNeeded) == gen1OemNeeded &&
+        (frameEditMaskSA[FE_GEN_1] & gen1SaNeeded) == gen1SaNeeded)
         return false;
     frameEditMask[FE_GEN_VOLVO_GEN4] |= gen4OemNeeded;
     frameEditMaskSA[FE_GEN_VOLVO_GEN4] |= gen4SaNeeded;
+    frameEditMask[FE_GEN_1] |= gen1OemNeeded;
+    frameEditMaskSA[FE_GEN_1] |= gen1SaNeeded;
     return true;
 }
 

@@ -1014,6 +1014,14 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
             haldexGeneration = (uint8_t)generation;
             udsApplyDefaultIds(); // move the UDS pair with the generation (no-op while the serial lab has it pinned)
             vehicleGeometryFollowGeneration(oldGeneration, haldexGeneration); // untouched geometry -> the new generation's car
+            // V11.00.15: the learn table was learned on the old generation's unit - drop it.
+            // keepLearnTable: the config import sets a CAN-speed generation AFTER restoring
+            // that file's table (which belongs to the new generation), so it keeps it.
+            const bool keepLearnTable = data["keepLearnTable"].is<bool>() && data["keepLearnTable"].as<bool>();
+            if (oldGeneration != haldexGeneration && !keepLearnTable && !haldexLearnActive)
+            {
+                learnTableForget();
+            }
         }
     }
 
@@ -1282,6 +1290,7 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
                 activeFrameEditMask()[gi] |= (1ULL << bit);
             else
                 activeFrameEditMask()[gi] &= ~(1ULL << bit);
+            frameEditKeepRequired(); // V11.00.15: a block the unit can't run without snaps back on
         }
     }
 

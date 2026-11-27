@@ -1066,6 +1066,17 @@ void startHaldexLearn()
   xTaskCreate(haldexLearnTask, "haldexLearn", 4096, nullptr, 1, nullptr);
 }
 
+// V11.00.15: a learn table belongs to the unit it was learned on. A generation
+// change used to keep it, so the new generation ran every lock request through
+// the old unit's curve (e.g. a table from a Kuga / Volvo bench capped a Gen1 at
+// a few % in every mode, standalone too). writeEEP saves the cleared state.
+void learnTableForget()
+{
+  haldexLearnTableValid = false;
+  memset(haldexLearnTable, 0, sizeof(haldexLearnTable));
+  haldexLearnStep = 0;
+}
+
 bool runLearnSweep(uint32_t preHoldMs)
 {
   // Bench-measured (Gen5 0CQ): engagement needs several hundred ms to settle

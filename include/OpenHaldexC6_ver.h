@@ -2,7 +2,7 @@
 #include <OpenHaldexC6_defs.h>
 
 // Current firmware version
-#define FW_VERSION "11.00.14" // also bump data/version.json ("fs")
+#define FW_VERSION "11.00.15" // also bump data/version.json ("fs")
 
 // Hardware (PCB) version shown in System Info. One board so far; when a second
 // one exists, readBoardRev() (OpenHaldexC6_defs.h, not written yet) picks it.
@@ -1044,6 +1044,20 @@ V11.00.14 - (2026-11-22) Code tidy - no behaviour change intended
           restores everything else and says the extras need the update
         - Web: Drive Mode (force + diagnostics card) only for Gen5 VW (50 / 51 / 52); banner on one fixed line
           (CAN as two dots); dashboard layout drawn before the settings load; diagnostics notes under the label
+
+V11.00.15 - (beta, 2026-11-27) Gen1 (02D) back to full lock - car test, ignition only
+        - Cause of "no lock in any mode, Learn included" on 11.00.14: the SAVED Gen1 frame-edit settings had a core
+          block off, so the 02D got the car's own frame instead of ours (ignition only: Motor_1 rpm 0 = pump off).
+          The frame code was not the cause. frameEditKeepRequired() now keeps Gen1 Motor_1 / Bremse_1 / Bremse_3 /
+          Bremse_4 on in both modes (+ Motor_2 in standalone) = the V11.00.8 defaults - at boot, on config import
+          and right after a block is toggled on the web page.
+        - Gen1 read-back: 100 % = 198 (0xC6) again, the measured full lock. 11.00.13 had moved it to the modelled 201
+          (audit F9), so full lock read 95 % and Learn never reached 100.
+        - Gen1: the 11.00.13 0x2A0 "release" frames (3 x byte 0 = 0x00 when our ceiling stops) removed - not needed.
+          Motor_1 rpm drops to 0x0021 only with the Bremse_4 block off AND no demand (keyed on the demand byte).
+          Bremse_3 stays 12.8 km/h: the 02D's request falls at lower speeds (table 0x6062 in E216 - 1.28 km/h gave 86 %).
+        - Learn table cleared when the generation changes (web / ESP-NOW) - it belongs to the unit it was learned on.
+          A config import that sets a CAN-speed generation last keeps the table it just restored (keepLearnTable).
 */
 
 

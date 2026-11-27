@@ -4655,7 +4655,8 @@ function initBackupRestore() {
       // writeEEP saves every 2 s: let it run once so the steps above are in flash before the restart
       setStatus("Saving before the restart…", true);
       await new Promise((r) => setTimeout(r, 3000));
-      if (!(await step("Setting the generation", "/api/settings", { haldexGeneration: newGen }))) return;
+      // keepLearnTable: the learn table restored in step 4 belongs to newGen - a generation change otherwise clears it
+      if (!(await step("Setting the generation", "/api/settings", { haldexGeneration: newGen, keepLearnTable: extraOk }))) return;
     }
 
     const needsApPw = !!(apChanges && wifi.passwordSet && pwSection);
